@@ -1,14 +1,23 @@
 import { Router } from 'express';
 import { validate } from '../middlewares/validate';
-import { registerSchema, loginSchema, refreshSchema, logoutSchema, logoutAllSchema } from '../schemas/auth.schema';
-import { registerUser, loginUser, refreshHandler, logoutUser, logoutAllSessions } from '../controllers/auth.controller';
+import * as AuthController from '../controllers/auth.controller';
+import {
+  loginSchema,
+  refreshSchema,
+  checkRefreshSchema,
+  logoutSchema,
+  logoutAllSchema,
+} from '../schemas/auth.schema';
 
 const router = Router();
 
-router.post('/register', validate(registerSchema), registerUser);
-router.post('/login', validate(loginSchema), loginUser);
-router.post('/refresh', validate(refreshSchema), refreshHandler);
-router.post('/logout', validate(logoutSchema), logoutUser);
-router.post('/logout-all', validate(logoutAllSchema), logoutAllSessions);
+//email verification
+router.post('/customer/email/start', AuthController.sendVerificationCodeEmail)
+router.post('/customer/email/verify', AuthController.verifyVerificationCodeEmail)
 
+router.post('/customer/test', (req, res) => {
+  res.json({ message: 'Customer test route' });
+})
+
+router.post('/customer/complete-email', AuthController.completeCustomerRegistrationEmail)
 export default router;

@@ -1,0 +1,574 @@
+// Prisma schema generated from the provided DBML specification
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum PageBackgroundPreset {
+  light
+  soft
+  dark
+  auto
+}
+
+enum CornerRadius {
+  sm
+  md
+  lg
+}
+
+enum CompanyUserRole {
+  OWNER
+  ADMIN
+  STAFF
+  CUSTOMER
+}
+
+enum BookingType {
+  CUSTOMER
+  BLOCK
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum PaymentMethod {
+  NONE
+  CASH
+  QR
+}
+
+enum PaymentStatus {
+  UNPAID
+  PENDING_CONFIRMATION
+  PAID
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum VerificationChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum VerificationPurpose {
+  CUSTOMER_SIGNUP
+}
+
+model Company {
+  id                   Int         @id @default(autoincrement())
+  slug                 String      @unique @db.VarChar(64)
+  name                 String      @db.VarChar(191)
+  address              String?     @db.VarChar(255)
+  phone_prefix         String      @default("591") @db.VarChar(8)
+  phone                String      @db.VarChar(32)
+  email                String?     @db.VarChar(191)
+  google_maps_url      String?     @db.VarChar(512)
+  city                 String?     @db.VarChar(128)
+  state                String?     @db.VarChar(128)
+  country_code         String?     @db.VarChar(2)
+  latitude             Float?
+  longitude            Float?
+  timezone             String      @db.VarChar(64)
+  logo_url             String?     @db.VarChar(512)
+  home_hero_image_url  String?     @db.VarChar(512)
+  about_hero_image_url String?     @db.VarChar(512)
+  about_image_1_url    String?     @db.VarChar(512)
+  about_image_2_url    String?     @db.VarChar(512)
+  about_image_3_url    String?     @db.VarChar(512)
+  is_active            Boolean     @default(true)
+  created_at           DateTime    @default(now())
+  updated_at           DateTime    @updatedAt
+  deleted_at           DateTime?
+  company_type_id      Int
+  company_type         CompanyType @relation(fields: [company_type_id], references: [id])
+
+  reviews           Review[]
+  theme_config      ThemeConfig?
+  company_settings  CompanySettings?
+  company_users     CompanyUser[]
+  staff_profiles    StaffProfile[]
+  customer_profiles CustomerProfile[]
+  categories        Category[]
+  services          Service[]
+  hours             Hours[]
+  bookings          Booking[]
+  booking_services  BookingService[]
+  discount_codes    DiscountCode[]
+  booking_discounts BookingDiscount[]
+  config_messages   ConfigMessage[]
+  staff_services    StaffService[]
+
+  @@index([city, country_code, is_active])
+  @@map("company")
+}
+
+model ThemeConfig {
+  id                     Int                  @id @default(autoincrement())
+  company_id             Int                  @unique
+  brand_color            String               @db.VarChar(16)
+  page_background_color  String               @db.VarChar(16)
+  page_background_preset PageBackgroundPreset @default(light)
+  cards_elevated         Boolean              @default(true)
+  corner_radius          CornerRadius         @default(md)
+  created_at             DateTime             @default(now())
+  updated_at             DateTime             @updatedAt
+  company                Company              @relation(fields: [company_id], references: [id])
+
+  @@map("theme_config")
+}
+
+model CompanySettings {
+  id                               Int      @id @default(autoincrement())
+  company_id                       Int      @unique
+  booking_buffer_minutes           Int      @default(10)
+  booking_time_granularity_minutes Int      @default(5)
+  cancel_limit_minutes             Int      @default(120)
+  reschedule_limit_minutes         Int      @default(120)
+  allow_qr_payment                 Boolean  @default(true)
+  qr_image_url                     String?  @db.VarChar(512)
+  allow_cash_payment               Boolean  @default(true)
+  send_email_notifications         Boolean  @default(true)
+  send_whatsapp_notifications      Boolean  @default(false)
+  created_at                       DateTime @default(now())
+  updated_at                       DateTime @updatedAt
+  company                          Company  @relation(fields: [company_id], references: [id])
+
+  @@map("company_settings")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String   @db.VarChar(191)
+  email         String   @unique @db.VarChar(191)
+  emailVerified Boolean  @default(false)
+  image         String?  @db.VarChar(512)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Domain fields
+  first_name String? @db.VarChar(100)
+  last_name  String? @db.VarChar(100)
+
+  // Phone fields
+  phone_prefix String? @db.VarChar(8) // e.g. "591"
+  phoneNumber  String? @unique @db.VarChar(32) // e.g. "+59170000000"
+
+  is_super_admin Boolean   @default(false)
+  is_active      Boolean   @default(true)
+  deleted_at     DateTime?
+
+  // Better Auth phone-number plugin
+  phoneNumberVerified Boolean? @default(false)
+
+  accounts Account[]
+  sessions Session[]
+
+  user_reviews      Review[]
+  company_users     CompanyUser[]
+  staff_profiles    StaffProfile[]
+  customer_profiles CustomerProfile[]
+  created_bookings  Booking[]         @relation("BookingCreatedBy")
+  updated_bookings  Booking[]         @relation("BookingUpdatedBy")
+}
+
+model CompanyUser {
+  id                 Int             @id @default(autoincrement())
+  company_id         Int
+  user_id            String
+  role               CompanyUserRole
+  is_primary_contact Boolean         @default(false)
+  created_at         DateTime        @default(now())
+  updated_at         DateTime        @updatedAt
+  deleted_at         DateTime?
+  company            Company         @relation(fields: [company_id], references: [id])
+  user               User            @relation(fields: [user_id], references: [id])
+
+  @@unique([company_id, user_id, role])
+  @@index([user_id])
+  @@index([company_id, role])
+  @@map("company_user")
+}
+
+model StaffProfile {
+  id                  Int               @id @default(autoincrement())
+  company_id          Int
+  user_id             String
+  display_name        String            @db.VarChar(191)
+  bio                 String?           @db.Text
+  image_url           String?           @db.VarChar(512)
+  is_bookable         Boolean           @default(true)
+  created_at          DateTime          @default(now())
+  updated_at          DateTime          @updatedAt
+  deleted_at          DateTime?
+  company             Company           @relation(fields: [company_id], references: [id])
+  user                User              @relation(fields: [user_id], references: [id])
+  bookings            Booking[]
+  preferred_customers CustomerProfile[]
+  staff_services      StaffService[] // <--- NEW
+
+  @@unique([company_id, user_id])
+  @@index([company_id, is_bookable])
+  @@map("staff_profile")
+}
+
+model CustomerProfile {
+  id                 Int           @id @default(autoincrement())
+  company_id         Int
+  user_id            String
+  notes              String?       @db.Text
+  preferred_staff_id Int?
+  created_at         DateTime      @default(now())
+  updated_at         DateTime      @updatedAt
+  deleted_at         DateTime?
+  company            Company       @relation(fields: [company_id], references: [id])
+  user               User          @relation(fields: [user_id], references: [id])
+  preferred_staff    StaffProfile? @relation(fields: [preferred_staff_id], references: [id])
+  bookings           Booking[]
+
+  @@unique([company_id, user_id])
+  @@index([preferred_staff_id])
+  @@map("customer_profile")
+}
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  company_id  Int
+  name        String    @db.VarChar(191)
+  slug        String    @db.VarChar(191)
+  description String?   @db.VarChar(255)
+  position    Int       @default(0)
+  is_active   Boolean   @default(true)
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  deleted_at  DateTime?
+  company     Company   @relation(fields: [company_id], references: [id])
+  services    Service[]
+
+  @@unique([company_id, slug])
+  @@index([company_id, is_active, position])
+  @@map("category")
+}
+
+model Service {
+  id               Int       @id @default(autoincrement())
+  company_id       Int
+  category_id      Int
+  name             String    @db.VarChar(191)
+  description      String?   @db.Text
+  price_cents      Int
+  duration_minutes Int
+  position         Int       @default(0)
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+  deleted_at       DateTime?
+  global_type_id   Int? // <--- NEW, optional at first
+
+  company          Company            @relation(fields: [company_id], references: [id])
+  category         Category           @relation(fields: [category_id], references: [id])
+  global_type      GlobalServiceType? @relation(fields: [global_type_id], references: [id])
+  service_reviews  Review[]
+  booking_services BookingService[]
+  staff_services   StaffService[]
+
+  @@index([company_id, is_active])
+  @@index([category_id, is_active, position])
+  @@map("service")
+}
+
+model Hours {
+  id          Int      @id @default(autoincrement())
+  company_id  Int
+  day_of_week Int
+  open_time   String?  @db.VarChar(8)
+  close_time  String?  @db.VarChar(8)
+  is_closed   Boolean  @default(false)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  company     Company  @relation(fields: [company_id], references: [id])
+
+  @@unique([company_id, day_of_week])
+  @@map("hours")
+}
+
+model Booking {
+  id                  Int               @id @default(autoincrement())
+  company_id          Int
+  staff_id            Int
+  customer_id         Int?
+  client_name         String?           @db.VarChar(191)
+  client_email        String?           @db.VarChar(191)
+  client_phone_prefix String?           @db.VarChar(8)
+  client_phone_number String?           @db.VarChar(32)
+  booking_type        BookingType       @default(CUSTOMER)
+  start_at            DateTime
+  end_at              DateTime
+  status              BookingStatus     @default(CONFIRMED)
+  payment_method      PaymentMethod     @default(NONE)
+  payment_status      PaymentStatus     @default(UNPAID)
+  qr_proof_image_url  String?           @db.VarChar(512)
+  total_price_cents   Int               @default(0)
+  notes               String?           @db.Text
+  created_by_user_id  String?
+  updated_by_user_id  String?
+  created_at          DateTime          @default(now())
+  updated_at          DateTime          @updatedAt
+  deleted_at          DateTime?
+  company             Company           @relation(fields: [company_id], references: [id])
+  staff               StaffProfile      @relation(fields: [staff_id], references: [id])
+  customer            CustomerProfile?  @relation(fields: [customer_id], references: [id])
+  created_by          User?             @relation("BookingCreatedBy", fields: [created_by_user_id], references: [id])
+  updated_by          User?             @relation("BookingUpdatedBy", fields: [updated_by_user_id], references: [id])
+  booking_services    BookingService[]
+  booking_discounts   BookingDiscount[]
+  booking_review      Review[]
+
+  @@index([company_id, staff_id, start_at, status])
+  @@index([company_id, customer_id, start_at])
+  @@index([staff_id, start_at, end_at, status])
+  @@map("booking")
+}
+
+model BookingService {
+  id                        Int      @id @default(autoincrement())
+  booking_id                Int
+  company_id                Int
+  service_id                Int
+  service_name_snapshot     String   @db.VarChar(191)
+  price_cents_snapshot      Int
+  duration_minutes_snapshot Int
+  position                  Int      @default(0)
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+  booking                   Booking  @relation(fields: [booking_id], references: [id])
+  company                   Company  @relation(fields: [company_id], references: [id])
+  service                   Service  @relation(fields: [service_id], references: [id])
+
+  @@index([booking_id])
+  @@index([company_id, service_id])
+  @@map("booking_service")
+}
+
+model DiscountCode {
+  id                Int               @id @default(autoincrement())
+  company_id        Int
+  code              String            @db.VarChar(64)
+  description       String?           @db.VarChar(255)
+  type              DiscountType
+  value             Decimal           @db.Decimal(10, 2)
+  active_from       DateTime?
+  active_until      DateTime?
+  max_uses          Int?
+  used_count        Int               @default(0)
+  is_active         Boolean           @default(true)
+  created_at        DateTime          @default(now())
+  updated_at        DateTime          @updatedAt
+  deleted_at        DateTime?
+  company           Company           @relation(fields: [company_id], references: [id])
+  booking_discounts BookingDiscount[]
+
+  @@unique([company_id, code])
+  @@index([company_id, is_active, active_from, active_until])
+  @@map("discount_code")
+}
+
+model BookingDiscount {
+  id                    Int          @id @default(autoincrement())
+  booking_id            Int
+  discount_code_id      Int
+  company_id            Int
+  discount_amount_cents Int
+  created_at            DateTime     @default(now())
+  updated_at            DateTime     @updatedAt
+  booking               Booking      @relation(fields: [booking_id], references: [id])
+  discount_code         DiscountCode @relation(fields: [discount_code_id], references: [id])
+  company               Company      @relation(fields: [company_id], references: [id])
+
+  @@unique([booking_id, discount_code_id])
+  @@index([company_id])
+  @@map("booking_discount")
+}
+
+model ConfigMessage {
+  id          Int      @id @default(autoincrement())
+  company_id  Int
+  name        String   @db.VarChar(191)
+  key         String   @db.VarChar(191)
+  value       String   @db.Text
+  description String?  @db.VarChar(255)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  company     Company  @relation(fields: [company_id], references: [id])
+
+  @@unique([company_id, key])
+  @@map("config_message")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("session")
+}
+
+model Account {
+  id         String @id @default(cuid())
+  accountId  String
+  providerId String
+  userId     String
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("account")
+}
+
+model VerificationCode {
+  id           Int                 @id @default(autoincrement())
+  channel      VerificationChannel
+  purpose      VerificationPurpose
+  identifier   String              @db.VarChar(191) // email or normalized phone ("591-70000000")
+  code_hash    String              @db.VarChar(255)
+  attempts     Int                 @default(0)
+  max_attempts Int                 @default(5)
+  expires_at   DateTime
+  consumed_at  DateTime?
+  created_at   DateTime            @default(now())
+  updated_at   DateTime            @updatedAt
+
+  @@index([identifier, channel, purpose, expires_at])
+  @@map("verification_code")
+}
+
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@map("verification")
+}
+
+/**
+ * types
+ */
+model types {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(191)
+  image      String    @db.VarChar(191)
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  @@map("types")
+}
+
+model CompanyType {
+  id          Int       @id @default(autoincrement())
+  key         String    @unique @db.VarChar(64) // e.g. "BARBER_SHOP", "NAIL_SALON"
+  name        String    @db.VarChar(191) // e.g. "Barber shop", "Nail salon"
+  description String?   @db.VarChar(255)
+  icon_name   String?   @db.VarChar(64) // optional, for UI icon mapping
+  is_active   Boolean   @default(true)
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  companies   Company[]
+
+  @@map("company_type")
+}
+
+model GlobalServiceType {
+  id          Int     @id @default(autoincrement())
+  key         String  @unique @db.VarChar(64)
+  name        String  @db.VarChar(191)
+  description String? @db.VarChar(255)
+
+  services Service[]
+
+  @@map("global_service_type")
+}
+
+model FrequentlyAskedQuestion {
+  id         Int      @id @default(autoincrement())
+  question   String   @db.VarChar(255)
+  answer     String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("frequently_asked_question")
+}
+
+model Review {
+  id         Int      @id @default(autoincrement())
+  company_id Int
+  user_id    String
+  service_id Int?
+  booking_id Int?     @unique
+  rating     Int
+  comment    String   @db.VarChar(255)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  company Company  @relation(fields: [company_id], references: [id])
+  user    User     @relation(fields: [user_id], references: [id])
+  service Service? @relation(fields: [service_id], references: [id])
+  booking Booking? @relation(fields: [booking_id], references: [id])
+
+  @@map("review")
+}
+
+model StaffService {
+  id                        Int      @id @default(autoincrement())
+  company_id                Int
+  staff_id                  Int
+  service_id                Int
+  // optional overrides per staff:
+  price_cents_override      Int?
+  duration_minutes_override Int?
+  is_active                 Boolean  @default(true)
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+
+  company Company      @relation(fields: [company_id], references: [id])
+  staff   StaffProfile @relation(fields: [staff_id], references: [id])
+  service Service      @relation(fields: [service_id], references: [id])
+
+  @@unique([company_id, staff_id, service_id])
+  @@index([company_id, service_id])
+  @@index([staff_id, is_active])
+  @@map("staff_service")
+}
