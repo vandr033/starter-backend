@@ -19,7 +19,9 @@ app.use(
   })
 );
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 app.use(rateLimit({ windowMs: 60_000, max: 120 }));
 
 // 1) Better Auth on /api/auth prefix (no "*")

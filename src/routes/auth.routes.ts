@@ -1,23 +1,23 @@
 import { Router } from 'express';
-import { validate } from '../middlewares/validate';
 import * as AuthController from '../controllers/auth.controller';
-import {
-  loginSchema,
-  refreshSchema,
-  checkRefreshSchema,
-  logoutSchema,
-  logoutAllSchema,
-} from '../schemas/auth.schema';
+import { requireAuth } from '../middlewares/requireAuth';
 
 const router = Router();
 
-//email verification
-router.post('/customer/email/start', AuthController.sendVerificationCodeEmail)
-router.post('/customer/email/verify', AuthController.verifyVerificationCodeEmail)
+// ── Email registration (signup) ──
+router.post('/customer/email/start', AuthController.sendVerificationCodeEmail);
+router.post('/customer/email/verify', AuthController.verifyVerificationCodeEmail);
+router.post('/customer/complete-email', AuthController.completeCustomerRegistrationEmail);
 
-router.post('/customer/test', (req, res) => {
-  res.json({ message: 'Customer test route' });
-})
+// ── Email login (OTP) — clients only ──
+router.post('/customer/login/email/start', AuthController.sendLoginOtpEmail);
+router.post('/customer/login/email/verify', AuthController.verifyLoginOtpEmail);
 
-router.post('/customer/complete-email', AuthController.completeCustomerRegistrationEmail)
+// ── Phone login (OTP) — clients only ──
+router.post('/customer/login/phone/start', AuthController.sendLoginOtpPhone);
+router.post('/customer/login/phone/verify', AuthController.verifyLoginOtpPhone);
+
+// ── Complete phone profile (set name after phone OTP registration) ──
+router.post('/customer/complete-phone', requireAuth, AuthController.completePhoneProfile);
+
 export default router;

@@ -1,17 +1,86 @@
 import { BookingStatus } from '@prisma/client';
-import {Prisma, prisma } from '../prisma/client';
+import { Prisma, prisma } from '../prisma/client';
 
-export const getAllCompanies =async(limit?:number)=>{
+export const getAllCompanies = async (limit?: number) => {
   const companies = await prisma.company.findMany({
     where: { is_active: true },
-    take: limit? limit:undefined,
+    take: limit ? limit : undefined,
   });
   return companies;
 }
 
+export const getFeaturedCompanies = async (limit: number = 8) => {
+  // 1. Fetch active, non-deleted companies with basic info
+  const companies = await prisma.company.findMany({
+    where: {
+      is_active: true,
+      deleted_at: null,
+    },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      city: true,
+      address: true,
+      logo_url: true,
+      home_hero_image_url: true,
+      created_at: true,
+      company_type: {
+        select: {
+          name: true,
+        },
+      },
+    },
+    orderBy: {
+      created_at: 'desc',
+    },
+  });
+
+  if (companies.length === 0) return [];
+
+  // 2. Aggregate ratings per company
+  const ratingAgg = await prisma.review.groupBy({
+    by: ['company_id'],
+    where: {
+      company_id: { in: companies.map((c) => c.id) },
+    },
+    _avg: { rating: true },
+    _count: { rating: true },
+  });
+
+  const ratingMap = new Map<number, { avg: number; count: number }>();
+  for (const r of ratingAgg) {
+    ratingMap.set(r.company_id, {
+      avg: r._avg.rating ?? 0,
+      count: r._count.rating,
+    });
+  }
+
+  // 3. Sort: companies with ratings first (by avg desc), then by created_at desc
+  const sorted = companies
+    .map((c) => ({
+      ...c,
+      rating: ratingMap.get(c.id) ?? { avg: 0, count: 0 },
+    }))
+    .sort((a, b) => {
+      // Companies with reviews come first
+      if (a.rating.count > 0 && b.rating.count === 0) return -1;
+      if (a.rating.count === 0 && b.rating.count > 0) return 1;
+      // Both have reviews: sort by avg rating desc
+      if (a.rating.count > 0 && b.rating.count > 0) {
+        return b.rating.avg - a.rating.avg;
+      }
+      // Both have no reviews: sort by created_at desc
+      return b.created_at.getTime() - a.created_at.getTime();
+    })
+    .slice(0, limit);
+
+  return sorted;
+}
+
 export const getCompanyById = async (id: number) => {
   return await prisma.company.findUnique({
-    where: { id:  (id), is_active: true },
+    where: { id: (id), is_active: true },
   });
 };
 
@@ -24,6 +93,9 @@ export const getCompaniesByIds = async (ids: number[]) => {
 export const getCompanyBySlug = async (slug: string) => {
   return await prisma.company.findUnique({
     where: { slug, is_active: true },
+    include: {
+      hours: true,
+    },
   });
 };
 
@@ -71,24 +143,24 @@ export const getCities = async (query: string) => {
 export const getTopFourCompanyTypesIds = async () => {
 
   //retrieve top four company types ids with most companies
-    try{
-        const topFourCompanyTypesIds = await prisma.company.groupBy({
-            by: ['company_type_id'],
-            _count: {
-                company_type_id: true,
-            },
-            orderBy: {
-                _count: {
-                    company_type_id: 'desc',
-                },
-            },
-            take: 4,
-        });
-        return topFourCompanyTypesIds;
-    } catch(error){
-        console.error(error);
-        throw error;
-    }
+  try {
+    const topFourCompanyTypesIds = await prisma.company.groupBy({
+      by: ['company_type_id'],
+      _count: {
+        company_type_id: true,
+      },
+      orderBy: {
+        _count: {
+          company_type_id: 'desc',
+        },
+      },
+      take: 4,
+    });
+    return topFourCompanyTypesIds;
+  } catch (error) {
+    console.error(error);
+    throw error;
+  }
 }
 
 async function resolveSlotMinutesForGlobalType(
@@ -190,18 +262,18 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
           is_bookable: true,
           ...(startAt && endAt
             ? {
-                bookings: {
-                  none: {
-                    status: {
-                      in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
-                    },
-                    AND: [
-                      { start_at: { lt: endAt } },  // booking starts before requested slot ends
-                      { end_at: { gt: startAt } },  // booking ends after requested slot starts
-                    ],
+              bookings: {
+                none: {
+                  status: {
+                    in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
                   },
+                  AND: [
+                    { start_at: { lt: endAt } },  // booking starts before requested slot ends
+                    { end_at: { gt: startAt } },  // booking ends after requested slot starts
+                  ],
                 },
-              }
+              },
+            }
             : {}),
         },
       },
@@ -218,18 +290,18 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
           is_bookable: true,
           ...(startAt && endAt
             ? {
-                bookings: {
-                  none: {
-                    status: {
-                      in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
-                    },
-                    AND: [
-                      { start_at: { lt: endAt } },
-                      { end_at: { gt: startAt } },
-                    ],
+              bookings: {
+                none: {
+                  status: {
+                    in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
                   },
+                  AND: [
+                    { start_at: { lt: endAt } },
+                    { end_at: { gt: startAt } },
+                  ],
                 },
-              }
+              },
+            }
             : {}),
         },
       },
@@ -321,3 +393,95 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
   return result;
 
 }
+
+export const getCompanyPublicPageBySlug = async (slug: string) => {
+  return await prisma.company.findUnique({
+    where: { slug, is_active: true },
+    include: {
+      categories: {
+        where: { is_active: true, deleted_at: null },
+        orderBy: { position: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          description: true,
+          position: true,
+        },
+      },
+      services: {
+        where: { is_active: true, deleted_at: null },
+        orderBy: { position: 'asc' },
+        select: {
+          id: true,
+          category_id: true,
+          name: true,
+          description: true,
+          price_cents: true,
+          duration_minutes: true,
+          position: true,
+        },
+      },
+      staff_profiles: {
+        where: { is_bookable: true, deleted_at: null },
+        select: {
+          id: true,
+          display_name: true,
+          image_url: true,
+          staff_services: {
+            select: {
+              service_id: true,
+              service: {
+                select: {
+                  id: true,
+                  name: true,
+                  category: {
+                    select: {
+                      id: true,
+                      name: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      company_settings: true,
+      theme_config: true,
+      hours: true,
+      reviews: {
+        select: {
+          rating: true,
+        },
+      },
+    },
+  });
+};
+
+/**
+ * Get company hours for a specific day of week
+ */
+export const getCompanyHoursForDay = async (companyId: number, dayOfWeek: number) => {
+  return await prisma.hours.findFirst({
+    where: {
+      company_id: companyId,
+      day_of_week: dayOfWeek,
+    },
+  });
+};
+
+/**
+ * Get all hours for a specific day of week (supports multiple time windows)
+ */
+export const getAllHoursForDay = async (companyId: number, dayOfWeek: number) => {
+  return await prisma.hours.findMany({
+    where: {
+      company_id: companyId,
+      day_of_week: dayOfWeek,
+    },
+    orderBy: {
+      open_time: 'asc',
+    },
+  });
+};

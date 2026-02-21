@@ -4,6 +4,7 @@ export const env = {
   port: Number(process.env.PORT ?? 3001),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   jwtSecret: process.env.JWT_SECRET ?? 'change-me',
+  storagePath: process.env.STORAGE_PATH ?? './storage',
   db: {
     host: process.env.DB_HOST!,
     port: Number(process.env.DB_PORT ?? 3306),

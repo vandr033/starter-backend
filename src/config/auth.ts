@@ -3,15 +3,15 @@ import { prismaAdapter } from "better-auth/adapters/prisma";
 import { phoneNumber } from "better-auth/plugins";
 import { prisma } from "../prisma/client";
 import { sendWhatsappCode } from "../utils/whatsappSender";
-import { profileEnd } from "console";
 import { sendResetPasswordEmail } from "../utils/sendEmail";
+import bcrypt from "bcryptjs";
 
 
 export const auth = betterAuth({
   database: prismaAdapter(prisma, { provider: "mysql" }),
   baseURL: process.env.BASE_URL || "http://localhost:3001",
   frontendURL: process.env.BASE_URL || "http://localhost:3000",
-  trustedOrigins:[
+  trustedOrigins: [
     "http://localhost:3000",
     "http://localhost:3001",
     "https://bookinsite.com",
@@ -19,13 +19,30 @@ export const auth = betterAuth({
     "https://bookinsite.com.ar",
     "https://www.bookinsite.com.ar",
   ],
+  session: {
+    expiresIn: 60 * 60 * 24 * 7, // 7 days
+    updateAge: 60 * 60 * 24, // 1 day
+    cookieCache: {
+      enabled: true,
+      maxAge: 60 * 60, // 1 hour
+    },
+  },
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: false, // We handle email verification ourselves via OTP flow
+    // Use bcrypt for password hashing to match seed file
+    password: {
+      hash: async (password: string) => {
+        return bcrypt.hash(password, 10);
+      },
+      verify: async ({ hash, password }: { hash: string; password: string }) => {
+        return bcrypt.compare(password, hash);
+      },
+    },
     sendResetPassword: async ({ user, url, token }, request) => {
       await sendResetPasswordEmail(user, url);
     },
-    onPasswordReset: async ({user}, request) => {
+    onPasswordReset: async ({ user }, request) => {
       console.log(`password for ${user.email} reset `)
     }
   },

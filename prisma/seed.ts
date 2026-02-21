@@ -19,7 +19,7 @@ const prisma = new PrismaClient();
 async function main() {
   const baseCreatedAt = new Date("2025-01-01T12:00:00.000Z");
   const baseUpdatedAt = new Date("2025-01-02T12:00:00.000Z");
-  
+
   /**
    * 1) COMPANY TYPES / GLOBAL SERVICE TYPES / TYPES / FAQ
    */
@@ -370,7 +370,7 @@ async function main() {
       updated_at: baseUpdatedAt,
     },
   ];
-  
+
   const companySettings = [
     {
       id: 1,

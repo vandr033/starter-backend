@@ -4,7 +4,7 @@ import { prisma } from "../prisma/client";
 import { VerificationChannel, VerificationPurpose } from "@prisma/client";
 
 export const OTP_LENGTH = 6;
-export const OTP_TTL_MINUTES = 10;
+export const OTP_TTL_MINUTES = 5;
 export const PREREG_TTL_MINUTES = 30;
 
 export function generateNumericCode(length = OTP_LENGTH): string {
