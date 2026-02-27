@@ -16,8 +16,13 @@ export async function updateProfile(req: Request, res: Response) {
     const userId = authReq.authUser?.id;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    const { first_name, last_name } = req.body;
-    const result = await ProfileService.updateProfile(userId, { first_name, last_name });
+    const { first_name, last_name, phone_prefix, phone, phoneNumber } = req.body;
+    const result = await ProfileService.updateProfile(userId, {
+        first_name,
+        last_name,
+        phone_prefix,
+        phoneNumber: phoneNumber ?? phone,
+    });
     return res.status(result.code).json(result);
 }
 

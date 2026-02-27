@@ -13,7 +13,16 @@ const DEFAULT_THEME = {
     page_background_preset: 'auto' as PageBackgroundPreset,
     cards_elevated: true,
     corner_radius: 'md' as CornerRadius,
+    font_pairing: 'classic',
+    hero_variant: 'hero-cinematic',
+    services_variant: 'services-grid',
+    team_variant: 'team-cards',
 };
+
+const VALID_HERO_VARIANTS = ['hero-cinematic', 'hero-split', 'hero-minimal'];
+const VALID_SERVICES_VARIANTS = ['services-grid', 'services-list'];
+const VALID_TEAM_VARIANTS = ['team-cards', 'team-spotlight'];
+const VALID_FONT_PAIRINGS = ['classic', 'modern', 'bold', 'refined', 'friendly'];
 
 /**
  * Validate hex color format
@@ -29,7 +38,7 @@ function validateHexColor(color: string): boolean {
 export async function getTheme(companyId: number): Promise<ThemeResult> {
     try {
         const theme = await ThemeRepo.getThemeByCompany(companyId);
-        
+
         if (!theme) {
             return {
                 code: 200,
@@ -49,6 +58,10 @@ export async function getTheme(companyId: number): Promise<ThemeResult> {
                 page_background_preset: theme.page_background_preset,
                 cards_elevated: theme.cards_elevated,
                 corner_radius: theme.corner_radius,
+                font_pairing: theme.font_pairing || 'classic',
+                hero_variant: theme.hero_variant || 'hero-cinematic',
+                services_variant: theme.services_variant || 'services-grid',
+                team_variant: theme.team_variant || 'team-cards',
             },
         };
     } catch (error: any) {
@@ -71,6 +84,10 @@ export interface ThemeUpdateInput {
     page_background_preset: PageBackgroundPreset;
     cards_elevated: boolean;
     corner_radius: CornerRadius;
+    font_pairing?: string;
+    hero_variant?: string;
+    services_variant?: string;
+    team_variant?: string;
 }
 
 export async function updateTheme(
@@ -124,6 +141,43 @@ export async function updateTheme(
             };
         }
 
+        // Validate new customization fields
+        const fontPairing = input.font_pairing || 'classic';
+        if (!VALID_FONT_PAIRINGS.includes(fontPairing)) {
+            return {
+                code: 400,
+                message: `Invalid font_pairing: ${fontPairing}. Must be one of: ${VALID_FONT_PAIRINGS.join(', ')}.`,
+                error: true,
+            };
+        }
+
+        const heroVariant = input.hero_variant || 'hero-cinematic';
+        if (!VALID_HERO_VARIANTS.includes(heroVariant)) {
+            return {
+                code: 400,
+                message: `Invalid hero_variant: ${heroVariant}. Must be one of: ${VALID_HERO_VARIANTS.join(', ')}.`,
+                error: true,
+            };
+        }
+
+        const servicesVariant = input.services_variant || 'services-grid';
+        if (!VALID_SERVICES_VARIANTS.includes(servicesVariant)) {
+            return {
+                code: 400,
+                message: `Invalid services_variant: ${servicesVariant}. Must be one of: ${VALID_SERVICES_VARIANTS.join(', ')}.`,
+                error: true,
+            };
+        }
+
+        const teamVariant = input.team_variant || 'team-cards';
+        if (!VALID_TEAM_VARIANTS.includes(teamVariant)) {
+            return {
+                code: 400,
+                message: `Invalid team_variant: ${teamVariant}. Must be one of: ${VALID_TEAM_VARIANTS.join(', ')}.`,
+                error: true,
+            };
+        }
+
         // Upsert theme
         await ThemeRepo.upsertTheme({
             companyId,
@@ -132,11 +186,15 @@ export async function updateTheme(
             pageBackgroundPreset: input.page_background_preset,
             cardsElevated: input.cards_elevated,
             cornerRadius: input.corner_radius,
+            fontPairing,
+            heroVariant,
+            servicesVariant,
+            teamVariant,
         });
 
         // Get updated theme
         const updatedTheme = await ThemeRepo.getThemeByCompany(companyId);
-        
+
         return {
             code: 200,
             message: 'Theme updated successfully',
@@ -147,6 +205,10 @@ export async function updateTheme(
                 page_background_preset: updatedTheme!.page_background_preset,
                 cards_elevated: updatedTheme!.cards_elevated,
                 corner_radius: updatedTheme!.corner_radius,
+                font_pairing: updatedTheme!.font_pairing,
+                hero_variant: updatedTheme!.hero_variant,
+                services_variant: updatedTheme!.services_variant,
+                team_variant: updatedTheme!.team_variant,
             },
         };
     } catch (error: any) {

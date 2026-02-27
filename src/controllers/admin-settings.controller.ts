@@ -34,6 +34,7 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
                 booking_time_granularity_minutes: 5,
                 cancel_limit_minutes: 120,
                 reschedule_limit_minutes: 120,
+                auto_approve_staff_time_off: false,
                 allow_qr_payment: true,
                 qr_image_url: null,
                 allow_cash_payment: true,
@@ -96,11 +97,13 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             booking_time_granularity_minutes,
             cancel_limit_minutes,
             reschedule_limit_minutes,
+            auto_approve_staff_time_off,
             allow_qr_payment,
             qr_image_url,
             allow_cash_payment,
             send_email_notifications,
             send_whatsapp_notifications,
+            social_links,
         } = req.body;
 
         // Validate numeric fields
@@ -146,6 +149,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             'allow_cash_payment',
             'send_email_notifications',
             'send_whatsapp_notifications',
+            'auto_approve_staff_time_off',
         ];
 
         for (const field of booleanFields) {
@@ -169,6 +173,70 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             return res.status(400).json(mensaje);
         }
 
+        // Validate social_links if provided
+        let normalizedSocialLinks: Record<string, string | null> | undefined;
+        if (social_links !== undefined) {
+            if (typeof social_links !== 'object' || social_links === null || Array.isArray(social_links)) {
+                mensaje = {
+                    code: 400,
+                    message: 'social_links must be an object',
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+
+            const allowedKeys = ['instagram', 'facebook', 'tiktok', 'x_twitter', 'youtube', 'whatsapp'];
+            const unknownKeys = Object.keys(social_links).filter(k => !allowedKeys.includes(k));
+            if (unknownKeys.length > 0) {
+                mensaje = {
+                    code: 400,
+                    message: `Unknown social_links keys: ${unknownKeys.join(', ')}. Allowed: ${allowedKeys.join(', ')}`,
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+
+            normalizedSocialLinks = {};
+            for (const key of allowedKeys) {
+                const value = social_links[key];
+                if (value === undefined || value === null || value === '') {
+                    normalizedSocialLinks[key] = null;
+                    continue;
+                }
+                if (typeof value !== 'string') {
+                    mensaje = {
+                        code: 400,
+                        message: `social_links.${key} must be a string, null, or empty`,
+                        error: true,
+                    };
+                    return res.status(400).json(mensaje);
+                }
+                if (value.length > 500) {
+                    mensaje = {
+                        code: 400,
+                        message: `social_links.${key} must be 500 characters or fewer`,
+                        error: true,
+                    };
+                    return res.status(400).json(mensaje);
+                }
+                // WhatsApp normalization: raw digits → wa.me link
+                if (key === 'whatsapp' && /^\+?\d+$/.test(value)) {
+                    normalizedSocialLinks[key] = `https://wa.me/${value.replace(/^\+/, '')}`;
+                    continue;
+                }
+                // Basic URL validation for non-empty values
+                if (!value.startsWith('https://') && !value.startsWith('http://')) {
+                    mensaje = {
+                        code: 400,
+                        message: `social_links.${key} must be a valid URL starting with https://`,
+                        error: true,
+                    };
+                    return res.status(400).json(mensaje);
+                }
+                normalizedSocialLinks[key] = value;
+            }
+        }
+
         // Upsert settings
         const settings = await prisma.companySettings.upsert({
             where: { company_id: companyId },
@@ -177,11 +245,13 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 booking_time_granularity_minutes,
                 cancel_limit_minutes,
                 reschedule_limit_minutes,
+                auto_approve_staff_time_off,
                 allow_qr_payment,
                 qr_image_url,
                 allow_cash_payment,
                 send_email_notifications,
                 send_whatsapp_notifications,
+                ...(normalizedSocialLinks !== undefined && { social_links: normalizedSocialLinks }),
             },
             create: {
                 company_id: companyId,
@@ -189,11 +259,13 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 booking_time_granularity_minutes: booking_time_granularity_minutes || 5,
                 cancel_limit_minutes: cancel_limit_minutes || 120,
                 reschedule_limit_minutes: reschedule_limit_minutes || 120,
+                auto_approve_staff_time_off: auto_approve_staff_time_off !== undefined ? auto_approve_staff_time_off : false,
                 allow_qr_payment: allow_qr_payment !== undefined ? allow_qr_payment : true,
                 qr_image_url: qr_image_url || null,
                 allow_cash_payment: allow_cash_payment !== undefined ? allow_cash_payment : true,
                 send_email_notifications: send_email_notifications !== undefined ? send_email_notifications : true,
                 send_whatsapp_notifications: send_whatsapp_notifications !== undefined ? send_whatsapp_notifications : false,
+                social_links: normalizedSocialLinks || {},
             },
         });
 
@@ -244,6 +316,7 @@ export async function resetCompanySettings(req: AuthenticatedRequest, res: Respo
                 booking_time_granularity_minutes: 5,
                 cancel_limit_minutes: 120,
                 reschedule_limit_minutes: 120,
+                auto_approve_staff_time_off: false,
                 allow_qr_payment: true,
                 qr_image_url: null,
                 allow_cash_payment: true,

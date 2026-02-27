@@ -2,7 +2,8 @@ import { Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as AdminBookingService from '../services/admin-booking.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
-import { BookingStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
+import { BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
+import { prisma } from '../prisma/client';
 
 let mensaje: MensajeApi;
 
@@ -12,6 +13,8 @@ let mensaje: MensajeApi;
  */
 export async function getBookings(req: AuthenticatedRequest, res: Response) {
     const companyId = (req as any).companyID;
+    const companyUser = (req as any).companyUser as { role?: CompanyUserRole } | undefined;
+    const authUserId = req.authUser?.id;
 
     if (!companyId) {
         mensaje = {
@@ -49,12 +52,47 @@ export async function getBookings(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    let effectiveStaffId = parsedStaffId;
+
+    if (companyUser?.role === CompanyUserRole.STAFF) {
+        if (!authUserId) {
+            return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+        }
+
+        const staffProfile = await prisma.staffProfile.findFirst({
+            where: {
+                company_id: companyId,
+                user_id: authUserId,
+                deleted_at: null,
+            },
+            select: { id: true },
+        });
+
+        if (!staffProfile) {
+            return res.status(403).json({
+                code: 403,
+                error: true,
+                message: 'Staff profile not found in this company',
+            });
+        }
+
+        if (parsedStaffId && parsedStaffId !== staffProfile.id) {
+            return res.status(403).json({
+                code: 403,
+                error: true,
+                message: 'Staff can only view their own bookings',
+            });
+        }
+
+        effectiveStaffId = staffProfile.id;
+    }
+
     const result = await AdminBookingService.getBookings({
         companyId,
         startDate: start as string,
         endDate: end as string,
         status: parsedStatus,
-        staffId: parsedStaffId,
+        staffId: effectiveStaffId,
     });
 
     // Transform response to match required format
@@ -109,7 +147,8 @@ export async function getBookings(req: AuthenticatedRequest, res: Response) {
 export async function updateBooking(req: AuthenticatedRequest, res: Response) {
     const companyId = (req as any).companyID;
     const bookingId = parseInt(req.params.id as string);
-    const userId = (req as any).userID;
+    const userId = req.authUser?.id;
+    const companyUser = (req as any).companyUser as { role?: CompanyUserRole } | undefined;
 
     if (!companyId) {
         mensaje = {
@@ -129,11 +168,17 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    if (!userId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
     // Parse update fields
     const {
         status,
         start_at,
         notes,
+        staff_id,
+        service_ids,
     } = req.body;
 
     // Parse status
@@ -151,6 +196,34 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
         }
     }
 
+    // Parse staff_id
+    let parsedStaffId: number | undefined;
+    if (staff_id !== undefined) {
+        parsedStaffId = parseInt(staff_id);
+        if (isNaN(parsedStaffId)) {
+            mensaje = {
+                code: 400,
+                message: 'Invalid staff_id format',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+    }
+
+    // Validate service_ids
+    let parsedServiceIds: number[] | undefined;
+    if (service_ids !== undefined) {
+        if (!Array.isArray(service_ids) || service_ids.length === 0) {
+            mensaje = {
+                code: 400,
+                message: 'service_ids must be a non-empty array',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        parsedServiceIds = service_ids.map(Number);
+    }
+
     const result = await AdminBookingService.updateBooking(
         bookingId,
         companyId,
@@ -158,8 +231,11 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
             status: parsedStatus,
             start_at,
             notes,
+            staff_id: parsedStaffId,
+            service_ids: parsedServiceIds,
         },
-        userId
+        userId,
+        companyUser?.role
     );
 
     // Transform response to match required format
@@ -213,7 +289,7 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
  */
 export async function createBooking(req: AuthenticatedRequest, res: Response) {
     const companyId = (req as any).companyID;
-    const userId = (req as any).userID;
+    const userId = req.authUser?.id;
 
     if (!companyId) {
         mensaje = {
@@ -222,6 +298,10 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
             error: true,
         };
         return res.status(400).json(mensaje);
+    }
+
+    if (!userId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
     }
 
     const {

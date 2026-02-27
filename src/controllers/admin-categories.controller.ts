@@ -313,7 +313,9 @@ export const getGlobalServiceTypes = async (req: AuthenticatedRequest, res: Resp
         id: true,
         key: true,
         name: true,
+        name_i18n: true,
         description: true,
+        description_i18n: true,
       },
       orderBy: {
         name: 'asc',

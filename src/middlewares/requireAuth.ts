@@ -35,6 +35,7 @@ export async function requireAuth(
         name: true,
         is_super_admin: true,
         is_active: true,
+        must_change_password: true,
         phone_prefix: true,
         phoneNumber: true,
         phoneNumberVerified: true,
@@ -44,9 +45,24 @@ export async function requireAuth(
         updatedAt: true,
       },
     });
-    console.log(fullUser);
     if (!fullUser) {
       return res.status(401).json({ error: "Unauthorized - user not found" });
+    }
+
+    const originalUrl = req.originalUrl || req.url || "";
+    const isAdminApi = originalUrl.startsWith("/api/admin/") || originalUrl.startsWith("/api/super-admin/");
+    const allowWhilePasswordChange =
+      originalUrl.startsWith("/api/admin/auth/session") ||
+      originalUrl.startsWith("/api/admin/auth/sign-out") ||
+      originalUrl.startsWith("/api/admin/auth/change-password");
+
+    if (fullUser.must_change_password && isAdminApi && !allowWhilePasswordChange) {
+      return res.status(403).json({
+        code: 403,
+        error: true,
+        message: "Password change required",
+        requirePasswordChange: true,
+      });
     }
 
     const authReq = req as AuthenticatedRequest;
@@ -65,8 +81,6 @@ export function requireSuperAdmin(req: AuthenticatedRequest, res: Response, next
   if (!user) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  console.log(user);
-
   if (!user.is_super_admin) {
     return res.status(403).json({ error: "Forbidden" });
   }
@@ -173,6 +187,10 @@ export function requireCompanyRole(allowedRoles: CompanyUserRole[]) {
             deleted_at: null,
             role: { in: allowedRoles },
           },
+          orderBy: [
+            { role: 'asc' },
+            { updated_at: 'desc' },
+          ],
           include: {
             company: {
               select: {
@@ -202,6 +220,10 @@ export function requireCompanyRole(allowedRoles: CompanyUserRole[]) {
           deleted_at: null,
           role: { in: allowedRoles },
         },
+        orderBy: [
+          { role: 'asc' },
+          { updated_at: 'desc' },
+        ],
         include: {
           company: {
             select: {

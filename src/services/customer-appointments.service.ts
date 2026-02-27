@@ -1,6 +1,7 @@
 import { prisma } from "../prisma/client";
 import { MensajeApi } from "../types/MensajeApi";
 import { BookingStatus } from "@prisma/client";
+import { notifyBookingCancelled, notifyBookingUpdated } from "../utils/bookingNotifications";
 
 const bookingInclude = {
     company: {
@@ -37,8 +38,11 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
     try {
         const bookings = await prisma.booking.findMany({
             where: {
-                created_by_user_id: userId,
                 deleted_at: null,
+                OR: [
+                    { created_by_user_id: userId },
+                    { customer: { is: { user_id: userId } } },
+                ],
             },
             include: {
                 ...bookingInclude,
@@ -139,10 +143,13 @@ export async function cancelBooking(
                 company: {
                     include: { company_settings: true },
                 },
+                customer: {
+                    select: { user_id: true },
+                },
             },
         });
 
-        if (!booking || booking.created_by_user_id !== userId) {
+        if (!booking || (booking.created_by_user_id !== userId && booking.customer?.user_id !== userId)) {
             return { code: 404, message: "Booking not found", error: true };
         }
 
@@ -167,12 +174,34 @@ export async function cancelBooking(
             };
         }
 
-        await prisma.booking.update({
+        const cancelledBooking = await prisma.booking.update({
             where: { id: bookingId },
             data: {
                 status: BookingStatus.CANCELLED,
                 updated_by_user_id: userId,
             },
+            include: {
+                company: { select: { name: true } },
+                staff: { select: { display_name: true } },
+                booking_services: { select: { service_name_snapshot: true } },
+            },
+        });
+
+        // Send cancellation notification (fire-and-forget)
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
+        void notifyBookingCancelled({
+            companyId: booking.company_id,
+            bookingId,
+            customerEmail: user?.email || booking.client_email,
+            customerPhone: user?.phoneNumber || booking.client_phone_number,
+            customerPhonePrefix: user?.phone_prefix || booking.client_phone_prefix,
+            customerName: user?.name || booking.client_name,
+            companyName: cancelledBooking.company.name,
+            staffName: cancelledBooking.staff?.display_name || '',
+            serviceNames: cancelledBooking.booking_services.map(bs => bs.service_name_snapshot),
+            startAt: booking.start_at,
+            endAt: booking.end_at,
+            totalPriceCents: booking.total_price_cents || 0,
         });
 
         return {
@@ -202,11 +231,14 @@ export async function modifyBooking(
                 company: {
                     include: { company_settings: true },
                 },
+                customer: {
+                    select: { user_id: true },
+                },
                 booking_services: true,
             },
         });
 
-        if (!booking || booking.created_by_user_id !== userId) {
+        if (!booking || (booking.created_by_user_id !== userId && booking.customer?.user_id !== userId)) {
             return { code: 404, message: "Booking not found", error: true };
         }
 
@@ -253,6 +285,23 @@ export async function modifyBooking(
             where: { id: bookingId },
             data: updateData,
             include: bookingInclude,
+        });
+
+        // Send update notification (fire-and-forget)
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
+        void notifyBookingUpdated({
+            companyId: booking.company_id,
+            bookingId,
+            customerEmail: user?.email || booking.client_email,
+            customerPhone: user?.phoneNumber || booking.client_phone_number,
+            customerPhonePrefix: user?.phone_prefix || booking.client_phone_prefix,
+            customerName: user?.name || booking.client_name,
+            companyName: updated.company.name,
+            staffName: updated.staff?.display_name || '',
+            serviceNames: updated.booking_services.map((bs: any) => bs.service_name_snapshot || bs.service?.name || ''),
+            startAt: updated.start_at,
+            endAt: updated.end_at,
+            totalPriceCents: updated.total_price_cents || 0,
         });
 
         return {

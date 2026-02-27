@@ -22,6 +22,10 @@ export async function upsertTheme(data: {
     pageBackgroundPreset: PageBackgroundPreset;
     cardsElevated: boolean;
     cornerRadius: CornerRadius;
+    fontPairing: string;
+    heroVariant: string;
+    servicesVariant: string;
+    teamVariant: string;
 }) {
     return prisma.themeConfig.upsert({
         where: {
@@ -33,6 +37,10 @@ export async function upsertTheme(data: {
             page_background_preset: data.pageBackgroundPreset,
             cards_elevated: data.cardsElevated,
             corner_radius: data.cornerRadius,
+            font_pairing: data.fontPairing,
+            hero_variant: data.heroVariant,
+            services_variant: data.servicesVariant,
+            team_variant: data.teamVariant,
         },
         create: {
             company_id: data.companyId,
@@ -41,6 +49,10 @@ export async function upsertTheme(data: {
             page_background_preset: data.pageBackgroundPreset,
             cards_elevated: data.cardsElevated,
             corner_radius: data.cornerRadius,
+            font_pairing: data.fontPairing,
+            hero_variant: data.heroVariant,
+            services_variant: data.servicesVariant,
+            team_variant: data.teamVariant,
         },
     });
 }

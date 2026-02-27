@@ -29,6 +29,5 @@ export const sendWhatsappCode = async (phone: string, code: string) => {
     return result
   }catch(error){
     return -1
-    console.log(error)
   }
 }

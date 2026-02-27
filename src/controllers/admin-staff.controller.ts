@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as StaffService from '../services/staff.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
+import { CompanyUserRole } from '@prisma/client';
 
 let mensaje: MensajeApi;
 
@@ -26,6 +27,139 @@ export async function listStaff(req: AuthenticatedRequest, res: Response) {
 }
 
 /**
+ * GET /api/admin/staff/me
+ * Get authenticated staff member profile for current company context
+ */
+export async function getMyProfile(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const userId = req.authUser?.id;
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (!userId) {
+        mensaje = {
+            code: 401,
+            message: 'Unauthorized',
+            error: true,
+        };
+        return res.status(401).json(mensaje);
+    }
+
+    const result = await StaffService.getMyProfile(companyId, userId);
+    return res.status(result.code).json(result);
+}
+
+/**
+ * PUT /api/admin/staff/me
+ * Update authenticated staff member profile for current company context
+ */
+export async function updateMyProfile(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const userId = req.authUser?.id;
+    const { display_name, bio, first_name, last_name, phone, phone_prefix } = req.body;
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (!userId) {
+        mensaje = {
+            code: 401,
+            message: 'Unauthorized',
+            error: true,
+        };
+        return res.status(401).json(mensaje);
+    }
+
+    if (display_name !== undefined) {
+        if (typeof display_name !== 'string') {
+            mensaje = {
+                code: 400,
+                message: 'display_name must be a string',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        if (display_name.trim().length === 0 || display_name.trim().length > 191) {
+            mensaje = {
+                code: 400,
+                message: 'display_name must be between 1 and 191 characters',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+    }
+
+    if (bio !== undefined && typeof bio !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'bio must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (first_name !== undefined && typeof first_name !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'first_name must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (last_name !== undefined && typeof last_name !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'last_name must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (phone !== undefined && typeof phone !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'phone must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (phone_prefix !== undefined && typeof phone_prefix !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'phone_prefix must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await StaffService.updateMyProfile(companyId, userId, {
+        display_name: typeof display_name === 'string' ? display_name.trim() : undefined,
+        bio: typeof bio === 'string' ? bio.trim() : undefined,
+        first_name: typeof first_name === 'string' ? first_name.trim() : undefined,
+        last_name: typeof last_name === 'string' ? last_name.trim() : undefined,
+        phone: typeof phone === 'string' ? phone.trim() : undefined,
+        phone_prefix: typeof phone_prefix === 'string' ? phone_prefix.trim() : undefined,
+    });
+
+    return res.status(result.code).json(result);
+}
+
+/**
  * POST /api/admin/staff
  * Create a new staff profile
  */
@@ -41,7 +175,7 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { email, display_name, bio, is_bookable, service_ids } = req.body;
+    const { email, display_name, role, phone_prefix, phone, bio, is_bookable, service_ids, start_date, end_date } = req.body;
 
     // Validate required fields
     if (!email || typeof email !== 'string') {
@@ -77,6 +211,56 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         mensaje = {
             code: 400,
             message: 'display_name must be less than 191 characters',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const requesterRole = (req as any).companyUser?.role as CompanyUserRole | undefined;
+    const requesterIsSuperAdmin = Boolean(req.authUser?.is_super_admin);
+
+    if (role !== undefined) {
+        if (
+            typeof role !== 'string' ||
+            (role !== CompanyUserRole.OWNER &&
+                role !== CompanyUserRole.ADMIN &&
+                role !== CompanyUserRole.STAFF)
+        ) {
+            mensaje = {
+                code: 400,
+                message: 'role must be OWNER, ADMIN or STAFF',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+
+        if (
+            role === CompanyUserRole.OWNER &&
+            requesterRole !== CompanyUserRole.OWNER &&
+            !requesterIsSuperAdmin
+        ) {
+            mensaje = {
+                code: 403,
+                message: 'Only an owner can create another owner',
+                error: true,
+            };
+            return res.status(403).json(mensaje);
+        }
+    }
+
+    if (phone_prefix !== undefined && typeof phone_prefix !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'phone_prefix must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (phone !== undefined && typeof phone !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'phone must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -126,9 +310,14 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
     const result = await StaffService.createStaff(companyId, {
         email: email.toLowerCase().trim(),
         display_name: display_name.trim(),
+        role: role as CompanyUserRole | undefined,
+        phone_prefix: phone_prefix?.trim(),
+        phone: phone?.trim(),
         bio: bio?.trim(),
         is_bookable,
         service_ids,
+        start_date,
+        end_date,
     });
 
     return res.status(result.code).json(result);

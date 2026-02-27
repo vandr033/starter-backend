@@ -194,7 +194,8 @@ export async function updatePaymentStatus(
     companyId: number,
     paymentStatus: PaymentStatus,
     updatedByUserId: string,
-    paymentMethod?: PaymentMethod
+    paymentMethod?: PaymentMethod,
+    rejectionReason?: string | null
 ) {
     return prisma.booking.updateMany({
         where: {
@@ -205,9 +206,81 @@ export async function updatePaymentStatus(
         data: {
             payment_status: paymentStatus,
             ...(paymentMethod && { payment_method: paymentMethod }),
+            ...(rejectionReason !== undefined && { rejection_reason: rejectionReason }),
             updated_by_user_id: updatedByUserId,
         },
     });
+}
+
+/**
+ * Get count of bookings with PENDING_CONFIRMATION payment status
+ */
+export async function getPendingPaymentsCount(companyId: number) {
+    return prisma.booking.count({
+        where: {
+            company_id: companyId,
+            deleted_at: null,
+            payment_status: PaymentStatus.PENDING_CONFIRMATION,
+        },
+    });
+}
+
+/**
+ * Get bookings with payment info for the payments page
+ */
+export async function getBookingsWithPaymentInfo(
+    companyId: number,
+    options: {
+        paymentStatus?: PaymentStatus;
+        page: number;
+        limit: number;
+    }
+) {
+    const { paymentStatus, page, limit } = options;
+    const skip = (page - 1) * limit;
+
+    const where: any = {
+        company_id: companyId,
+        deleted_at: null,
+        payment_method: { not: 'NONE' as any },
+    };
+
+    if (paymentStatus) {
+        where.payment_status = paymentStatus;
+    }
+
+    const [bookings, total] = await Promise.all([
+        prisma.booking.findMany({
+            where,
+            skip,
+            take: limit,
+            orderBy: { created_at: 'desc' },
+            include: {
+                staff: { select: { id: true, display_name: true } },
+                booking_services: {
+                    include: {
+                        service: { select: { id: true, name: true, duration_minutes: true } },
+                    },
+                },
+                customer: {
+                    include: {
+                        user: {
+                            select: {
+                                id: true,
+                                name: true,
+                                email: true,
+                                phoneNumber: true,
+                                phone_prefix: true,
+                            },
+                        },
+                    },
+                },
+            },
+        }),
+        prisma.booking.count({ where }),
+    ]);
+
+    return { bookings, total, totalPages: Math.ceil(total / limit) };
 }
 
 /**
@@ -334,6 +407,76 @@ export async function createWalkInBooking(
                 staff: {
                     select: { id: true, display_name: true },
                 },
+            },
+        });
+    });
+}
+
+/**
+ * Update booking staff
+ */
+export async function updateBookingStaff(
+    bookingId: number,
+    companyId: number,
+    staffId: number,
+    updatedByUserId: string
+) {
+    return prisma.booking.updateMany({
+        where: {
+            id: bookingId,
+            company_id: companyId,
+            deleted_at: null,
+        },
+        data: {
+            staff_id: staffId,
+            updated_by_user_id: updatedByUserId,
+        },
+    });
+}
+
+/**
+ * Replace booking services (in a transaction)
+ */
+export async function replaceBookingServices(
+    bookingId: number,
+    companyId: number,
+    services: Array<{
+        service_id: number;
+        service_name_snapshot: string;
+        price_cents_snapshot: number;
+        duration_minutes_snapshot: number;
+        position: number;
+    }>,
+    totalPriceCents: number,
+    endAt: Date,
+    updatedByUserId: string
+) {
+    return prisma.$transaction(async (tx) => {
+        // Delete existing booking services
+        await tx.bookingService.deleteMany({
+            where: { booking_id: bookingId, company_id: companyId },
+        });
+
+        // Create new booking services
+        await tx.bookingService.createMany({
+            data: services.map((s) => ({
+                booking_id: bookingId,
+                company_id: companyId,
+                service_id: s.service_id,
+                service_name_snapshot: s.service_name_snapshot,
+                price_cents_snapshot: s.price_cents_snapshot,
+                duration_minutes_snapshot: s.duration_minutes_snapshot,
+                position: s.position,
+            })),
+        });
+
+        // Update booking total price and end_at
+        await tx.booking.updateMany({
+            where: { id: bookingId, company_id: companyId, deleted_at: null },
+            data: {
+                total_price_cents: totalPriceCents,
+                end_at: endAt,
+                updated_by_user_id: updatedByUserId,
             },
         });
     });

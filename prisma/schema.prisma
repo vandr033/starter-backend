@@ -33,9 +33,9 @@ model Company {
   state                String?           @db.VarChar(128)
   latitude             Float?
   longitude            Float?
-  about_us_hero_text   String?
-  about_us_text        String?
-  our_story_text       String?
+  about_us_hero_text   String?           @db.Text
+  about_us_text        String?           @db.Text
+  our_story_text       String?           @db.Text
   bookings             Booking[]
   booking_discounts    BookingDiscount[]
   booking_services     BookingService[]
@@ -50,6 +50,8 @@ model Company {
   reviews              Review[]
   services             Service[]
   staff_profiles       StaffProfile[]
+  staff_availability   StaffAvailability[]
+  staff_time_off       StaffTimeOff[]
   staff_services       StaffService[]
   theme_config         ThemeConfig?
 
@@ -66,6 +68,10 @@ model ThemeConfig {
   page_background_preset PageBackgroundPreset @default(light)
   cards_elevated         Boolean              @default(true)
   corner_radius          CornerRadius         @default(md)
+  font_pairing           String               @default("classic") @db.VarChar(30)
+  hero_variant           String               @default("hero-cinematic") @db.VarChar(30)
+  services_variant       String               @default("services-grid") @db.VarChar(30)
+  team_variant           String               @default("team-cards") @db.VarChar(30)
   created_at             DateTime             @default(now())
   updated_at             DateTime             @updatedAt
   company                Company              @relation(fields: [company_id], references: [id])
@@ -85,6 +91,8 @@ model CompanySettings {
   allow_cash_payment               Boolean  @default(true)
   send_email_notifications         Boolean  @default(true)
   send_whatsapp_notifications      Boolean  @default(false)
+  auto_approve_staff_time_off      Boolean  @default(false)
+  social_links                     Json     @default("{}")
   created_at                       DateTime @default(now())
   updated_at                       DateTime @updatedAt
   company                          Company  @relation(fields: [company_id], references: [id])
@@ -99,6 +107,7 @@ model User {
   last_name           String?           @db.VarChar(100)
   is_super_admin      Boolean           @default(false)
   is_active           Boolean           @default(true)
+  must_change_password Boolean          @default(false)
   deleted_at          DateTime?
   phone_prefix        String?           @db.VarChar(8)
   createdAt           DateTime          @default(now())
@@ -113,9 +122,13 @@ model User {
   updated_bookings    Booking[]         @relation("BookingUpdatedBy")
   company_users       CompanyUser[]
   customer_profiles   CustomerProfile[]
+  requested_time_off  StaffTimeOff[]      @relation("StaffTimeOffRequestedBy")
+  reviewed_time_off   StaffTimeOff[]      @relation("StaffTimeOffReviewedBy")
   user_reviews        Review[]
   sessions            Session[]
   staff_profiles      StaffProfile[]
+
+  @@map("user")
 }
 
 model CompanyUser {
@@ -137,20 +150,26 @@ model CompanyUser {
 }
 
 model StaffProfile {
-  id                  Int               @id @default(autoincrement())
+  id                  Int                @id @default(autoincrement())
   company_id          Int
   user_id             String
   display_name        String
-  bio                 String?           @db.Text
-  image_url           String?           @db.VarChar(512)
-  is_bookable         Boolean           @default(true)
-  created_at          DateTime          @default(now())
-  updated_at          DateTime          @updatedAt
+  bio                 String?            @db.Text
+  image_url           String?            @db.VarChar(512)
+  is_bookable         Boolean            @default(true)
+  status              StaffProfileStatus @default(ACTIVE)
+  invite_token        String?            @unique @db.VarChar(255)
+  start_date          DateTime?
+  end_date            DateTime?
+  created_at          DateTime           @default(now())
+  updated_at          DateTime           @updatedAt
   deleted_at          DateTime?
+  availability_slots  StaffAvailability[]
   bookings            Booking[]
   preferred_customers CustomerProfile[]
-  company             Company           @relation(fields: [company_id], references: [id])
-  user                User              @relation(fields: [user_id], references: [id])
+  company             Company            @relation(fields: [company_id], references: [id])
+  user                User               @relation(fields: [user_id], references: [id])
+  time_off_requests   StaffTimeOff[]
   staff_services      StaffService[]
 
   @@unique([company_id, user_id])
@@ -258,6 +277,7 @@ model Booking {
   payment_method      PaymentMethod     @default(NONE)
   payment_status      PaymentStatus     @default(UNPAID)
   qr_proof_image_url  String?           @db.VarChar(512)
+  rejection_reason    String?           @db.VarChar(500)
   total_price_cents   Int               @default(0)
   notes               String?           @db.Text
   created_by_user_id  String?
@@ -440,7 +460,9 @@ model CompanyType {
   id          Int       @id @default(autoincrement())
   key         String    @unique @db.VarChar(64)
   name        String
+  name_i18n   Json      @default("{}")
   description String?   @db.VarChar(255)
+  description_i18n Json @default("{}")
   icon_name   String?   @db.VarChar(64)
   is_active   Boolean   @default(true)
   created_at  DateTime  @default(now())
@@ -454,7 +476,9 @@ model GlobalServiceType {
   id          Int       @id @default(autoincrement())
   key         String    @unique @db.VarChar(64)
   name        String
+  name_i18n   Json      @default("{}")
   description String?   @db.VarChar(255)
+  description_i18n Json @default("{}")
   services    Service[]
   categories  Category[]
 
@@ -513,6 +537,50 @@ model StaffService {
   @@map("staff_service")
 }
 
+model StaffAvailability {
+  id         Int          @id @default(autoincrement())
+  company_id Int
+  staff_id   Int
+  day_of_week Int
+  start_time String       @db.VarChar(8)
+  end_time   String       @db.VarChar(8)
+  is_active  Boolean      @default(true)
+  created_at DateTime     @default(now())
+  updated_at DateTime     @updatedAt
+  company    Company      @relation(fields: [company_id], references: [id])
+  staff      StaffProfile @relation(fields: [staff_id], references: [id])
+
+  @@index([company_id, staff_id, day_of_week, is_active])
+  @@index([staff_id], map: "staff_availability_staff_id_fkey")
+  @@map("staff_availability")
+}
+
+model StaffTimeOff {
+  id                   Int                @id @default(autoincrement())
+  company_id           Int
+  staff_id             Int
+  requested_by_user_id String
+  starts_at            DateTime
+  ends_at              DateTime
+  reason               String?            @db.VarChar(500)
+  status               StaffTimeOffStatus @default(PENDING)
+  review_note          String?            @db.VarChar(500)
+  reviewed_by_user_id  String?
+  reviewed_at          DateTime?
+  created_at           DateTime           @default(now())
+  updated_at           DateTime           @updatedAt
+  deleted_at           DateTime?
+  company              Company            @relation(fields: [company_id], references: [id])
+  staff                StaffProfile       @relation(fields: [staff_id], references: [id])
+  requested_by         User               @relation("StaffTimeOffRequestedBy", fields: [requested_by_user_id], references: [id])
+  reviewed_by          User?              @relation("StaffTimeOffReviewedBy", fields: [reviewed_by_user_id], references: [id])
+
+  @@index([company_id, staff_id, status, starts_at, ends_at])
+  @@index([requested_by_user_id], map: "staff_time_off_requested_by_user_id_fkey")
+  @@index([reviewed_by_user_id], map: "staff_time_off_reviewed_by_user_id_fkey")
+  @@map("staff_time_off")
+}
+
 enum PageBackgroundPreset {
   light
   soft
@@ -555,6 +623,7 @@ enum PaymentStatus {
   UNPAID
   PENDING_CONFIRMATION
   PAID
+  REJECTED
 }
 
 enum DiscountType {
@@ -571,4 +640,18 @@ enum VerificationPurpose {
   CUSTOMER_SIGNUP
   LOGIN
   PROFILE_UPDATE
+  STAFF_INVITE
+}
+
+enum StaffProfileStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+}
+
+enum StaffTimeOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }

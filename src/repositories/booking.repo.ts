@@ -1,5 +1,5 @@
 import { prisma } from '../prisma/client';
-import { BookingStatus } from '@prisma/client';
+import { BookingStatus, StaffTimeOffStatus } from '@prisma/client';
 
 /**
  * Get bookings for a date range, optionally filtered by staff IDs
@@ -38,6 +38,21 @@ export async function getCompanyHoursForDay(companyId: number, dayOfWeek: number
         where: {
             company_id: companyId,
             day_of_week: dayOfWeek,
+        },
+    });
+}
+
+/**
+ * Get all opening windows for a company day of week (supports multiple windows)
+ */
+export async function getCompanyHourWindowsForDay(companyId: number, dayOfWeek: number) {
+    return prisma.hours.findMany({
+        where: {
+            company_id: companyId,
+            day_of_week: dayOfWeek,
+        },
+        orderBy: {
+            open_time: 'asc',
         },
     });
 }
@@ -105,7 +120,87 @@ export async function getBookableStaff(companyId: number, staffId?: number) {
             id: true,
             display_name: true,
             user_id: true,
+            start_date: true,
+            end_date: true,
         },
+    });
+}
+
+/**
+ * Get active availability windows for staff on a specific day
+ */
+export async function getStaffAvailabilityForDay(
+    companyId: number,
+    staffIds: number[],
+    dayOfWeek: number
+) {
+    if (staffIds.length === 0) return [];
+    return prisma.staffAvailability.findMany({
+        where: {
+            company_id: companyId,
+            staff_id: { in: staffIds },
+            day_of_week: dayOfWeek,
+            is_active: true,
+        },
+        select: {
+            staff_id: true,
+            day_of_week: true,
+            start_time: true,
+            end_time: true,
+        },
+        orderBy: [
+            { staff_id: 'asc' },
+            { start_time: 'asc' },
+        ],
+    });
+}
+
+/**
+ * Get active availability count by staff (used to detect custom schedules)
+ */
+export async function getStaffAvailabilityCounts(companyId: number, staffIds: number[]) {
+    if (staffIds.length === 0) return [];
+    return prisma.staffAvailability.groupBy({
+        by: ['staff_id'],
+        where: {
+            company_id: companyId,
+            staff_id: { in: staffIds },
+            is_active: true,
+        },
+        _count: {
+            id: true,
+        },
+    });
+}
+
+/**
+ * Get approved time-off entries overlapping the requested range
+ */
+export async function getApprovedStaffTimeOffOverlaps(
+    companyId: number,
+    staffIds: number[],
+    rangeStart: Date,
+    rangeEnd: Date
+) {
+    if (staffIds.length === 0) return [];
+    return prisma.staffTimeOff.findMany({
+        where: {
+            company_id: companyId,
+            staff_id: { in: staffIds },
+            status: StaffTimeOffStatus.APPROVED,
+            deleted_at: null,
+            starts_at: { lt: rangeEnd },
+            ends_at: { gt: rangeStart },
+        },
+        select: {
+            staff_id: true,
+            starts_at: true,
+            ends_at: true,
+        },
+        orderBy: [
+            { staff_id: 'asc' },
+            { starts_at: 'asc' },
+        ],
     });
 }
 

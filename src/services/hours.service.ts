@@ -80,7 +80,6 @@ export async function updateHours(
     input: BatchUpdateInput
 ): Promise<HoursResult> {
     try {
-        console.log(input)
         // Validate input
         if (!input.hours || !Array.isArray(input.hours)) {
             return {
@@ -200,7 +199,6 @@ export async function updateHours(
 
         // Get all unique days
         const days = new Set(input.hours.map(h => h.day_of_week));
-        console.log(days)
         // Add missing days as closed (12:00 AM to 12:00 AM)
         const allDays = [0, 1, 2, 3, 4, 5, 6];
         const missingDays = allDays.filter(day => !days.has(day));

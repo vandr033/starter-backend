@@ -76,15 +76,37 @@ export async function findUserByEmail(email: string) {
 }
 
 /**
+ * Find user by phone number
+ */
+export async function findUserByPhone(phoneNumber: string) {
+    return prisma.user.findUnique({
+        where: {
+            phoneNumber,
+            deleted_at: null,
+        },
+    });
+}
+
+/**
  * Create a new user (simplified version for invitation)
  */
-export async function createInvitedUser(email: string, name?: string) {
+export async function createInvitedUser(
+    email: string,
+    name?: string,
+    phone?: string,
+    phonePrefix?: string,
+) {
+    const cleanPhone = (phone || '').replace(/\D/g, '');
+    const cleanPhonePrefix = (phonePrefix || '591').replace(/\D/g, '') || '591';
+
     return prisma.user.create({
         data: {
             email,
             name: name || email.split('@')[0],
             emailVerified: false,
             is_active: true,
+            phoneNumber: cleanPhone || undefined,
+            phone_prefix: cleanPhone ? cleanPhonePrefix : undefined,
         },
     });
 }
@@ -111,18 +133,83 @@ export async function createStaffProfile(data: {
     displayName: string;
     bio?: string;
     isBookable?: boolean;
+    role?: CompanyUserRole;
+    status?: 'PENDING' | 'ACTIVE' | 'INACTIVE';
+    inviteToken?: string;
+    startDate?: Date;
+    endDate?: Date;
 }) {
-    // Create CompanyUser with STAFF role
-    await prisma.companyUser.create({
-        data: {
-            company_id: data.companyId,
+    const companyRole = data.role ?? CompanyUserRole.STAFF;
+
+    // Check for soft-deleted CompanyUser and restore, or create new
+    const deletedCompanyUser = await prisma.companyUser.findFirst({
+        where: {
             user_id: data.userId,
-            role: CompanyUserRole.STAFF,
-            is_primary_contact: false,
+            company_id: data.companyId,
+            role: companyRole,
+            deleted_at: { not: null },
         },
     });
 
-    // Create StaffProfile
+    if (deletedCompanyUser) {
+        await prisma.companyUser.update({
+            where: { id: deletedCompanyUser.id },
+            data: { deleted_at: null },
+        });
+    } else {
+        await prisma.companyUser.create({
+            data: {
+                company_id: data.companyId,
+                user_id: data.userId,
+                role: companyRole,
+                is_primary_contact: false,
+            },
+        });
+    }
+
+    // Check for soft-deleted StaffProfile and restore, or create new
+    const deletedStaff = await prisma.staffProfile.findFirst({
+        where: {
+            company_id: data.companyId,
+            user_id: data.userId,
+            deleted_at: { not: null },
+        },
+    });
+
+    if (deletedStaff) {
+        await prisma.staffProfile.update({
+            where: { id: deletedStaff.id },
+            data: {
+                display_name: data.displayName,
+                bio: data.bio,
+                is_bookable: data.isBookable ?? true,
+                status: data.status || 'ACTIVE',
+                invite_token: data.inviteToken,
+                start_date: data.startDate,
+                end_date: data.endDate,
+                deleted_at: null,
+            },
+        });
+
+        return prisma.staffProfile.findUnique({
+            where: { id: deletedStaff.id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        name: true,
+                        first_name: true,
+                        last_name: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+            },
+        }) as any;
+    }
+
+    // Create new StaffProfile
     return prisma.staffProfile.create({
         data: {
             company_id: data.companyId,
@@ -130,6 +217,10 @@ export async function createStaffProfile(data: {
             display_name: data.displayName,
             bio: data.bio,
             is_bookable: data.isBookable ?? true,
+            status: data.status || 'ACTIVE',
+            invite_token: data.inviteToken,
+            start_date: data.startDate,
+            end_date: data.endDate,
         },
         include: {
             user: {

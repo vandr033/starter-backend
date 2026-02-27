@@ -1,6 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as BookingRepo from '../repositories/booking.repo';
 import { prisma } from '../prisma/client';
+import { notifyBookingCreated } from '../utils/bookingNotifications';
 
 interface GetSlotsParams {
     company_id: number;
@@ -63,6 +64,92 @@ function hasConflict(
     return false;
 }
 
+function normalizeDateOnly(date: Date): Date {
+    const copy = new Date(date);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+}
+
+function isIntervalWithinWindows(
+    startMinutes: number,
+    endMinutes: number,
+    windows: Array<{ start_time: string; end_time: string }>
+): boolean {
+    return windows.some((window) => {
+        const windowStart = timeToMinutes(window.start_time);
+        const windowEnd = timeToMinutes(window.end_time);
+        return startMinutes >= windowStart && endMinutes <= windowEnd;
+    });
+}
+
+function overlapsAnyInterval(
+    startAt: Date,
+    endAt: Date,
+    intervals: Array<{ starts_at: Date; ends_at: Date }>
+): boolean {
+    return intervals.some((interval) => interval.starts_at < endAt && interval.ends_at > startAt);
+}
+
+async function isStaffAvailableForInterval(params: {
+    companyId: number;
+    staffId: number;
+    startAt: Date;
+    endAt: Date;
+}): Promise<{ available: boolean; message?: string }> {
+    const { companyId, staffId, startAt, endAt } = params;
+    const staffList = await BookingRepo.getBookableStaff(companyId, staffId);
+    if (staffList.length === 0) {
+        return { available: false, message: 'Staff not found or not bookable' };
+    }
+    const staff = staffList[0];
+
+    const requestDate = normalizeDateOnly(startAt);
+    if (staff.start_date && requestDate < normalizeDateOnly(new Date(staff.start_date))) {
+        return { available: false, message: 'Staff is not active yet for the selected date' };
+    }
+    if (staff.end_date && requestDate > normalizeDateOnly(new Date(staff.end_date))) {
+        return { available: false, message: 'Staff is not available for the selected date' };
+    }
+
+    const dayOfWeek = requestDate.getDay();
+    const companyHours = await BookingRepo.getCompanyHourWindowsForDay(companyId, dayOfWeek);
+    const companyWindows = companyHours
+        .filter((window) => !window.is_closed && window.open_time && window.close_time)
+        .map((window) => ({ start_time: window.open_time as string, end_time: window.close_time as string }));
+    if (companyWindows.length === 0) {
+        return { available: false, message: 'Company is closed on this day' };
+    }
+
+    const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
+    const endMinutes = endAt.getHours() * 60 + endAt.getMinutes();
+    if (!isIntervalWithinWindows(startMinutes, endMinutes, companyWindows)) {
+        return { available: false, message: 'Selected time is outside company opening hours' };
+    }
+
+    const [availabilityCounts, dayAvailability, timeOff] = await Promise.all([
+        BookingRepo.getStaffAvailabilityCounts(companyId, [staffId]),
+        BookingRepo.getStaffAvailabilityForDay(companyId, [staffId], dayOfWeek),
+        BookingRepo.getApprovedStaffTimeOffOverlaps(companyId, [staffId], startAt, endAt),
+    ]);
+
+    const hasCustomSchedule = (availabilityCounts[0]?._count?.id || 0) > 0;
+    if (hasCustomSchedule) {
+        const staffWindows = dayAvailability.map((slot) => ({
+            start_time: slot.start_time,
+            end_time: slot.end_time,
+        }));
+        if (!isIntervalWithinWindows(startMinutes, endMinutes, staffWindows)) {
+            return { available: false, message: 'Staff is not scheduled for that day/time' };
+        }
+    }
+
+    if (timeOff.length > 0) {
+        return { available: false, message: 'Staff is on time off for the selected time' };
+    }
+
+    return { available: true };
+}
+
 /**
  * Get available booking slots for a date
  */
@@ -104,9 +191,16 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
         const requestedDate = new Date(date + 'T00:00:00');
         const dayOfWeek = requestedDate.getDay();
 
-        // 5. Get company hours for that day
-        const hours = await BookingRepo.getCompanyHoursForDay(company_id, dayOfWeek);
-        if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) {
+        // 5. Get company opening windows for that day
+        const dayHours = await BookingRepo.getCompanyHourWindowsForDay(company_id, dayOfWeek);
+        const companyWindows = dayHours
+            .filter((hour) => !hour.is_closed && hour.open_time && hour.close_time)
+            .map((hour) => ({
+                start_time: hour.open_time as string,
+                end_time: hour.close_time as string,
+            }));
+
+        if (companyWindows.length === 0) {
             return {
                 code: 200,
                 message: 'Company is closed on this day',
@@ -125,7 +219,27 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
             };
         }
 
-        const staffIds = staffList.map(s => s.id);
+        const requestedDay = normalizeDateOnly(requestedDate);
+        const eligibleStaff = staffList.filter((staff) => {
+            if (staff.start_date && requestedDay < normalizeDateOnly(new Date(staff.start_date))) {
+                return false;
+            }
+            if (staff.end_date && requestedDay > normalizeDateOnly(new Date(staff.end_date))) {
+                return false;
+            }
+            return true;
+        });
+
+        if (eligibleStaff.length === 0) {
+            return {
+                code: 200,
+                message: 'No staff available for selected date',
+                error: false,
+                data: [],
+            };
+        }
+
+        const staffIds = eligibleStaff.map(s => s.id);
 
         // 7. Get existing bookings for the date
         const dateStart = new Date(date + 'T00:00:00');
@@ -150,9 +264,38 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
             });
         }
 
-        // 8. Generate time slots
-        const openMinutes = timeToMinutes(hours.open_time);
-        const closeMinutes = timeToMinutes(hours.close_time);
+        const [availabilityCounts, dayAvailability, timeOff] = await Promise.all([
+            BookingRepo.getStaffAvailabilityCounts(company_id, staffIds),
+            BookingRepo.getStaffAvailabilityForDay(company_id, staffIds, dayOfWeek),
+            BookingRepo.getApprovedStaffTimeOffOverlaps(company_id, staffIds, dateStart, dateEnd),
+        ]);
+
+        const hasCustomScheduleByStaff = new Map<number, boolean>();
+        for (const entry of availabilityCounts) {
+            hasCustomScheduleByStaff.set(entry.staff_id, (entry._count.id || 0) > 0);
+        }
+
+        const staffAvailabilityByStaff = new Map<number, Array<{ start_time: string; end_time: string }>>();
+        for (const slot of dayAvailability) {
+            if (!staffAvailabilityByStaff.has(slot.staff_id)) {
+                staffAvailabilityByStaff.set(slot.staff_id, []);
+            }
+            staffAvailabilityByStaff.get(slot.staff_id)!.push({
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+            });
+        }
+
+        const timeOffByStaff = new Map<number, Array<{ starts_at: Date; ends_at: Date }>>();
+        for (const item of timeOff) {
+            if (!timeOffByStaff.has(item.staff_id)) {
+                timeOffByStaff.set(item.staff_id, []);
+            }
+            timeOffByStaff.get(item.staff_id)!.push({
+                starts_at: item.starts_at,
+                ends_at: item.ends_at,
+            });
+        }
 
         // Determine current time in company timezone to filter past slots
         const companyTimezone = company.timezone || 'America/La_Paz';
@@ -165,33 +308,55 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
 
         const slots: TimeSlot[] = [];
 
-        // Generate slots at granularity intervals
-        for (let slotMinutes = openMinutes; slotMinutes + totalDuration <= closeMinutes; slotMinutes += granularityMinutes) {
-            // Skip slots in the past for today
-            if (isToday && slotMinutes <= currentMinutes) {
-                continue;
-            }
+        // Generate slots at granularity intervals across each opening window
+        for (const window of companyWindows) {
+            const openMinutes = timeToMinutes(window.start_time);
+            const closeMinutes = timeToMinutes(window.end_time);
 
-            const slotTime = minutesToTime(slotMinutes);
+            for (let slotMinutes = openMinutes; slotMinutes + totalDuration <= closeMinutes; slotMinutes += granularityMinutes) {
+                // Skip slots in the past for today
+                if (isToday && slotMinutes <= currentMinutes) {
+                    continue;
+                }
 
-            // Create slot start and end times (using local-time parsing)
-            const slotStart = new Date(date + 'T00:00:00');
-            slotStart.setHours(Math.floor(slotMinutes / 60), slotMinutes % 60, 0, 0);
+                const slotTime = minutesToTime(slotMinutes);
 
-            const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
+                // Create slot start and end times (using local-time parsing)
+                const slotStart = new Date(date + 'T00:00:00');
+                slotStart.setHours(Math.floor(slotMinutes / 60), slotMinutes % 60, 0, 0);
 
-            // Check availability for each staff member
-            for (const staff of staffList) {
-                const staffBookings = bookingsByStaff.get(staff.id) || [];
-                const isAvailable = !hasConflict(slotStart, slotEnd, staffBookings, bufferMinutes);
+                const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
 
-                if (isAvailable) {
-                    slots.push({
-                        time: slotTime,
-                        staff_id: staff.id,
-                        staff_name: staff.display_name,
-                        available: true,
-                    });
+                for (const staff of eligibleStaff) {
+                    const hasCustomSchedule = hasCustomScheduleByStaff.get(staff.id) || false;
+                    if (hasCustomSchedule) {
+                        const staffWindows = staffAvailabilityByStaff.get(staff.id) || [];
+                        const fitsSchedule = isIntervalWithinWindows(
+                            slotMinutes,
+                            slotMinutes + totalDuration,
+                            staffWindows,
+                        );
+                        if (!fitsSchedule) {
+                            continue;
+                        }
+                    }
+
+                    const staffTimeOff = timeOffByStaff.get(staff.id) || [];
+                    if (overlapsAnyInterval(slotStart, slotEnd, staffTimeOff)) {
+                        continue;
+                    }
+
+                    const staffBookings = bookingsByStaff.get(staff.id) || [];
+                    const isAvailable = !hasConflict(slotStart, slotEnd, staffBookings, bufferMinutes);
+
+                    if (isAvailable) {
+                        slots.push({
+                            time: slotTime,
+                            staff_id: staff.id,
+                            staff_name: staff.display_name,
+                            available: true,
+                        });
+                    }
                 }
             }
         }
@@ -276,11 +441,26 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         const startAt = new Date(start_at);
         const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
 
-        // 5. Get company settings for buffer
+        // 5.5 Validate staff schedule/time-off/company windows
+        const staffAvailability = await isStaffAvailableForInterval({
+            companyId: company_id,
+            staffId: staff_id,
+            startAt,
+            endAt,
+        });
+        if (!staffAvailability.available) {
+            return {
+                code: 400,
+                message: staffAvailability.message || 'Staff is not available at the selected time',
+                error: true,
+            };
+        }
+
+        // 6. Get company settings for buffer
         const settings = await BookingRepo.getCompanySettings(company_id);
         const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
 
-        // 6. Re-validate slot availability (prevent race conditions)
+        // 7. Re-validate slot availability (prevent race conditions)
         const conflict = await BookingRepo.checkSlotConflict(
             company_id,
             staff_id,
@@ -302,10 +482,10 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             };
         }
 
-        // 7. Get or create CustomerProfile
+        // 8. Get or create CustomerProfile
         const customerProfile = await BookingRepo.getOrCreateCustomerProfile(company_id, user_id);
 
-        // 8. Prepare service snapshots
+        // 9. Prepare service snapshots
         const serviceSnapshots = services.map((s, index) => ({
             service_id: s.id,
             service_name_snapshot: s.name,
@@ -314,7 +494,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             position: index,
         }));
 
-        // 9. Create booking with services in transaction
+        // 10. Create booking with services in transaction
         const booking = await BookingRepo.createBookingWithServices(
             {
                 company_id,
@@ -329,6 +509,26 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             },
             serviceSnapshots
         );
+
+        // 11. Send notification (fire-and-forget)
+        if (company && booking) {
+            const user = await prisma.user.findUnique({ where: { id: user_id }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
+            void notifyBookingCreated({
+                companyId: company_id,
+                bookingId: booking.id,
+                staffId: staff_id,
+                customerEmail: user?.email,
+                customerPhone: user?.phoneNumber,
+                customerPhonePrefix: user?.phone_prefix,
+                customerName: user?.name,
+                companyName: company.name,
+                staffName: staff.display_name,
+                serviceNames: services.map(s => s.name),
+                startAt,
+                endAt,
+                totalPriceCents: totalPrice,
+            });
+        }
 
         return {
             code: 201,
@@ -468,6 +668,7 @@ interface CreateCustomerBookingParams {
     company_id: number;
     staff_id: number;
     customer_id: number;
+    created_by_user_id: string;
     service_ids: number[];
     start_at: string;
     payment_method: string;
@@ -516,8 +717,23 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
 
         const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0);
         const totalPrice = services.reduce((sum, service) => sum + service.price_cents, 0);
+        const startAt = new Date(params.start_at);
         const endAt = new Date(params.start_at);
         endAt.setMinutes(endAt.getMinutes() + totalDuration);
+
+        const staffAvailability = await isStaffAvailableForInterval({
+            companyId: params.company_id,
+            staffId: params.staff_id,
+            startAt,
+            endAt,
+        });
+        if (!staffAvailability.available) {
+            return {
+                code: 400,
+                message: staffAvailability.message || 'Staff is not available at the selected time',
+                error: true,
+            };
+        }
 
         // Create the booking with customer
         const booking = await prisma.booking.create({
@@ -530,7 +746,7 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
                 client_phone_prefix: params.client_phone_prefix,
                 client_phone_number: params.client_phone_number,
                 booking_type: 'CUSTOMER',
-                start_at: new Date(params.start_at),
+                start_at: startAt,
                 end_at: endAt,
                 status: 'CONFIRMED',
                 payment_method: params.payment_method as any,
@@ -538,7 +754,7 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
                 qr_proof_image_url: params.qr_proof_image_url,
                 total_price_cents: totalPrice,
                 notes: params.notes,
-                created_by_user_id: undefined, // No user for public bookings
+                created_by_user_id: params.created_by_user_id,
             },
         });
 
@@ -555,6 +771,24 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
 
         await prisma.bookingService.createMany({
             data: bookingServices,
+        });
+
+        // Send notification (fire-and-forget)
+        const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
+        void notifyBookingCreated({
+            companyId: params.company_id,
+            bookingId: booking.id,
+            staffId: params.staff_id,
+            customerEmail: params.client_email,
+            customerPhone: params.client_phone_number,
+            customerPhonePrefix: params.client_phone_prefix,
+            customerName: params.client_name,
+            companyName: company.name,
+            staffName: staffProfile?.display_name || '',
+            serviceNames: services.map(s => s.name),
+            startAt: booking.start_at,
+            endAt: endAt,
+            totalPriceCents: totalPrice,
         });
 
         return {
@@ -647,8 +881,23 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
 
         const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0);
         const totalPrice = services.reduce((sum, service) => sum + service.price_cents, 0);
+        const startAt = new Date(params.start_at);
         const endAt = new Date(params.start_at);
         endAt.setMinutes(endAt.getMinutes() + totalDuration);
+
+        const staffAvailability = await isStaffAvailableForInterval({
+            companyId: params.company_id,
+            staffId: params.staff_id,
+            startAt,
+            endAt,
+        });
+        if (!staffAvailability.available) {
+            return {
+                code: 400,
+                message: staffAvailability.message || 'Staff is not available at the selected time',
+                error: true,
+            };
+        }
 
         // Create the booking without customer profile (guest booking)
         const booking = await prisma.booking.create({
@@ -661,7 +910,7 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
                 client_phone_prefix: params.client_phone_prefix,
                 client_phone_number: params.client_phone_number,
                 booking_type: 'CUSTOMER',
-                start_at: new Date(params.start_at),
+                start_at: startAt,
                 end_at: endAt,
                 status: 'CONFIRMED',
                 payment_method: params.payment_method as any,
@@ -687,6 +936,26 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
         await prisma.bookingService.createMany({
             data: bookingServices,
         });
+
+        // Send notification if contact info available (fire-and-forget)
+        if (params.client_email || params.client_phone_number) {
+            const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
+            void notifyBookingCreated({
+                companyId: params.company_id,
+                bookingId: booking.id,
+                staffId: params.staff_id,
+                customerEmail: params.client_email,
+                customerPhone: params.client_phone_number,
+                customerPhonePrefix: params.client_phone_prefix,
+                customerName: params.client_name,
+                companyName: company.name,
+                staffName: staffProfile?.display_name || '',
+                serviceNames: services.map(s => s.name),
+                startAt: booking.start_at,
+                endAt: endAt,
+                totalPriceCents: totalPrice,
+            });
+        }
 
         return {
             code: 201,

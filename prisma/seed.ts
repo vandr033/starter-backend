@@ -28,7 +28,12 @@ async function main() {
       id: 1,
       key: "BARBER_SHOP",
       name: "Barber shop",
+      name_i18n: { en: "Barber shop", es: "Barbería" },
       description: "Traditional and modern barber services (haircuts, beard, grooming).",
+      description_i18n: {
+        en: "Traditional and modern barber services (haircuts, beard, grooming).",
+        es: "Servicios de barbería tradicionales y modernos (cortes, barba y grooming).",
+      },
       icon_name: "scissors-line",
       is_active: true,
       created_at: baseCreatedAt,
@@ -38,7 +43,12 @@ async function main() {
       id: 2,
       key: "NAIL_SALON",
       name: "Nail salon",
+      name_i18n: { en: "Nail salon", es: "Salón de uñas" },
       description: "Nail care, manicure and pedicure services.",
+      description_i18n: {
+        en: "Nail care, manicure and pedicure services.",
+        es: "Servicios de cuidado de uñas, manicure y pedicure.",
+      },
       icon_name: "nail-polish-line",
       is_active: true,
       created_at: baseCreatedAt,
@@ -51,31 +61,56 @@ async function main() {
       id: 1,
       key: "HAIRCUT_MENS",
       name: "Men's haircut",
+      name_i18n: { en: "Men's haircut", es: "Corte masculino" },
       description: "Short to medium length haircuts for men.",
+      description_i18n: {
+        en: "Short to medium length haircuts for men.",
+        es: "Cortes de cabello masculinos de longitud corta a media.",
+      },
     },
     {
       id: 2,
       key: "HAIRCUT_WOMENS",
       name: "Women's haircut",
+      name_i18n: { en: "Women's haircut", es: "Corte femenino" },
       description: "Haircuts and styling for women.",
+      description_i18n: {
+        en: "Haircuts and styling for women.",
+        es: "Cortes de cabello y peinados para mujeres.",
+      },
     },
     {
       id: 3,
       key: "BEARD_TRIM",
       name: "Beard trim",
+      name_i18n: { en: "Beard trim", es: "Recorte de barba" },
       description: "Beard trim and shaping services.",
+      description_i18n: {
+        en: "Beard trim and shaping services.",
+        es: "Servicios de recorte y perfilado de barba.",
+      },
     },
     {
       id: 4,
       key: "GEL_MANICURE",
       name: "Gel manicure",
+      name_i18n: { en: "Gel manicure", es: "Manicure en gel" },
       description: "Long-lasting gel manicures.",
+      description_i18n: {
+        en: "Long-lasting gel manicures.",
+        es: "Manicures en gel de larga duración.",
+      },
     },
     {
       id: 5,
       key: "SPA_PEDICURE",
       name: "Spa pedicure",
+      name_i18n: { en: "Spa pedicure", es: "Pedicure spa" },
       description: "Foot spa and pedicure treatments.",
+      description_i18n: {
+        en: "Foot spa and pedicure treatments.",
+        es: "Tratamientos de spa y pedicure para pies.",
+      },
     },
   ];
 

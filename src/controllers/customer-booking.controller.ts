@@ -1,18 +1,29 @@
 import { Response } from 'express';
-import { Request } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as BookingService from '../services/booking.service';
 import { logger } from '../config/logger';
 import { prisma } from '../prisma/client';
+import { AuthenticatedRequest } from '../middlewares/requireAuth';
 
 let mensaje: MensajeApi;
 
 /**
  * POST /api/booking/customer
- * Create a new booking for an existing customer (no auth required)
+ * Create a new booking for an existing customer (requires auth)
  */
-export async function createCustomerBooking(req: Request, res: Response) {
+export async function createCustomerBooking(req: AuthenticatedRequest, res: Response) {
     try {
+        const authenticatedUser = req.authUser;
+
+        if (!authenticatedUser?.id) {
+            mensaje = {
+                code: 401,
+                message: 'Not authenticated',
+                error: true,
+            };
+            return res.status(401).json(mensaje);
+        }
+
         const {
             company_id,
             staff_id,
@@ -20,7 +31,6 @@ export async function createCustomerBooking(req: Request, res: Response) {
             start_at,
             payment_method,
             notes,
-            customer_id, // New field to autofill customer data
             qr_proof_image_url,
         } = req.body;
 
@@ -61,16 +71,6 @@ export async function createCustomerBooking(req: Request, res: Response) {
             return res.status(400).json(mensaje);
         }
 
-        // Validate customer_id
-        if (!customer_id) {
-            mensaje = {
-                code: 400,
-                message: 'customer_id is required',
-                error: true,
-            };
-            return res.status(400).json(mensaje);
-        }
-
         // Validate payment_method
         const validPaymentMethods = ['NONE', 'CASH', 'QR'];
         if (!payment_method || !validPaymentMethods.includes(payment_method)) {
@@ -91,12 +91,18 @@ export async function createCustomerBooking(req: Request, res: Response) {
             };
             return res.status(400).json(mensaje);
         }
-
-        // Fetch customer data
-        const customer = await prisma.customerProfile.findFirst({
+        // Ensure customer profile exists for this authenticated user at this company.
+        const customer = await prisma.customerProfile.upsert({
             where: {
-                user_id: customer_id,
-                company_id: company_id,
+                company_id_user_id: {
+                    company_id,
+                    user_id: authenticatedUser.id,
+                },
+            },
+            update: {},
+            create: {
+                company_id,
+                user_id: authenticatedUser.id,
             },
             include: {
                 user: {
@@ -111,22 +117,13 @@ export async function createCustomerBooking(req: Request, res: Response) {
             },
         });
 
-        if (!customer) {
-            mensaje = {
-                code: 404,
-                message: 'Customer not found',
-                error: true,
-            };
-            return res.status(404).json(mensaje);
-        }
-
         // Prepare customer data from profile
         const clientData = {
             client_name: customer.user?.name || 
                         `${customer.user?.first_name || ''} ${customer.user?.last_name || ''}`.trim() || 
                         'Unknown',
             client_email: customer.user?.email || null,
-            client_phone_prefix: '591', // Default
+            client_phone_prefix: authenticatedUser.phone_prefix || '591',
             client_phone_number: customer.user?.phoneNumber || null,
         };
 
@@ -135,6 +132,7 @@ export async function createCustomerBooking(req: Request, res: Response) {
             company_id,
             staff_id,
             customer_id: customer.id,
+            created_by_user_id: authenticatedUser.id,
             service_ids,
             start_at,
             payment_method,

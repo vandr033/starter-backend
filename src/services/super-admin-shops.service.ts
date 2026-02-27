@@ -3,6 +3,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import { CompanyUserRole } from '@prisma/client';
 import { auth } from '../config/auth';
 import bcrypt from 'bcryptjs';
+import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
 
 /**
  * Generate a URL-friendly slug from a string
@@ -37,6 +38,16 @@ interface CreateShopData {
     country_code?: string;
     timezone?: string;
     company_type_id: number;
+    owner: {
+        email: string;
+        password: string;
+        first_name?: string;
+        last_name?: string;
+        phone_prefix?: string;
+        phone: string;
+        display_name?: string;
+        is_bookable?: boolean;
+    };
 }
 
 interface UpdateShopData {
@@ -54,8 +65,10 @@ interface UpdateShopData {
 }
 
 interface AddUserToShopData {
-    email: string;
+    email?: string;
     password?: string;
+    phone_prefix?: string;
+    phone?: string;
     first_name?: string;
     last_name?: string;
     role: CompanyUserRole;
@@ -91,7 +104,8 @@ export async function getAllShops(options: GetAllShopsOptions): Promise<MensajeA
                     company_type: {
                         select: {
                             id: true,
-                            name: true
+                            name: true,
+                            name_i18n: true
                         }
                     },
                     _count: {
@@ -157,6 +171,7 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                     select: {
                         id: true,
                         name: true,
+                        name_i18n: true,
                         key: true
                     }
                 }
@@ -227,71 +242,333 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
             };
         }
 
-        // Create the shop with default settings
-        const shop = await prisma.company.create({
-            data: {
-                name: data.name,
-                slug,
-                address: data.address,
-                phone_prefix: data.phone_prefix || '591',
-                phone: data.phone,
-                email: data.email,
-                city: data.city,
-                state: data.state,
-                country_code: data.country_code,
-                timezone: data.timezone || 'America/La_Paz',
-                company_type_id: data.company_type_id,
-                // Create default CompanySettings
-                company_settings: {
-                    create: {
-                        booking_buffer_minutes: 10,
-                        booking_time_granularity_minutes: 5,
-                        cancel_limit_minutes: 120,
-                        reschedule_limit_minutes: 120,
-                        allow_qr_payment: true,
-                        allow_cash_payment: true,
-                        send_email_notifications: true,
-                        send_whatsapp_notifications: false
+        const ownerInput = data.owner;
+        const ownerEmail = ownerInput?.email?.trim().toLowerCase() || '';
+        const ownerPassword = ownerInput?.password?.trim() || '';
+        const ownerPhone = (ownerInput?.phone || '').replace(/\D/g, '');
+        const ownerPhonePrefix = (ownerInput?.phone_prefix || '591').replace(/\D/g, '') || '591';
+
+        if (!ownerInput) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Owner profile is required when creating a shop'
+            };
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!ownerEmail) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Owner email is required'
+            };
+        }
+        if (!emailRegex.test(ownerEmail)) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Invalid owner email format'
+            };
+        }
+        if (!ownerPassword || ownerPassword.length < 8) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Owner password must be at least 8 characters'
+            };
+        }
+        if (!ownerPhone) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Owner phone number is required'
+            };
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            const shop = await tx.company.create({
+                data: {
+                    name: data.name,
+                    slug,
+                    address: data.address,
+                    phone_prefix: data.phone_prefix || '591',
+                    phone: data.phone,
+                    email: data.email,
+                    city: data.city,
+                    state: data.state,
+                    country_code: data.country_code,
+                    timezone: data.timezone || 'America/La_Paz',
+                    company_type_id: data.company_type_id,
+                    // Create default CompanySettings
+                    company_settings: {
+                        create: {
+                            booking_buffer_minutes: 10,
+                            booking_time_granularity_minutes: 5,
+                            cancel_limit_minutes: 120,
+                            reschedule_limit_minutes: 120,
+                            allow_qr_payment: true,
+                            allow_cash_payment: true,
+                            send_email_notifications: true,
+                            send_whatsapp_notifications: false
+                        }
+                    },
+                    // Create default ThemeConfig
+                    theme_config: {
+                        create: {
+                            brand_color: '#000000',
+                            page_background_color: '#ffffff',
+                            page_background_preset: 'light',
+                            cards_elevated: true,
+                            corner_radius: 'md'
+                        }
                     }
                 },
-                // Create default ThemeConfig
-                theme_config: {
-                    create: {
-                        brand_color: '#000000',
-                        page_background_color: '#ffffff',
-                        page_background_preset: 'light',
-                        cards_elevated: true,
-                        corner_radius: 'md'
+                include: {
+                    company_type: {
+                        select: {
+                            id: true,
+                            name: true,
+                            name_i18n: true
+                        }
                     }
                 }
-            },
-            include: {
-                company_type: {
-                    select: {
-                        id: true,
-                        name: true
-                    }
-                }
+            });
+
+            const defaultHours = [];
+            for (let day = 0; day < 7; day++) {
+                defaultHours.push({
+                    company_id: shop.id,
+                    day_of_week: day,
+                    is_closed: true
+                });
             }
+            await tx.hours.createMany({
+                data: defaultHours
+            });
+
+            let ownerSummary: {
+                company_user_id: number;
+                user_id: string;
+                email: string;
+                role: CompanyUserRole;
+            } | null = null;
+
+            if (ownerInput) {
+                const existingUserByPhone = await tx.user.findFirst({
+                    where: {
+                        phoneNumber: ownerPhone,
+                        deleted_at: null
+                    }
+                });
+
+                let ownerUser = await tx.user.findFirst({
+                    where: {
+                        email: ownerEmail,
+                        deleted_at: null
+                    }
+                });
+
+                if (!ownerUser && existingUserByPhone) {
+                    return {
+                        error: true as const,
+                        code: 400,
+                        message: 'Owner phone number is already in use by another user'
+                    };
+                }
+
+                const ownerFirstName = ownerInput.first_name?.trim() || '';
+                const ownerLastName = ownerInput.last_name?.trim() || '';
+                const ownerNameFromParts = `${ownerFirstName} ${ownerLastName}`.trim();
+                const ownerDisplayName =
+                    ownerInput.display_name?.trim() ||
+                    ownerNameFromParts ||
+                    ownerEmail.split('@')[0];
+
+                if (!ownerUser) {
+                    ownerUser = await tx.user.create({
+                        data: {
+                            email: ownerEmail,
+                            first_name: ownerFirstName || null,
+                            last_name: ownerLastName || null,
+                            name: ownerDisplayName,
+                            phone_prefix: ownerPhonePrefix,
+                            phoneNumber: ownerPhone,
+                            is_active: true,
+                            emailVerified: true,
+                            must_change_password: true
+                        }
+                    });
+                } else {
+                    if (ownerPhone && ownerUser.phoneNumber && ownerUser.phoneNumber !== ownerPhone) {
+                        return {
+                            error: true as const,
+                            code: 400,
+                            message: 'Owner phone number is already configured on a different account'
+                        };
+                    }
+
+                    if (existingUserByPhone && existingUserByPhone.id !== ownerUser.id) {
+                        return {
+                            error: true as const,
+                            code: 400,
+                            message: 'Owner phone number is already in use by another user'
+                        };
+                    }
+
+                    ownerUser = await tx.user.update({
+                        where: { id: ownerUser.id },
+                        data: {
+                            ...(ownerFirstName ? { first_name: ownerFirstName } : {}),
+                            ...(ownerLastName ? { last_name: ownerLastName } : {}),
+                            ...(ownerDisplayName ? { name: ownerDisplayName } : {}),
+                            ...(!ownerUser.phoneNumber
+                                ? { phoneNumber: ownerPhone, phone_prefix: ownerPhonePrefix }
+                                : {})
+                        }
+                    });
+                }
+
+                const hashedOwnerPassword = await bcrypt.hash(ownerPassword, 10);
+                const ownerAccounts = await tx.account.findMany({
+                    where: {
+                        providerId: { in: ['credential', 'credentials'] },
+                        accountId: ownerEmail
+                    },
+                    orderBy: { createdAt: 'asc' }
+                });
+                const ownerPrimaryAccount =
+                    ownerAccounts.find((a) => a.providerId === 'credential') || ownerAccounts[0] || null;
+
+                if (ownerPrimaryAccount) {
+                    await tx.account.update({
+                        where: { id: ownerPrimaryAccount.id },
+                        data: {
+                            providerId: 'credential',
+                            accountId: ownerEmail,
+                            userId: ownerUser.id,
+                            password: hashedOwnerPassword
+                        }
+                    });
+
+                    if (ownerAccounts.length > 1) {
+                        await tx.account.deleteMany({
+                            where: {
+                                providerId: { in: ['credential', 'credentials'] },
+                                accountId: ownerEmail,
+                                id: { not: ownerPrimaryAccount.id }
+                            }
+                        });
+                    }
+                } else {
+                    await tx.account.create({
+                        data: {
+                            providerId: 'credential',
+                            accountId: ownerEmail,
+                            userId: ownerUser.id,
+                            password: hashedOwnerPassword
+                        }
+                    });
+                }
+
+                await tx.user.update({
+                    where: { id: ownerUser.id },
+                    data: {
+                        must_change_password: true,
+                    },
+                });
+
+                const ownerCompanyUser = await tx.companyUser.upsert({
+                    where: {
+                        company_id_user_id_role: {
+                            company_id: shop.id,
+                            user_id: ownerUser.id,
+                            role: CompanyUserRole.OWNER
+                        }
+                    },
+                    update: {
+                        deleted_at: null,
+                        is_primary_contact: true
+                    },
+                    create: {
+                        company_id: shop.id,
+                        user_id: ownerUser.id,
+                        role: CompanyUserRole.OWNER,
+                        is_primary_contact: true
+                    }
+                });
+
+                const existingOwnerStaffProfile = await tx.staffProfile.findFirst({
+                    where: {
+                        company_id: shop.id,
+                        user_id: ownerUser.id
+                    }
+                });
+
+                if (existingOwnerStaffProfile) {
+                    await tx.staffProfile.update({
+                        where: { id: existingOwnerStaffProfile.id },
+                        data: {
+                            deleted_at: null,
+                            status: 'ACTIVE',
+                            display_name: ownerDisplayName,
+                            is_bookable: ownerInput.is_bookable ?? false
+                        }
+                    });
+                } else {
+                    await tx.staffProfile.create({
+                        data: {
+                            company_id: shop.id,
+                            user_id: ownerUser.id,
+                            display_name: ownerDisplayName,
+                            is_bookable: ownerInput.is_bookable ?? false,
+                            status: 'ACTIVE'
+                        }
+                    });
+                }
+
+                ownerSummary = {
+                    company_user_id: ownerCompanyUser.id,
+                    user_id: ownerUser.id,
+                    email: ownerUser.email,
+                    role: ownerCompanyUser.role
+                };
+            }
+
+            return {
+                error: false as const,
+                shop,
+                ownerSummary
+            };
         });
 
-        // Create default hours (closed all days)
-        const defaultHours = [];
-        for (let day = 0; day < 7; day++) {
-            defaultHours.push({
-                company_id: shop.id,
-                day_of_week: day,
-                is_closed: true
-            });
+        if (result.error) {
+            return {
+                code: result.code,
+                error: true,
+                message: result.message
+            };
         }
-        await prisma.hours.createMany({
-            data: defaultHours
+
+        const shop = result.shop;
+
+        const ownerInviteStatus = await sendAdminTempPasswordInviteEmail({
+            email: ownerEmail,
+            temporaryPassword: ownerPassword,
+            companyName: shop.name,
+            loginUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
         });
+        if (ownerInviteStatus !== 1) {
+            console.error(`Failed to send owner temp password invite to ${ownerEmail}`);
+        }
 
         return {
             code: 201,
             error: false,
-            message: 'Shop created successfully',
+            message:
+                ownerInviteStatus === 1
+                    ? 'Shop created successfully'
+                    : 'Shop created successfully, but invite email could not be sent',
             data: {
                 id: shop.id,
                 slug: shop.slug,
@@ -308,7 +585,8 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
-                company_type: shop.company_type
+                company_type: shop.company_type,
+                owner: result.ownerSummary || undefined
             }
         };
     } catch (error) {
@@ -376,7 +654,8 @@ export async function updateShop(id: number, data: UpdateShopData): Promise<Mens
                 company_type: {
                     select: {
                         id: true,
-                        name: true
+                        name: true,
+                        name_i18n: true
                     }
                 }
             }
@@ -533,6 +812,36 @@ export async function getShopUsers(shopId: number): Promise<MensajeApi> {
  */
 export async function addUserToShop(shopId: number, data: AddUserToShopData): Promise<MensajeApi> {
     try {
+        const normalizedEmail = (data.email || '').trim().toLowerCase();
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const cleanPhone = (data.phone || '').replace(/\D/g, '');
+        const cleanPhonePrefix = (data.phone_prefix || '591').replace(/\D/g, '') || '591';
+
+        if (!normalizedEmail && !cleanPhone) {
+            return {
+                code: 400,
+                error: true,
+                message: 'At least one contact method is required (email or phone)'
+            };
+        }
+
+        // Admin/staff panel users currently authenticate with email/password.
+        if (!normalizedEmail) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Email is required for shop users with panel access'
+            };
+        }
+
+        if (!emailRegex.test(normalizedEmail)) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Invalid email format'
+            };
+        }
+
         // Check if shop exists
         const shop = await prisma.company.findUnique({
             where: {
@@ -549,12 +858,30 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
             };
         }
 
-        let user = await prisma.user.findUnique({
+        let user = await prisma.user.findFirst({
             where: {
-                email: data.email,
+                email: normalizedEmail,
                 deleted_at: null
             }
         });
+        const userWithPhone = cleanPhone
+            ? await prisma.user.findFirst({
+                where: {
+                    phoneNumber: cleanPhone,
+                    deleted_at: null
+                }
+            })
+            : null;
+
+        if (!user && userWithPhone) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Phone number is already in use by another user'
+            };
+        }
+
+        let tempPasswordForInvite: string | null = null;
 
         // Create user if doesn't exist
         if (!user) {
@@ -567,13 +894,17 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
             }
 
             const hashedPassword = await bcrypt.hash(data.password, 10);
+            tempPasswordForInvite = data.password;
 
             user = await prisma.user.create({
                 data: {
-                    email: data.email,
+                    email: normalizedEmail,
                     first_name: data.first_name || '',
                     last_name: data.last_name || '',
                     name: `${data.first_name || ''} ${data.last_name || ''}`.trim(),
+                    phone_prefix: cleanPhone ? cleanPhonePrefix : undefined,
+                    phoneNumber: cleanPhone || undefined,
+                    must_change_password: true,
                 }
             });
 
@@ -582,8 +913,64 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
                 data: {
                     userId: user.id,
                     providerId: 'credential',
-                    accountId: data.email,
+                    accountId: normalizedEmail,
                     password: hashedPassword,
+                }
+            });
+        } else if (data.password) {
+            const hashedPassword = await bcrypt.hash(data.password, 10);
+            tempPasswordForInvite = data.password;
+
+            const existingCredentialAccount = await prisma.account.findFirst({
+                where: {
+                    userId: user.id,
+                    providerId: { in: ['credential', 'credentials'] },
+                },
+                orderBy: {
+                    createdAt: 'asc',
+                },
+            });
+
+            if (existingCredentialAccount) {
+                await prisma.account.update({
+                    where: { id: existingCredentialAccount.id },
+                    data: {
+                        providerId: 'credential',
+                        accountId: normalizedEmail,
+                        password: hashedPassword,
+                    },
+                });
+            } else {
+                await prisma.account.create({
+                    data: {
+                        userId: user.id,
+                        providerId: 'credential',
+                        accountId: normalizedEmail,
+                        password: hashedPassword,
+                    },
+                });
+            }
+
+            await prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    must_change_password: true,
+                },
+            });
+        } else if (cleanPhone && !user.phoneNumber) {
+            if (userWithPhone && userWithPhone.id !== user.id) {
+                return {
+                    code: 400,
+                    error: true,
+                    message: 'Phone number is already in use by another user'
+                };
+            }
+
+            user = await prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    phone_prefix: cleanPhonePrefix,
+                    phoneNumber: cleanPhone
                 }
             });
         }
@@ -635,6 +1022,19 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
                     is_bookable: data.is_bookable ?? true
                 }
             });
+        }
+
+        if (tempPasswordForInvite) {
+            const inviteStatus = await sendAdminTempPasswordInviteEmail({
+                email: normalizedEmail,
+                temporaryPassword: tempPasswordForInvite,
+                companyName: shop.name,
+                loginUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
+            });
+
+            if (inviteStatus !== 1) {
+                console.error(`Failed to send temp password invite to ${normalizedEmail}`);
+            }
         }
 
         return {
@@ -772,7 +1172,8 @@ export async function getCompanyTypes(): Promise<MensajeApi> {
             select: {
                 id: true,
                 key: true,
-                name: true
+                name: true,
+                name_i18n: true
             },
             orderBy: {
                 name: 'asc'

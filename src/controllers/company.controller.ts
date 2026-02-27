@@ -143,7 +143,17 @@ export const updateCompanyContent = async (req: AuthenticatedRequest, res: Respo
     try {
         const { id } = req.params;
         const companyId = parseInt(Array.isArray(id) ? id[0] : id);
-        const { about_us_text, our_story_text, about_us_hero_text } = req.body;
+        const {
+            about_us_text,
+            our_story_text,
+            about_us_hero_text,
+            logo_url,
+            home_hero_image_url,
+            about_hero_image_url,
+            about_image_1_url,
+            about_image_2_url,
+            about_image_3_url,
+        } = req.body;
 
         if (isNaN(companyId)) {
             return res.status(400).json({
@@ -200,6 +210,14 @@ export const updateCompanyContent = async (req: AuthenticatedRequest, res: Respo
                 allowedAttributes: {},
             });
         }
+
+        // Handle image URL fields
+        if (logo_url !== undefined) updateData.logo_url = logo_url;
+        if (home_hero_image_url !== undefined) updateData.home_hero_image_url = home_hero_image_url;
+        if (about_hero_image_url !== undefined) updateData.about_hero_image_url = about_hero_image_url;
+        if (about_image_1_url !== undefined) updateData.about_image_1_url = about_image_1_url;
+        if (about_image_2_url !== undefined) updateData.about_image_2_url = about_image_2_url;
+        if (about_image_3_url !== undefined) updateData.about_image_3_url = about_image_3_url;
 
         // Update company
         const updatedCompany = await prisma.company.update({

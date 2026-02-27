@@ -6,48 +6,50 @@ import { env } from '../config/env';
 export const serveFile = async (req: Request, res: Response) => {
   try {
     const { filePath } = req.params;
-    
+
     // Handle string array type from Express
     const pathStr = Array.isArray(filePath) ? filePath[0] : filePath;
-    
+
     // Security: sanitize file path to prevent directory traversal
     const sanitizedPath = pathStr.replace(/\.\./g, '').replace(/\/+/g, '/');
     const fullPath = path.join(env.storagePath, sanitizedPath);
-    
-    // Debug logs
-    console.log('Storage path:', env.storagePath);
-    console.log('Requested path:', pathStr);
-    console.log('Full path:', fullPath);
-    
+
     // Ensure the path is within the storage directory
     const resolvedPath = path.resolve(fullPath);
     const resolvedStoragePath = path.resolve(env.storagePath);
-    console.log('Resolved path:', resolvedPath);
-    console.log('Resolved storage path:', resolvedStoragePath);
-    console.log('Starts with storage path:', resolvedPath.startsWith(resolvedStoragePath));
-    
+
     if (!resolvedPath.startsWith(resolvedStoragePath)) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    
-    // Check if file exists
+
+    // Check if file exists and get stats for ETag
+    let stats;
     try {
-      await fs.access(resolvedPath);
+      stats = await fs.stat(resolvedPath);
     } catch {
       return res.status(404).json({ error: 'File not found' });
     }
-    
+
     // Get file extension to determine content type
     const ext = path.extname(resolvedPath).toLowerCase();
     const contentType = getContentType(ext);
-    
+
+    // ETag based on file modification time and size
+    const etag = `"${stats.mtimeMs.toString(36)}-${stats.size.toString(36)}"`;
+
+    // Check if client has cached version
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (ifNoneMatch === etag) {
+      return res.status(304).send();
+    }
+
     // Set cache headers (1 day)
     res.set({
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=86400',
-      'ETag': `"${Date.now()}"`,
+      'ETag': etag,
     });
-    
+
     // Send file
     res.sendFile(resolvedPath);
   } catch (error) {

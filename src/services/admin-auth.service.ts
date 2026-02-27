@@ -1,7 +1,10 @@
 import { prisma } from '../prisma/client';
 import { auth } from '../config/auth';
 import { MensajeApi } from '../types/MensajeApi';
-import { CompanyUserRole } from '@prisma/client';
+import { CompanyUserRole, VerificationChannel, VerificationPurpose } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import { generateNumericCode } from '../utils/otp';
+import { sendEmailCode } from '../utils/sendEmail';
 
 interface AdminSignInResult extends MensajeApi {
     data?: {
@@ -22,6 +25,68 @@ interface AdminSignInResult extends MensajeApi {
     cookies?: string[]; // All Set-Cookie headers to forward
 }
 
+const ADMIN_ALLOWED_ROLES: CompanyUserRole[] = [
+    CompanyUserRole.OWNER,
+    CompanyUserRole.ADMIN,
+    CompanyUserRole.STAFF,
+];
+
+const RESET_CODE_TTL_MINUTES = 15;
+
+async function getAdminCompanyUser(userId: string) {
+    return prisma.companyUser.findFirst({
+        where: {
+            user_id: userId,
+            deleted_at: null,
+            role: {
+                in: ADMIN_ALLOWED_ROLES,
+            },
+        },
+        include: {
+            company: {
+                select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                },
+            },
+        },
+        orderBy: [
+            { role: 'asc' },
+            { updated_at: 'desc' },
+        ],
+    });
+}
+
+async function hasAdminAccess(userId: string, isSuperAdmin: boolean): Promise<boolean> {
+    if (isSuperAdmin) return true;
+    const companyUser = await prisma.companyUser.findFirst({
+        where: {
+            user_id: userId,
+            deleted_at: null,
+            role: {
+                in: ADMIN_ALLOWED_ROLES,
+            },
+        },
+        select: { id: true },
+    });
+    return Boolean(companyUser);
+}
+
+function isInvalidCredentialsError(error: unknown): boolean {
+    const message = String(
+        (error as any)?.message ??
+        (error as any)?.toString?.() ??
+        ''
+    ).toLowerCase();
+
+    return (
+        message.includes('invalid password') ||
+        message.includes('invalid credentials') ||
+        message.includes('credential account not found')
+    );
+}
+
 /**
  * Sign in an admin user (must have a CompanyUser record)
  */
@@ -39,9 +104,18 @@ export async function signInAdmin(
         });
 
         if (!signInResponse.ok) {
+            let message = 'Invalid credentials';
+            try {
+                const payload = await signInResponse.json();
+                if (typeof payload?.message === 'string' && payload.message.trim().length > 0) {
+                    message = payload.message;
+                }
+            } catch {
+                // Keep default message
+            }
             return {
                 code: 401,
-                message: 'Invalid credentials',
+                message,
                 error: true,
             };
         }
@@ -89,6 +163,7 @@ export async function signInAdmin(
                 emailVerified: true,
                 phoneNumber: true,
                 phoneNumberVerified: true,
+                must_change_password: true,
                 createdAt: true,
                 updatedAt: true,
             },
@@ -103,32 +178,7 @@ export async function signInAdmin(
         }
 
         // 4. Check if user has a CompanyUser record (admin/staff access)
-        const companyUser = await prisma.companyUser.findFirst({
-            where: {
-                user_id: session.user.id,
-                deleted_at: null,
-                role: {
-                    in: [
-                        CompanyUserRole.OWNER,
-                        CompanyUserRole.ADMIN,
-                        CompanyUserRole.STAFF,
-                    ],
-                },
-            },
-            include: {
-                company: {
-                    select: {
-                        id: true,
-                        name: true,
-                        slug: true,
-                    },
-                },
-            },
-            orderBy: {
-                // Prefer OWNER > ADMIN > STAFF
-                role: 'asc',
-            },
-        });
+        const companyUser = await getAdminCompanyUser(session.user.id);
 
         if (!companyUser && !user.is_super_admin) {
             return {
@@ -159,6 +209,13 @@ export async function signInAdmin(
             cookies: setCookies.length > 0 ? setCookies : undefined,
         };
     } catch (error: any) {
+        if (isInvalidCredentialsError(error)) {
+            return {
+                code: 401,
+                message: 'Invalid credentials',
+                error: true,
+            };
+        }
         console.error('Admin sign-in error:', error);
         return {
             code: 500,
@@ -185,6 +242,7 @@ export async function getAdminSessionData(userId: string): Promise<AdminSignInRe
                 last_name: true,
                 image: true,
                 is_super_admin: true,
+                must_change_password: true,
             },
         });
 
@@ -197,31 +255,7 @@ export async function getAdminSessionData(userId: string): Promise<AdminSignInRe
         }
 
         // Get CompanyUser record
-        const companyUser = await prisma.companyUser.findFirst({
-            where: {
-                user_id: userId,
-                deleted_at: null,
-                role: {
-                    in: [
-                        CompanyUserRole.OWNER,
-                        CompanyUserRole.ADMIN,
-                        CompanyUserRole.STAFF,
-                    ],
-                },
-            },
-            include: {
-                company: {
-                    select: {
-                        id: true,
-                        name: true,
-                        slug: true,
-                    },
-                },
-            },
-            orderBy: {
-                role: 'asc',
-            },
-        });
+        const companyUser = await getAdminCompanyUser(userId);
 
         if (!companyUser && !user.is_super_admin) {
             return {
@@ -254,6 +288,293 @@ export async function getAdminSessionData(userId: string): Promise<AdminSignInRe
             message: 'Internal server error',
             error: true,
             technicalMessage: error.toString(),
+        };
+    }
+}
+
+interface ChangePasswordResult extends MensajeApi {}
+
+export async function changeAdminPassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string
+): Promise<ChangePasswordResult> {
+    try {
+        const credentialAccount = await prisma.account.findFirst({
+            where: {
+                userId,
+                providerId: { in: ['credential', 'credentials'] },
+            },
+            orderBy: {
+                createdAt: 'asc',
+            },
+        });
+
+        if (!credentialAccount || !credentialAccount.password) {
+            return {
+                code: 400,
+                message: 'Credential account not found for this user',
+                error: true,
+            };
+        }
+
+        const matches = await bcrypt.compare(currentPassword, credentialAccount.password);
+        if (!matches) {
+            return {
+                code: 400,
+                message: 'Current password is incorrect',
+                error: true,
+            };
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await prisma.$transaction([
+            prisma.account.updateMany({
+                where: {
+                    userId,
+                    providerId: { in: ['credential', 'credentials'] },
+                },
+                data: {
+                    providerId: 'credential',
+                    password: hashedPassword,
+                },
+            }),
+            prisma.user.update({
+                where: { id: userId },
+                data: {
+                    must_change_password: false,
+                },
+            }),
+        ]);
+
+        return {
+            code: 200,
+            message: 'Password updated successfully',
+            error: false,
+        };
+    } catch (error: any) {
+        console.error('Change admin password error:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+interface AdminPasswordResetResult extends MensajeApi {}
+
+export async function startAdminPasswordReset(email: string): Promise<AdminPasswordResetResult> {
+    try {
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!normalizedEmail) {
+            return {
+                code: 400,
+                message: 'Email is required',
+                error: true,
+            };
+        }
+
+        // Always return a generic success to avoid user enumeration.
+        const successMessage: AdminPasswordResetResult = {
+            code: 200,
+            message: 'If the account exists, a reset code has been sent',
+            error: false,
+        };
+
+        const user = await prisma.user.findUnique({
+            where: { email: normalizedEmail },
+            select: {
+                id: true,
+                is_super_admin: true,
+            },
+        });
+
+        if (!user) {
+            return successMessage;
+        }
+
+        const isAdminUser = await hasAdminAccess(user.id, user.is_super_admin);
+        if (!isAdminUser) {
+            return successMessage;
+        }
+
+        const credentialAccount = await prisma.account.findFirst({
+            where: {
+                userId: user.id,
+                providerId: { in: ['credential', 'credentials'] },
+            },
+            select: { id: true },
+        });
+
+        if (!credentialAccount) {
+            return successMessage;
+        }
+
+        const code = generateNumericCode(6);
+        const codeHash = await bcrypt.hash(code, 10);
+        const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MINUTES * 60_000);
+
+        await prisma.verificationCode.create({
+            data: {
+                channel: VerificationChannel.EMAIL,
+                purpose: VerificationPurpose.LOGIN,
+                identifier: normalizedEmail,
+                code_hash: codeHash,
+                expires_at: expiresAt,
+            },
+        });
+
+        const sent = await sendEmailCode(normalizedEmail, code);
+        if (sent === -1) {
+            return {
+                code: 500,
+                message: 'Failed to send reset code',
+                error: true,
+            };
+        }
+
+        return successMessage;
+    } catch (error: any) {
+        console.error('Start admin password reset error:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error?.toString(),
+        };
+    }
+}
+
+export async function completeAdminPasswordReset(
+    email: string,
+    code: string,
+    newPassword: string
+): Promise<AdminPasswordResetResult> {
+    try {
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const user = await prisma.user.findUnique({
+            where: { email: normalizedEmail },
+            select: {
+                id: true,
+                is_super_admin: true,
+            },
+        });
+
+        if (!user) {
+            return {
+                code: 400,
+                message: 'Invalid or expired verification code',
+                error: true,
+            };
+        }
+
+        const isAdminUser = await hasAdminAccess(user.id, user.is_super_admin);
+        if (!isAdminUser) {
+            return {
+                code: 403,
+                message: 'User does not have admin access',
+                error: true,
+            };
+        }
+
+        const credentialAccount = await prisma.account.findFirst({
+            where: {
+                userId: user.id,
+                providerId: { in: ['credential', 'credentials'] },
+            },
+            select: { id: true },
+        });
+
+        if (!credentialAccount) {
+            return {
+                code: 400,
+                message: 'Credential account not found for this user',
+                error: true,
+            };
+        }
+
+        const verification = await prisma.verificationCode.findFirst({
+            where: {
+                channel: VerificationChannel.EMAIL,
+                purpose: VerificationPurpose.LOGIN,
+                identifier: normalizedEmail,
+                consumed_at: null,
+                expires_at: { gt: new Date() },
+            },
+            orderBy: { created_at: 'desc' },
+        });
+
+        if (!verification) {
+            return {
+                code: 400,
+                message: 'Invalid or expired verification code',
+                error: true,
+            };
+        }
+
+        if (verification.attempts >= verification.max_attempts) {
+            return {
+                code: 400,
+                message: 'Too many attempts. Request a new code.',
+                error: true,
+            };
+        }
+
+        const isCodeValid = await bcrypt.compare(code, verification.code_hash);
+
+        await prisma.verificationCode.update({
+            where: { id: verification.id },
+            data: {
+                attempts: verification.attempts + 1,
+                consumed_at: isCodeValid ? new Date() : verification.consumed_at,
+            },
+        });
+
+        if (!isCodeValid) {
+            return {
+                code: 400,
+                message: 'Invalid or expired verification code',
+                error: true,
+            };
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await prisma.$transaction([
+            prisma.account.updateMany({
+                where: {
+                    userId: user.id,
+                    providerId: { in: ['credential', 'credentials'] },
+                },
+                data: {
+                    providerId: 'credential',
+                    password: hashedPassword,
+                },
+            }),
+            prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    must_change_password: false,
+                },
+            }),
+        ]);
+
+        return {
+            code: 200,
+            message: 'Password reset successfully',
+            error: false,
+        };
+    } catch (error: any) {
+        console.error('Complete admin password reset error:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error?.toString(),
         };
     }
 }

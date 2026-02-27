@@ -29,8 +29,8 @@ router.post('/', requireAuth, BookingController.createBooking);
 // POST /api/booking/public - Create a new booking as a guest (no auth required)
 router.post('/public', createPublicBooking);
 
-// POST /api/booking/customer - Create a new booking for existing customer (no auth required)
-router.post('/customer', createCustomerBooking);
+// POST /api/booking/customer - Create a new booking for existing customer (requires auth)
+router.post('/customer', requireAuth, createCustomerBooking);
 
 // PUT /api/booking/:id - Modify a booking (requires auth)
 router.put('/:id', requireAuth, async (req: Request, res: Response) => {
@@ -56,4 +56,3 @@ router.post('/:id/cancel', requireAuth, async (req: Request, res: Response) => {
 });
 
 export default router;
-

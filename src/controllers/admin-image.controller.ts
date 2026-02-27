@@ -57,30 +57,34 @@ export const serveCompanyImage = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     
-    // Check if file exists
+    // Check if file exists and get stats for ETag
+    let stats;
     try {
-      await fs.access(resolvedPath);
+      stats = await fs.stat(resolvedPath);
     } catch {
       return res.status(404).json({ error: 'File not found' });
     }
-    
+
     // Get file extension to determine content type
     const ext = path.extname(filename as string).toLowerCase();
     const contentType = getContentType(ext);
-    
+
+    // ETag based on file modification time and size (changes on re-upload)
+    const etag = `"${stats.mtimeMs.toString(36)}-${stats.size.toString(36)}"`;
+
+    // Check if client has cached version
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (ifNoneMatch === etag) {
+      return res.status(304).send();
+    }
+
     // Set cache headers (1 day)
     res.set({
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=86400',
-      'ETag': `"${companyId}-${typeStr}-${filenameStr}"`,
+      'ETag': etag,
     });
-    
-    // Check if client has cached version
-    const ifNoneMatch = req.headers['if-none-match'];
-    if (ifNoneMatch === `"${companyId}-${typeStr}-${filenameStr}"`) {
-      return res.status(304).send();
-    }
-    
+
     // Send file
     res.sendFile(resolvedPath);
   } catch (error) {

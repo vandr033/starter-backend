@@ -57,7 +57,6 @@ export async function uploadQRImage(req: Request, res: Response) {
         }
         
         // Get company_id from request body (required for organizing files)
-        console.log(req.body)
         let { company_id } = req.body;
         company_id = parseInt(company_id);
         if (!company_id || typeof company_id !== 'number') {

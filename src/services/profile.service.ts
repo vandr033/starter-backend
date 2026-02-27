@@ -50,14 +50,100 @@ export async function getProfile(userId: string): Promise<MensajeApi> {
 
 export async function updateProfile(
     userId: string,
-    data: { first_name?: string; last_name?: string }
+    data: { first_name?: string; last_name?: string; phoneNumber?: string; phone_prefix?: string }
 ): Promise<MensajeApi> {
     try {
-        if (!data.first_name) {
-            return { code: 400, message: "First name is required", error: true };
+        const existing = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+                id: true,
+                first_name: true,
+                last_name: true,
+                name: true,
+                phoneNumber: true,
+                phone_prefix: true,
+            },
+        });
+
+        if (!existing) {
+            return { code: 404, message: "User not found", error: true };
         }
 
-        const updated = await UserRepo.updateUserNames(userId, data.first_name, data.last_name);
+        const hasAnyUpdate =
+            data.first_name !== undefined ||
+            data.last_name !== undefined ||
+            data.phoneNumber !== undefined ||
+            data.phone_prefix !== undefined;
+
+        if (!hasAnyUpdate) {
+            return { code: 400, message: "No profile fields provided", error: true };
+        }
+
+        const normalizedFirstName =
+            data.first_name !== undefined ? data.first_name.trim() : (existing.first_name || "");
+        const normalizedLastName =
+            data.last_name !== undefined ? data.last_name.trim() : (existing.last_name || "");
+
+        const nextDisplayName =
+            `${normalizedFirstName} ${normalizedLastName}`.trim() || existing.name || "User";
+
+        let nextPhone: string | null = existing.phoneNumber || null;
+        if (data.phoneNumber !== undefined) {
+            const clean = data.phoneNumber.replace(/\D/g, "");
+            nextPhone = clean.length > 0 ? clean : null;
+        }
+
+        let nextPhonePrefix: string | null = existing.phone_prefix || null;
+        if (data.phone_prefix !== undefined) {
+            const cleanPrefix = data.phone_prefix.replace(/\D/g, "");
+            nextPhonePrefix = cleanPrefix.length > 0 ? cleanPrefix : null;
+        }
+
+        if (nextPhone && !nextPhonePrefix) {
+            nextPhonePrefix = "591";
+        }
+
+        if (nextPhone) {
+            const userWithPhone = await prisma.user.findUnique({
+                where: { phoneNumber: nextPhone },
+                select: { id: true },
+            });
+            if (userWithPhone && userWithPhone.id !== userId) {
+                return { code: 400, message: "Phone number already in use", error: true };
+            }
+        }
+
+        const phoneChanged = nextPhone !== (existing.phoneNumber || null);
+
+        const updated = await prisma.user.update({
+            where: { id: userId },
+            data: {
+                ...(data.first_name !== undefined ? { first_name: normalizedFirstName || null } : {}),
+                ...(data.last_name !== undefined ? { last_name: normalizedLastName || null } : {}),
+                ...(data.first_name !== undefined || data.last_name !== undefined
+                    ? { name: nextDisplayName }
+                    : {}),
+                ...(data.phoneNumber !== undefined ? { phoneNumber: nextPhone } : {}),
+                ...(data.phone_prefix !== undefined || data.phoneNumber !== undefined
+                    ? { phone_prefix: nextPhonePrefix }
+                    : {}),
+                ...(phoneChanged ? { phoneNumberVerified: false } : {}),
+            },
+            select: {
+                id: true,
+                email: true,
+                first_name: true,
+                last_name: true,
+                name: true,
+                phoneNumber: true,
+                phone_prefix: true,
+                phoneNumberVerified: true,
+                emailVerified: true,
+                image: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+        });
 
         return {
             code: 200,

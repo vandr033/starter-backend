@@ -42,6 +42,65 @@ export async function adminSignIn(req: Request, res: Response) {
 }
 
 /**
+ * POST /api/admin/auth/password-reset/start
+ * Start admin password reset flow (email -> otp)
+ */
+export async function startAdminPasswordReset(req: Request, res: Response) {
+    const { email } = req.body || {};
+
+    if (typeof email !== 'string' || email.trim().length === 0) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Email is required',
+            error: true,
+        });
+    }
+
+    const result = await AdminAuthService.startAdminPasswordReset(email);
+    return res.status(result.code).json(result);
+}
+
+/**
+ * POST /api/admin/auth/password-reset/complete
+ * Complete admin password reset flow (email + otp + new password)
+ */
+export async function completeAdminPasswordReset(req: Request, res: Response) {
+    const { email, code, newPassword, confirmPassword } = req.body || {};
+
+    if (
+        typeof email !== 'string' ||
+        typeof code !== 'string' ||
+        typeof newPassword !== 'string' ||
+        typeof confirmPassword !== 'string'
+    ) {
+        return res.status(400).json({
+            code: 400,
+            message: 'email, code, newPassword and confirmPassword are required',
+            error: true,
+        });
+    }
+
+    if (newPassword.length < 8) {
+        return res.status(400).json({
+            code: 400,
+            message: 'New password must be at least 8 characters',
+            error: true,
+        });
+    }
+
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Passwords do not match',
+            error: true,
+        });
+    }
+
+    const result = await AdminAuthService.completeAdminPasswordReset(email, code, newPassword);
+    return res.status(result.code).json(result);
+}
+
+/**
  * POST /api/admin/auth/sign-out
  * Sign out the current admin user
  */
@@ -88,6 +147,54 @@ export async function adminSignOut(req: Request, res: Response) {
             error: true,
         });
     }
+}
+
+/**
+ * POST /api/admin/auth/change-password
+ * Change current admin password and clear force-change flag
+ */
+export async function changeAdminPassword(req: AuthenticatedRequest, res: Response) {
+    const userId = req.authUser?.id;
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+    if (!userId) {
+        return res.status(401).json({
+            code: 401,
+            message: 'Not authenticated',
+            error: true,
+        });
+    }
+
+    if (
+        typeof currentPassword !== 'string' ||
+        typeof newPassword !== 'string' ||
+        typeof confirmPassword !== 'string'
+    ) {
+        return res.status(400).json({
+            code: 400,
+            message: 'currentPassword, newPassword and confirmPassword are required',
+            error: true,
+        });
+    }
+
+    if (newPassword.length < 8) {
+        return res.status(400).json({
+            code: 400,
+            message: 'New password must be at least 8 characters',
+            error: true,
+        });
+    }
+
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Passwords do not match',
+            error: true,
+        });
+    }
+
+    const result = await AdminAuthService.changeAdminPassword(userId, currentPassword, newPassword);
+    return res.status(result.code).json(result);
 }
 
 /**

@@ -1,7 +1,9 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as AdminBookingRepo from '../repositories/admin-booking.repo';
 import * as BookingRepo from '../repositories/booking.repo';
-import { BookingStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
+import { BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
+import { prisma } from '../prisma/client';
+import { notifyBookingCreated, notifyBookingUpdated, notifyBookingCancelled } from '../utils/bookingNotifications';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -75,8 +77,11 @@ export async function updateBooking(
         status?: BookingStatus;
         start_at?: string;
         notes?: string | null;
+        staff_id?: number;
+        service_ids?: number[];
     },
-    updatedByUserId: string
+    updatedByUserId: string,
+    actorRole?: CompanyUserRole
 ): Promise<AdminBookingResult> {
     try {
         // Check if booking exists
@@ -87,6 +92,41 @@ export async function updateBooking(
                 message: 'Booking not found',
                 error: true,
             };
+        }
+
+        if (actorRole === CompanyUserRole.STAFF) {
+            const staffProfile = await prisma.staffProfile.findFirst({
+                where: {
+                    company_id: companyId,
+                    user_id: updatedByUserId,
+                    deleted_at: null,
+                },
+                select: { id: true },
+            });
+
+            if (!staffProfile) {
+                return {
+                    code: 403,
+                    message: 'Staff profile not found in this company',
+                    error: true,
+                };
+            }
+
+            if (existingBooking.staff_id !== staffProfile.id) {
+                return {
+                    code: 403,
+                    message: 'Staff can only modify their own bookings',
+                    error: true,
+                };
+            }
+
+            if (updates.staff_id !== undefined || updates.service_ids !== undefined) {
+                return {
+                    code: 403,
+                    message: 'Staff cannot reassign staff or change services',
+                    error: true,
+                };
+            }
         }
 
         // Validate status transitions
@@ -107,8 +147,94 @@ export async function updateBooking(
             }
         }
 
-        // Validate reschedule time
-        if (updates.start_at) {
+        // Update staff if provided
+        if (updates.staff_id && updates.staff_id !== existingBooking.staff_id) {
+            await AdminBookingRepo.updateBookingStaff(
+                bookingId,
+                companyId,
+                updates.staff_id,
+                updatedByUserId
+            );
+        }
+
+        // Determine the effective staff_id for conflict checks
+        const effectiveStaffId = updates.staff_id || existingBooking.staff_id;
+
+        // Update services if provided
+        if (updates.service_ids && updates.service_ids.length > 0) {
+            const services = await BookingRepo.getServicesByIds(updates.service_ids, companyId);
+            if (services.length === 0) {
+                return {
+                    code: 400,
+                    message: 'No valid services found',
+                    error: true,
+                };
+            }
+
+            const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
+            const totalPrice = services.reduce((sum, s) => sum + s.price_cents, 0);
+
+            // Use new start_at if provided, otherwise use existing
+            const baseStartAt = updates.start_at
+                ? new Date(updates.start_at)
+                : existingBooking.start_at;
+            const endAt = new Date(baseStartAt.getTime() + totalDuration * 60 * 1000);
+
+            const serviceSnapshots = services.map((service, index) => ({
+                service_id: service.id,
+                service_name_snapshot: service.name,
+                price_cents_snapshot: service.price_cents,
+                duration_minutes_snapshot: service.duration_minutes,
+                position: index,
+            }));
+
+            await AdminBookingRepo.replaceBookingServices(
+                bookingId,
+                companyId,
+                serviceSnapshots,
+                totalPrice,
+                endAt,
+                updatedByUserId
+            );
+
+            // If start_at was also provided, reschedule (end_at is already handled above)
+            if (updates.start_at) {
+                const startAt = new Date(updates.start_at);
+                if (isNaN(startAt.getTime())) {
+                    return {
+                        code: 400,
+                        message: 'Invalid date format for start_at',
+                        error: true,
+                    };
+                }
+
+                // Check availability for new time slot
+                const conflict = await BookingRepo.checkSlotConflict(
+                    companyId,
+                    effectiveStaffId,
+                    startAt,
+                    endAt,
+                    0
+                );
+
+                if (conflict && conflict.id !== bookingId) {
+                    return {
+                        code: 409,
+                        message: 'Time slot conflicts with another booking',
+                        error: true,
+                    };
+                }
+
+                await AdminBookingRepo.rescheduleBooking(
+                    bookingId,
+                    companyId,
+                    startAt,
+                    endAt,
+                    updatedByUserId
+                );
+            }
+        } else if (updates.start_at) {
+            // Reschedule without service change
             const startAt = new Date(updates.start_at);
 
             if (isNaN(startAt.getTime())) {
@@ -119,9 +245,9 @@ export async function updateBooking(
                 };
             }
 
-            // Calculate end_at based on services duration
+            // Calculate end_at based on existing services duration
             const totalDuration = existingBooking.booking_services.reduce(
-                (sum: number, bs: any) => sum + bs.service.duration_minutes, 
+                (sum: number, bs: any) => sum + bs.service.duration_minutes,
                 0
             );
             const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
@@ -137,10 +263,10 @@ export async function updateBooking(
             // Check availability for new time slot
             const conflict = await BookingRepo.checkSlotConflict(
                 companyId,
-                existingBooking.staff_id,
+                effectiveStaffId,
                 startAt,
                 endAt,
-                0 // No buffer for admin reschedule
+                0
             );
 
             if (conflict && conflict.id !== bookingId) {
@@ -183,6 +309,59 @@ export async function updateBooking(
 
         // Get updated booking
         const updatedBooking = await AdminBookingRepo.getBookingById(bookingId, companyId);
+
+        // Send notification based on what changed (fire-and-forget)
+        if (updatedBooking) {
+            const company = await prisma.company.findUnique({ where: { id: companyId }, select: { name: true } });
+            const staffProfile = await prisma.staffProfile.findFirst({
+                where: { id: updatedBooking.staff_id, company_id: companyId },
+                select: { display_name: true },
+            });
+
+            // Resolve customer contact info
+            let customerEmail = updatedBooking.client_email;
+            let customerPhone = updatedBooking.client_phone_number;
+            let customerPhonePrefix = updatedBooking.client_phone_prefix;
+            let customerName = updatedBooking.client_name;
+
+            if (updatedBooking.customer_id) {
+                const customerProfile = await prisma.customerProfile.findUnique({
+                    where: { id: updatedBooking.customer_id },
+                    include: { user: { select: { email: true, name: true, phoneNumber: true, phone_prefix: true } } },
+                });
+                if (customerProfile?.user) {
+                    customerEmail = customerEmail || customerProfile.user.email;
+                    customerPhone = customerPhone || customerProfile.user.phoneNumber;
+                    customerPhonePrefix = customerPhonePrefix || customerProfile.user.phone_prefix;
+                    customerName = customerName || customerProfile.user.name;
+                }
+            }
+
+            const serviceNames = updatedBooking.booking_services?.map(
+                (bs: any) => bs.service_name_snapshot || bs.service?.name || ''
+            ) || [];
+
+            const notificationData = {
+                companyId,
+                bookingId,
+                customerEmail,
+                customerPhone,
+                customerPhonePrefix,
+                customerName,
+                companyName: company?.name || '',
+                staffName: staffProfile?.display_name || '',
+                serviceNames,
+                startAt: updatedBooking.start_at,
+                endAt: updatedBooking.end_at,
+                totalPriceCents: updatedBooking.total_price_cents || 0,
+            };
+
+            if (updates.status === BookingStatus.CANCELLED) {
+                void notifyBookingCancelled(notificationData);
+            } else if (updates.start_at || updates.staff_id || updates.service_ids) {
+                void notifyBookingUpdated(notificationData);
+            }
+        }
 
         return {
             code: 200,
@@ -317,6 +496,30 @@ export async function createBooking(
             },
             serviceSnapshots
         );
+
+        // Send notification if contact info available (fire-and-forget)
+        if (booking && (data.client_email || phoneNumber)) {
+            const company = await prisma.company.findUnique({ where: { id: data.companyId }, select: { name: true } });
+            const staffProfile = await prisma.staffProfile.findFirst({
+                where: { id: data.staff_id, company_id: data.companyId },
+                select: { display_name: true },
+            });
+            void notifyBookingCreated({
+                companyId: data.companyId,
+                bookingId: booking.id,
+                staffId: data.staff_id,
+                customerEmail: data.client_email,
+                customerPhone: phoneNumber,
+                customerPhonePrefix: phonePrefix,
+                customerName: data.client_name,
+                companyName: company?.name || '',
+                staffName: staffProfile?.display_name || '',
+                serviceNames: services.map(s => s.name),
+                startAt,
+                endAt,
+                totalPriceCents: totalPrice,
+            });
+        }
 
         return {
             code: 201,

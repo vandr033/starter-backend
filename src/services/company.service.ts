@@ -160,11 +160,13 @@ export const getCompanyPublicPage = async (slug: string) => {
         allow_qr_payment: company_settings.allow_qr_payment,
         qr_image_url: company_settings.qr_image_url,
         allow_cash_payment: company_settings.allow_cash_payment,
+        social_links: (company_settings as any).social_links || {},
       }
       : {
         allow_qr_payment: true,
         qr_image_url: null,
-        allow_cash_payment: true
+        allow_cash_payment: true,
+        social_links: {},
       };
 
     // Apply theme defaults if no config exists
@@ -175,6 +177,10 @@ export const getCompanyPublicPage = async (slug: string) => {
         page_background_preset: theme_config.page_background_preset,
         cards_elevated: theme_config.cards_elevated,
         corner_radius: theme_config.corner_radius,
+        font_pairing: (theme_config as any).font_pairing || 'classic',
+        hero_variant: (theme_config as any).hero_variant || 'hero-cinematic',
+        services_variant: (theme_config as any).services_variant || 'services-grid',
+        team_variant: (theme_config as any).team_variant || 'team-cards',
       }
       : DEFAULT_THEME;
 
@@ -190,8 +196,6 @@ export const getCompanyPublicPage = async (slug: string) => {
         count: reviewCount,
       },
     };
-    console.log(responseData);
-
     return buildSuccessResponse('Company retrieved', responseData);
   } catch (error) {
     return buildServiceErrorResponse('company', 'get public page', error);

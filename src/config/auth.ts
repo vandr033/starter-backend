@@ -43,7 +43,6 @@ export const auth = betterAuth({
       await sendResetPasswordEmail(user, url);
     },
     onPasswordReset: async ({ user }, request) => {
-      console.log(`password for ${user.email} reset `)
     }
   },
   appName: "BookInSite",
