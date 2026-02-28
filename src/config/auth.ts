@@ -2,11 +2,17 @@ import { prisma } from "../prisma/client";
 import { sendWhatsappCode } from "../utils/whatsappSender";
 import { sendResetPasswordEmail } from "../utils/sendEmail";
 import { importEsm } from "../utils/importEsm";
+import { webcrypto as nodeWebCrypto } from "crypto";
 import bcrypt from "bcryptjs";
 
 let authPromise: Promise<any> | null = null;
 
 async function createAuth() {
+  const globalAny = globalThis as any;
+  if (!globalAny.crypto && nodeWebCrypto) {
+    globalAny.crypto = nodeWebCrypto;
+  }
+
   const [{ betterAuth }, { prismaAdapter }, { phoneNumber }] = await Promise.all([
     importEsm<any>("better-auth"),
     importEsm<any>("better-auth/adapters/prisma"),
