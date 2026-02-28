@@ -23,7 +23,11 @@ app.get("/api/health", healthHandler);
 // CORS, helmet, rateLimit
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
+    ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],

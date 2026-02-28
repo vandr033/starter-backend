@@ -19,6 +19,7 @@ async function createAuth() {
     trustedOrigins: [
       "http://localhost:3000",
       "http://localhost:3001",
+      "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
       "https://bookinsite.com",
       "https://www.bookinsite.com",
       "https://bookinsite.com.ar",
