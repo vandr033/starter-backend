@@ -1,15 +1,16 @@
 import { prisma } from "../prisma/client";
 import { sendWhatsappCode } from "../utils/whatsappSender";
 import { sendResetPasswordEmail } from "../utils/sendEmail";
+import { importEsm } from "../utils/importEsm";
 import bcrypt from "bcryptjs";
 
 let authPromise: Promise<any> | null = null;
 
 async function createAuth() {
   const [{ betterAuth }, { prismaAdapter }, { phoneNumber }] = await Promise.all([
-    import("better-auth"),
-    import("better-auth/adapters/prisma"),
-    import("better-auth/plugins"),
+    importEsm<any>("better-auth"),
+    importEsm<any>("better-auth/adapters/prisma"),
+    importEsm<any>("better-auth/plugins"),
   ]);
 
   return betterAuth({
@@ -45,7 +46,7 @@ async function createAuth() {
           return bcrypt.compare(password, hash);
         },
       },
-      sendResetPassword: async ({ user, url }) => {
+      sendResetPassword: async ({ user, url }: { user: any; url: string }) => {
         await sendResetPasswordEmail(user, url);
       },
       onPasswordReset: async () => {},
@@ -56,15 +57,15 @@ async function createAuth() {
         otpLength: 6,
         expiresIn: 300,
         allowedAttempts: 3,
-        sendOTP: async ({ phoneNumber, code }) => {
+        sendOTP: async ({ phoneNumber, code }: { phoneNumber: string; code: string }) => {
           await sendWhatsappCode(phoneNumber, code);
         },
         signUpOnVerification: {
-          getTempEmail: (phoneNumber) => {
+          getTempEmail: (phoneNumber: string) => {
             const digits = phoneNumber.replace(/[^\d]/g, "");
             return `${digits}@temp.bookinsite.com`;
           },
-          getTempName: (phoneNumber) => phoneNumber,
+          getTempName: (phoneNumber: string) => phoneNumber,
         },
         requireVerification: true,
       }),

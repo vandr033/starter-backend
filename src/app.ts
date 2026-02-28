@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import cors from "cors";
 import { router } from "./routes";
 import { getAuth } from "./config/auth";
+import { importEsm } from "./utils/importEsm";
 import { errorHandler } from "./middlewares/error";
 
 const app = express();
@@ -46,7 +47,7 @@ async function getAuthHandler() {
   if (!authHandlerPromise) {
     authHandlerPromise = (async () => {
       const [{ toNodeHandler }, auth] = await Promise.all([
-        import("better-auth/node"),
+        importEsm<any>("better-auth/node"),
         getAuth(),
       ]);
       return toNodeHandler(auth) as express.RequestHandler;
