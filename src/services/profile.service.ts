@@ -2,7 +2,7 @@ import * as UserRepo from "../repositories/user.repo";
 import * as VerificationRepo from "../repositories/verification.repo";
 import { MensajeApi } from "../types/MensajeApi";
 import { generateNumericCode, OTP_TTL_MINUTES } from "../utils/verification";
-import { VerificationChannel, VerificationPurpose } from "@prisma/client";
+import { VerificationChannel, VerificationPurpose } from "../types/verification-enums";
 import bcrypt from "bcryptjs";
 import { sendWhatsappCode } from "../utils/whatsappSender";
 import { sendEmailCode } from "../utils/sendEmail";

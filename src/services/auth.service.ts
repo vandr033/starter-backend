@@ -7,7 +7,7 @@ import {
   OTP_TTL_MINUTES,
   parsePreRegToken,
 } from "../utils/verification";
-import { VerificationChannel, VerificationPurpose } from "@prisma/client";
+import { VerificationChannel, VerificationPurpose } from "../types/verification-enums";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendWhatsappCode } from "../utils/whatsappSender";

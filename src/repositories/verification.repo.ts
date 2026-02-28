@@ -1,5 +1,8 @@
 import { prisma, Prisma } from "../prisma/client";
-import { VerificationChannel, VerificationPurpose } from "@prisma/client";
+import {
+    VerificationChannel,
+    VerificationPurpose,
+} from "../types/verification-enums";
 export const createVerification = (data: Prisma.VerificationCodeCreateInput) => {
     return prisma.verificationCode.create({
         data,

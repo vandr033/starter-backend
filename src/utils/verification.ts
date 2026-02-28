@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { prisma } from "../prisma/client";
-import { VerificationChannel, VerificationPurpose } from "@prisma/client";
+import { VerificationChannel } from "../types/verification-enums";
 
 export const OTP_LENGTH = 6;
 export const OTP_TTL_MINUTES = 5;
@@ -21,7 +21,7 @@ export function generateNumericCode(length = OTP_LENGTH): string {
 const preregSecret = process.env.CUSTOMER_PREREG_SECRET!;
 
 export function createPreRegToken(payload: {
-  channel: "WHATSAPP" | "EMAIL";
+  channel: VerificationChannel;
   identifier: string;
 }) {
   const now = Date.now();
@@ -51,7 +51,7 @@ export function parsePreRegToken(token: string) {
     return decoded as {
       type: "CUSTOMER_PREREG";
       purpose: "CUSTOMER_SIGNUP";
-      channel: "WHATSAPP" | "EMAIL";
+      channel: VerificationChannel;
       identifier: string;
       createdAt: number;
       expiresAt: number;

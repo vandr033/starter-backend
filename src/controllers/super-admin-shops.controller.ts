@@ -6,18 +6,27 @@ import { auth } from '../config/auth';
 
 let mensaje: MensajeApi;
 
+function firstQueryString(value: unknown): string | undefined {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+    return undefined;
+}
+
 /**
  * GET /api/super-admin/shops
  * Get all shops with pagination and search
  */
 export async function getAllShops(req: AuthenticatedRequest, res: Response) {
     try {
-        const { search, page = '1', limit = '20' } = req.query;
+        const { search, page, limit } = req.query;
+        const searchValue = firstQueryString(search);
+        const pageValue = firstQueryString(page) ?? '1';
+        const limitValue = firstQueryString(limit) ?? '20';
         
         const result = await SuperAdminShopsService.getAllShops({
-            search: Array.isArray(search) ? search[0] : search as string,
-            page: parseInt(Array.isArray(page) ? page[0] : page as string),
-            limit: parseInt(Array.isArray(limit) ? limit[0] : limit as string)
+            search: searchValue,
+            page: parseInt(pageValue),
+            limit: parseInt(limitValue)
         });
 
         return res.status(result.code).json(result);

@@ -1,7 +1,8 @@
 import { prisma } from '../prisma/client';
 import { auth } from '../config/auth';
 import { MensajeApi } from '../types/MensajeApi';
-import { CompanyUserRole, VerificationChannel, VerificationPurpose } from '@prisma/client';
+import { CompanyUserRole } from '@prisma/client';
+import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
 import bcrypt from 'bcryptjs';
 import { generateNumericCode } from '../utils/otp';
 import { sendEmailCode } from '../utils/sendEmail';

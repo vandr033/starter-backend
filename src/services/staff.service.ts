@@ -3,7 +3,8 @@ import * as StaffRepo from '../repositories/staff.repo';
 import { prisma } from '../prisma/client';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { CompanyUserRole, VerificationChannel, VerificationPurpose } from '@prisma/client';
+import { CompanyUserRole } from '@prisma/client';
+import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
 import { generateNumericCode } from '../utils/verification';
 import { sendStaffInviteEmail } from '../utils/sendEmail';
 

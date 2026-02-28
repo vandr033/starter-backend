@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../prisma/client';
 import bcrypt from 'bcryptjs';
-import { VerificationChannel, VerificationPurpose } from '@prisma/client';
+import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
 
 /**
  * GET /api/staff/invite-info/:token
@@ -9,7 +9,8 @@ import { VerificationChannel, VerificationPurpose } from '@prisma/client';
  */
 export async function getInviteInfo(req: Request, res: Response) {
     try {
-        const { token } = req.params;
+        const rawToken = req.params.token;
+        const token = (Array.isArray(rawToken) ? rawToken[0] : rawToken) as string;
 
         const staff = await prisma.staffProfile.findFirst({
             where: {
