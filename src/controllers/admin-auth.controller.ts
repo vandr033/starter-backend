@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as AdminAuthService from '../services/admin-auth.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
-import { auth } from '../config/auth';
+import { getAuth } from '../config/auth';
 
 let mensaje: MensajeApi;
 
@@ -106,6 +106,7 @@ export async function completeAdminPasswordReset(req: Request, res: Response) {
  */
 export async function adminSignOut(req: Request, res: Response) {
     try {
+        const auth = await getAuth();
         // Convert Express headers to the format Better Auth expects
         const headers: Record<string, string> = {};
         Object.entries(req.headers).forEach(([key, value]) => {
@@ -214,6 +215,7 @@ export async function getAdminSession(req: AuthenticatedRequest, res: Response) 
     }
 
     try {
+        const auth = await getAuth();
         // Refresh session to implement sliding expiration
         const sessionHeaders: Record<string, string> = {};
         Object.entries(req.headers).forEach(([key, value]) => {

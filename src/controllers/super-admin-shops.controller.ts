@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as SuperAdminShopsService from '../services/super-admin-shops.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
-import { auth } from '../config/auth';
 
 let mensaje: MensajeApi;
 

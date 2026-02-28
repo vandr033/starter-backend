@@ -3,11 +3,22 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cors from "cors";
 import { router } from "./routes";
-import { toNodeHandler } from "better-auth/node";
-import { auth } from "./config/auth";
+import { getAuth } from "./config/auth";
 import { errorHandler } from "./middlewares/error";
 
 const app = express();
+
+const healthHandler = (_req: express.Request, res: express.Response) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime_seconds: Math.floor(process.uptime()),
+  });
+};
+
+// Health checkpoints (liveness)
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
 
 // CORS, helmet, rateLimit
 app.use(
@@ -24,8 +35,30 @@ app.use(helmet({
 }));
 app.use(rateLimit({ windowMs: 60_000, max: 120 }));
 
+let authHandlerPromise: Promise<express.RequestHandler> | null = null;
+
+async function getAuthHandler() {
+  if (!authHandlerPromise) {
+    authHandlerPromise = (async () => {
+      const [{ toNodeHandler }, auth] = await Promise.all([
+        import("better-auth/node"),
+        getAuth(),
+      ]);
+      return toNodeHandler(auth) as express.RequestHandler;
+    })();
+  }
+  return authHandlerPromise;
+}
+
 // 1) Better Auth on /api/auth prefix (no "*")
-app.use("/api/auth", toNodeHandler(auth));
+app.use("/api/auth", async (req, res, next) => {
+  try {
+    const authHandler = await getAuthHandler();
+    return authHandler(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
+});
 
 // 2) Body parser for YOUR routes
 app.use(express.json({ limit: "1mb" }));

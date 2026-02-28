@@ -12,7 +12,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendWhatsappCode } from "../utils/whatsappSender";
 import { sendEmailCode } from "../utils/sendEmail";
-import { auth } from "../config/auth";
+import { getAuth } from "../config/auth";
 import { logger } from "../config/logger";
 
 let mensaje: MensajeApi;
@@ -148,6 +148,7 @@ export async function completeCustomerRegistrationEmail(
     const randomPassword = crypto.randomBytes(32).toString("hex");
 
     // Create user via Better Auth
+    const auth = await getAuth();
     const result = await auth.api.signUpEmail({
       body: {
         email: normalizedEmail,
@@ -402,6 +403,7 @@ export async function verifyLoginOtpEmail(
     // Sign in via Better Auth using internal password
     // We need to get the user's account to read the stored password.
     // Instead, we'll use Better Auth's internal session creation.
+    const auth = await getAuth();
     const session = await auth.api.signInEmail({
       body: {
         email: trimmedEmail,
@@ -471,6 +473,7 @@ export async function verifyLoginOtpEmail(
 
 export async function sendLoginOtpPhone(phoneNumber: string): Promise<MensajeApi> {
   try {
+    const auth = await getAuth();
     // Better Auth's phone number plugin handles OTP send + storage
     await auth.api.sendPhoneNumberOTP({
       body: { phoneNumber },
@@ -497,6 +500,7 @@ export async function verifyLoginOtpPhone(
   reqHeaders: any
 ): Promise<MensajeApi> {
   try {
+    const auth = await getAuth();
     const result = await auth.api.verifyPhoneNumber({
       body: { phoneNumber, code },
       headers: reqHeaders,

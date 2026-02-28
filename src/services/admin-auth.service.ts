@@ -1,5 +1,5 @@
 import { prisma } from '../prisma/client';
-import { auth } from '../config/auth';
+import { getAuth } from '../config/auth';
 import { MensajeApi } from '../types/MensajeApi';
 import { CompanyUserRole } from '@prisma/client';
 import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
@@ -97,6 +97,7 @@ export async function signInAdmin(
     reqHeaders: any
 ): Promise<AdminSignInResult> {
     try {
+        const auth = await getAuth();
         // 1. Authenticate via Better Auth
         const signInResponse = await auth.api.signInEmail({
             body: { email, password },

@@ -1,7 +1,7 @@
 import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
 import { CompanyUserRole } from '@prisma/client';
-import { auth } from '../config/auth';
+import { getAuth } from '../config/auth';
 import bcrypt from 'bcryptjs';
 import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
 
@@ -1201,6 +1201,7 @@ export async function getCompanyTypes(): Promise<MensajeApi> {
  */
 export async function impersonateShop(shopId: number, superAdminUser: any, headers: any): Promise<MensajeApi & { cookie?: string }> {
     try {
+        const auth = await getAuth();
         // Check if shop exists
         const shop = await prisma.company.findUnique({
             where: {

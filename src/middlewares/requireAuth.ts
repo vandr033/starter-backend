@@ -1,6 +1,6 @@
 // src/middlewares/requireAuth.ts
 import type { Request, Response, NextFunction } from "express";
-import { auth } from "../config/auth";
+import { getAuth } from "../config/auth";
 import { prisma } from "../prisma/client";
 import { CompanyUserRole } from "@prisma/client";
 
@@ -15,6 +15,7 @@ export async function requireAuth(
   next: NextFunction
 ) {
   try {
+    const auth = await getAuth();
     // Remove verbose logging to reduce noise
     const session = await auth.api.getSession({
       headers: req.headers as any,
