@@ -7,6 +7,7 @@ import { CompanyUserRole } from '@prisma/client';
 import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
 import { generateNumericCode } from '../utils/verification';
 import { sendStaffInviteEmail } from '../utils/sendEmail';
+import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
 
 interface StaffResult extends MensajeApi {
     data?: any;
@@ -358,6 +359,11 @@ export async function createStaff(
             inviteToken,
             startDate: input.start_date ? new Date(input.start_date) : undefined,
             endDate: input.end_date ? new Date(input.end_date) : undefined,
+        });
+
+        await ensureDefaultStaffAvailabilityFromCompanyHours({
+            companyId,
+            staffId: staff.id,
         });
 
         // Assign services if provided

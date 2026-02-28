@@ -26,5 +26,11 @@ router.post(
     upload.single('file'),
     AdminCustomerController.importCustomers,
 );
+router.post(
+    '/mass-message',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    AdminCustomerController.sendMassMessage,
+);
 
 export default router;

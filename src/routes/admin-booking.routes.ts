@@ -11,8 +11,24 @@ const allStaffRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN, CompanyUser
 // GET /api/admin/bookings - Get bookings with filters and pagination
 router.get('/', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.getBookings);
 
+// GET /api/admin/bookings/reminders/today/preview - Preview today's reminder targets
+router.get(
+    '/reminders/today/preview',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    AdminBookingController.getTodayReminderPreview
+);
+
 // POST /api/admin/bookings - Create booking on behalf of customer
 router.post('/', requireAuth, requireCompanyRole(adminRoles), AdminBookingController.createBooking);
+
+// POST /api/admin/bookings/:id/reminders/today - Send today's reminder for one booking
+router.post(
+    '/:id/reminders/today',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    AdminBookingController.sendTodayReminder
+);
 
 // PUT /api/admin/bookings/:id - Update booking (staff can update their own)
 router.put('/:id', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.updateBooking);

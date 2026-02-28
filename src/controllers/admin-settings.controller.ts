@@ -5,6 +5,15 @@ import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
 
 let mensaje: MensajeApi;
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const SUPPORTED_LANGUAGES = new Set(['es', 'en']);
+
+function normalizeDefaultLanguage(value: unknown): 'es' | 'en' {
+    if (typeof value !== 'string') return 'es';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'en') return 'en';
+    return 'es';
+}
 
 /**
  * GET /api/admin/settings
@@ -26,6 +35,16 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
         const settings = await prisma.companySettings.findUnique({
             where: { company_id: companyId },
         });
+        const defaultLanguageConfig = await prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        });
+        const defaultLanguage = normalizeDefaultLanguage(defaultLanguageConfig?.value);
 
         if (!settings) {
             // Return default settings if none exist
@@ -54,7 +73,10 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
                 code: 200,
                 error: false,
                 message: 'Settings retrieved successfully',
-                data: createdSettings,
+                data: {
+                    ...createdSettings,
+                    default_language: defaultLanguage,
+                },
             });
         }
 
@@ -62,7 +84,10 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
             code: 200,
             error: false,
             message: 'Settings retrieved successfully',
-            data: settings,
+            data: {
+                ...settings,
+                default_language: defaultLanguage,
+            },
         });
     } catch (error) {
         logger.error('Error getting company settings:', error as any);
@@ -104,6 +129,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             send_email_notifications,
             send_whatsapp_notifications,
             social_links,
+            default_language,
         } = req.body;
 
         // Validate numeric fields
@@ -161,6 +187,19 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 };
                 return res.status(400).json(mensaje);
             }
+        }
+
+        // Validate default language if provided
+        if (
+            default_language !== undefined &&
+            (typeof default_language !== 'string' || !SUPPORTED_LANGUAGES.has(default_language.trim().toLowerCase()))
+        ) {
+            mensaje = {
+                code: 400,
+                message: 'default_language must be one of: es, en',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
         }
 
         // Validate qr_image_url if provided
@@ -269,11 +308,48 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             },
         });
 
+        if (default_language !== undefined) {
+            await prisma.configMessage.upsert({
+                where: {
+                    company_id_key: {
+                        company_id: companyId,
+                        key: DEFAULT_LANGUAGE_KEY,
+                    },
+                },
+                update: {
+                    value: normalizeDefaultLanguage(default_language),
+                    name: 'Default Language',
+                    description: 'Default language for customer communications',
+                },
+                create: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                    name: 'Default Language',
+                    value: normalizeDefaultLanguage(default_language),
+                    description: 'Default language for customer communications',
+                },
+            });
+        }
+
+        const persistedDefaultLanguageConfig = await prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        });
+        const persistedDefaultLanguage = normalizeDefaultLanguage(persistedDefaultLanguageConfig?.value);
+
         return res.json({
             code: 200,
             error: false,
             message: 'Settings updated successfully',
-            data: settings,
+            data: {
+                ...settings,
+                default_language: persistedDefaultLanguage,
+            },
         });
     } catch (error) {
         logger.error('Error updating company settings:', error as any);
@@ -324,12 +400,35 @@ export async function resetCompanySettings(req: AuthenticatedRequest, res: Respo
                 send_whatsapp_notifications: false,
             },
         });
+        await prisma.configMessage.upsert({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            update: {
+                value: 'es',
+                name: 'Default Language',
+                description: 'Default language for customer communications',
+            },
+            create: {
+                company_id: companyId,
+                key: DEFAULT_LANGUAGE_KEY,
+                name: 'Default Language',
+                value: 'es',
+                description: 'Default language for customer communications',
+            },
+        });
 
         return res.json({
             code: 200,
             error: false,
             message: 'Settings reset to defaults successfully',
-            data: defaultSettings,
+            data: {
+                ...defaultSettings,
+                default_language: 'es',
+            },
         });
     } catch (error) {
         logger.error('Error resetting company settings:', error as any);

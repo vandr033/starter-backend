@@ -33,6 +33,14 @@ interface BookingNotificationData {
     totalPriceCents: number;
 }
 
+export type ReminderChannel = "WHATSAPP" | "EMAIL";
+type SupportedLocale = "es" | "en";
+
+interface BookingReminderData extends BookingNotificationData {
+    companySlug?: string | null;
+    locale?: SupportedLocale;
+}
+
 type InternalRecipientRole = "staff" | "owner";
 
 interface InternalRecipient {
@@ -61,8 +69,12 @@ async function getNotificationSettings(companyId: number) {
     };
 }
 
-function formatDate(date: Date): string {
-    return date.toLocaleDateString("es", {
+function resolveLocaleTag(locale?: SupportedLocale): string {
+    return locale === "en" ? "en-US" : "es-BO";
+}
+
+function formatDate(date: Date, locale: SupportedLocale = "es"): string {
+    return date.toLocaleDateString(resolveLocaleTag(locale), {
         weekday: "long",
         year: "numeric",
         month: "long",
@@ -70,8 +82,8 @@ function formatDate(date: Date): string {
     });
 }
 
-function formatTime(date: Date): string {
-    return date.toLocaleTimeString("es", {
+function formatTime(date: Date, locale: SupportedLocale = "es"): string {
+    return date.toLocaleTimeString(resolveLocaleTag(locale), {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
@@ -100,6 +112,19 @@ function getManageBookingUrl(bookingId: number): string {
         process.env.NEXT_PUBLIC_FRONTEND_URL ||
         "http://localhost:3000";
     return `${base.replace(/\/$/, "")}/admin/dashboard/bookings?bookingId=${bookingId}`;
+}
+
+function getCustomerManageBookingUrl(companySlug?: string | null): string {
+    const base =
+        process.env.FRONTEND_URL ||
+        process.env.NEXT_PUBLIC_FRONTEND_URL ||
+        "http://localhost:3000";
+    const normalizedBase = base.replace(/\/$/, "");
+    const normalizedSlug = (companySlug || "").trim().toLowerCase();
+    if (normalizedSlug) {
+        return `${normalizedBase}/me/appointments?shop=${encodeURIComponent(normalizedSlug)}`;
+    }
+    return `${normalizedBase}/me/appointments`;
 }
 
 async function getInternalRecipients(companyId: number, staffId?: number) {
@@ -323,9 +348,74 @@ function bookingEmailHtml(
     </html>`;
 }
 
+function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
+    const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
+    const serviceList = data.serviceNames.map((s) => `<li>${s}</li>`).join("");
+    const manageUrl = getCustomerManageBookingUrl(data.companySlug);
+    const content = locale === "en"
+        ? {
+            title: "Reminder: your appointment is today",
+            greeting: `Hi ${data.customerName || ""}, this is a reminder that your appointment is today.`,
+            company: "Business",
+            staff: "Professional",
+            staffFallback: "Not assigned",
+            date: "Date",
+            time: "Time",
+            services: "Services",
+            total: "Total",
+            button: "Manage my appointment",
+        }
+        : {
+            title: "Recordatorio de tu cita de hoy",
+            greeting: `Hola ${data.customerName || ""}, te recordamos que tienes una cita hoy.`,
+            company: "Negocio",
+            staff: "Profesional",
+            staffFallback: "No asignado",
+            date: "Fecha",
+            time: "Hora",
+            services: "Servicios",
+            total: "Total",
+            button: "Gestionar mi cita",
+        };
+
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${content.title}</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f4f4f4; }
+        .container { background-color: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header h1 { color: #0369a1; font-size: 22px; margin-bottom: 16px; }
+        .details { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .details p { margin: 5px 0; }
+        .button { display: inline-block; margin-top: 12px; padding: 10px 16px; border-radius: 6px; text-decoration: none; color: #fff; background: #0369a1; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header"><h1>${content.title}</h1></div>
+        <p>${content.greeting}</p>
+        <div class="details">
+          <p><strong>${content.company}:</strong> ${data.companyName}</p>
+          <p><strong>${content.staff}:</strong> ${data.staffName || content.staffFallback}</p>
+          <p><strong>${content.date}:</strong> ${formatDate(data.startAt, locale)}</p>
+          <p><strong>${content.time}:</strong> ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}</p>
+          <p><strong>${content.services}:</strong></p>
+          <ul>${serviceList}</ul>
+          <p><strong>${content.total}:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
+        </div>
+        <a class="button" href="${manageUrl}">${content.button}</a>
+      </div>
+    </body>
+    </html>`;
+}
+
 // ─── SEND HELPERS (fire-and-forget, never throw) ─────────
 
-async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
     try {
         await emailTransporter.sendMail({
             to,
@@ -333,17 +423,21 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
             subject,
             html,
         });
+        return true;
     } catch (err) {
         logger.error({ err, to }, "Failed to send booking notification email");
+        return false;
     }
 }
 
-async function sendWhatsapp(phone: string, text: string): Promise<void> {
+async function sendWhatsapp(phone: string, text: string): Promise<boolean> {
     try {
         const payload: TextOnlyMessage = { messageType: "text", to: phone, text };
         await wasender.send(payload);
+        return true;
     } catch (err) {
         logger.error({ err, phone }, "Failed to send booking WhatsApp notification");
+        return false;
     }
 }
 
@@ -358,6 +452,39 @@ function buildWhatsappText(data: BookingNotificationData, intro: string): string
         `🕐 ${formatTime(data.startAt)} – ${formatTime(data.endAt)}`,
         `✂️ ${services}`,
         `💰 ${formatPrice(data.totalPriceCents)} Bs`,
+    ].join("\n");
+}
+
+function buildTodayReminderWhatsappText(data: BookingReminderData): string {
+    const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
+    const services = data.serviceNames.join(", ");
+    const manageUrl = getCustomerManageBookingUrl(data.companySlug);
+    if (locale === "en") {
+        return [
+            `🔔 Hi ${data.customerName || ""}, this is a reminder that your appointment is today.`,
+            ``,
+            `📍 ${data.companyName}`,
+            `👤 ${data.staffName || "Not assigned"}`,
+            `📅 ${formatDate(data.startAt, locale)}`,
+            `🕐 ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}`,
+            `✂️ ${services}`,
+            `💰 ${formatPrice(data.totalPriceCents)} Bs`,
+            ``,
+            `Manage your appointment: ${manageUrl}`,
+        ].join("\n");
+    }
+
+    return [
+        `🔔 Hola ${data.customerName || ""}, te recordamos que tienes una cita hoy.`,
+        ``,
+        `📍 ${data.companyName}`,
+        `👤 ${data.staffName || "No asignado"}`,
+        `📅 ${formatDate(data.startAt, locale)}`,
+        `🕐 ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}`,
+        `✂️ ${services}`,
+        `💰 ${formatPrice(data.totalPriceCents)} Bs`,
+        ``,
+        `Gestiona tu cita: ${manageUrl}`,
     ].join("\n");
 }
 
@@ -473,4 +600,38 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
             void sendWhatsapp(phone, text);
         }
     }
+}
+
+/**
+ * Send reminder for bookings occurring today.
+ * Prefers WhatsApp if a phone number exists; falls back to email.
+ */
+export async function notifyBookingTodayReminder(
+    data: BookingReminderData,
+): Promise<{ sent: boolean; channel?: ReminderChannel; reason?: string }> {
+    const customerPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
+    const customerEmail = normalizeEmail(data.customerEmail);
+    const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
+
+    if (customerPhone) {
+        const text = buildTodayReminderWhatsappText(data);
+        const ok = await sendWhatsapp(customerPhone, text);
+        return ok
+            ? { sent: true, channel: "WHATSAPP" }
+            : { sent: false, reason: "WHATSAPP_SEND_FAILED" };
+    }
+
+    if (customerEmail) {
+        const html = bookingTodayReminderEmailHtml(data);
+        const subject =
+            locale === "en"
+                ? `Today's appointment reminder – ${data.companyName}`
+                : `Recordatorio de cita de hoy – ${data.companyName}`;
+        const ok = await sendEmail(customerEmail, subject, html);
+        return ok
+            ? { sent: true, channel: "EMAIL" }
+            : { sent: false, reason: "EMAIL_SEND_FAILED" };
+    }
+
+    return { sent: false, reason: "NO_CONTACT" };
 }

@@ -1,6 +1,9 @@
 import { CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { getCustomersWithBookingStats } from '../repositories/customer.repo';
+import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
+import { sendWhatsappText } from '../utils/whatsappSender';
+import { logger } from '../config/logger';
 
 // Runtime import to avoid compile-time type dependency in environments without installed typings.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -30,6 +33,14 @@ interface ImportSummary {
     skipped: Array<{ row: number; reason: string }>;
 }
 
+interface SendMassCustomerMessageInput {
+    message: string;
+    search?: string;
+}
+
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const WHATSAPP_MIN_INTERVAL_MS = 350;
+
 function normalizeEmail(email?: string | null): string | null {
     const value = (email || '').trim().toLowerCase();
     return value || null;
@@ -43,6 +54,17 @@ function normalizePhone(phone?: string | null): string | null {
 function normalizePrefix(prefix?: string | null): string {
     const value = (prefix || '591').replace(/\D/g, '');
     return value || '591';
+}
+
+function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
+    const cleanPhone = normalizePhone(phone);
+    if (!cleanPhone) return null;
+    const cleanPrefix = normalizePrefix(prefix || '591');
+    return `${cleanPrefix}${cleanPhone}`;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function getCellValue(row: Record<string, any>, keys: string[]): string {
@@ -117,6 +139,158 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function listCustomers(companyId: number, search?: string) {
     return getCustomersWithBookingStats(companyId, search);
+}
+
+export async function sendMassCustomerMessage(
+    companyId: number,
+    payload: SendMassCustomerMessageInput,
+) {
+    const message = (payload.message || '').trim();
+    const search = (payload.search || '').trim();
+
+    if (!message) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Message body is required',
+        };
+    }
+
+    if (message.length > 1500) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Message body cannot exceed 1500 characters',
+        };
+    }
+
+    const company = await prisma.company.findUnique({
+        where: { id: companyId, deleted_at: null },
+        select: { id: true, name: true },
+    });
+
+    if (!company) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Company not found',
+        };
+    }
+
+    const localeConfig = await prisma.configMessage.findUnique({
+        where: {
+            company_id_key: {
+                company_id: companyId,
+                key: DEFAULT_LANGUAGE_KEY,
+            },
+        },
+        select: { value: true },
+    });
+    const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+
+    const customers = await getCustomersWithBookingStats(companyId, search || undefined);
+    const seenWhatsappTargets = new Set<string>();
+    const seenEmailTargets = new Set<string>();
+
+    let whatsappSent = 0;
+    let emailSent = 0;
+    let noContact = 0;
+    let failed = 0;
+    let duplicatesSkipped = 0;
+    let lastWhatsappAt = 0;
+
+    const whatsappText =
+        locale === 'en'
+            ? `${company.name}\n\n${message}`
+            : `${company.name}\n\n${message}`;
+
+    for (const customer of customers) {
+        const whatsappTarget = buildFullPhone(customer.phonePrefix, customer.phone);
+        const emailTarget = normalizeEmail(customer.email);
+
+        if (whatsappTarget) {
+            if (seenWhatsappTargets.has(whatsappTarget)) {
+                duplicatesSkipped += 1;
+                continue;
+            }
+
+            const elapsed = Date.now() - lastWhatsappAt;
+            const waitMs = Math.max(0, WHATSAPP_MIN_INTERVAL_MS - elapsed);
+            if (waitMs > 0) {
+                await sleep(waitMs);
+            }
+
+            const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
+            if (waResult !== -1) {
+                whatsappSent += 1;
+                seenWhatsappTargets.add(whatsappTarget);
+                lastWhatsappAt = Date.now();
+                continue;
+            }
+            failed += 1;
+            continue;
+        }
+
+        if (emailTarget) {
+            if (seenEmailTargets.has(emailTarget)) {
+                duplicatesSkipped += 1;
+                continue;
+            }
+            const emailResult = await sendCustomerMassMessageEmail({
+                email: emailTarget,
+                companyName: company.name,
+                message,
+                locale,
+            });
+            if (emailResult === 1) {
+                emailSent += 1;
+                seenEmailTargets.add(emailTarget);
+            } else {
+                failed += 1;
+            }
+            continue;
+        }
+
+        noContact += 1;
+    }
+
+    const totalSent = whatsappSent + emailSent;
+    logger.info(
+        {
+            event: 'customer_mass_message_completed',
+            companyId,
+            companyName: company.name,
+            locale,
+            search: search || null,
+            totalCustomers: customers.length,
+            totalSent,
+            whatsappSent,
+            emailSent,
+            noContact,
+            failed,
+            duplicatesSkipped,
+            messageLength: message.length,
+        },
+        'Customer mass message completed',
+    );
+
+    return {
+        code: 200,
+        error: false,
+        message:
+            totalSent > 0
+                ? 'Mass message sent'
+                : 'No messages sent',
+        data: {
+            total_customers: customers.length,
+            sent_total: totalSent,
+            sent_whatsapp: whatsappSent,
+            sent_email: emailSent,
+            skipped_no_contact: noContact,
+            skipped_duplicates: duplicatesSkipped,
+            failed,
+        },
+    };
 }
 
 export async function importCustomersFromFile(companyId: number, fileBuffer: Buffer) {

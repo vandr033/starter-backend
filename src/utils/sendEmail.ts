@@ -22,6 +22,15 @@ const maskEmail = (email: string) => {
     return `${local.slice(0, 2)}***@${domain}`;
 };
 
+function escapeHtml(input: string): string {
+    return input
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 export async function sendEmailCode(
   email: string,
   code: string
@@ -398,6 +407,55 @@ export async function sendStaffTimeOffRequestEmail(params: {
         return 1;
     } catch (error) {
         console.error('Error sending staff time-off request email:', error);
+        return -1;
+    }
+}
+
+export async function sendCustomerMassMessageEmail(params: {
+    email: string;
+    companyName: string;
+    message: string;
+    locale?: 'es' | 'en';
+}) {
+    const locale = params.locale === 'en' ? 'en' : 'es';
+    const subject =
+        locale === 'en'
+            ? `Message from ${params.companyName}`
+            : `Mensaje de ${params.companyName}`;
+    const title = locale === 'en' ? 'New message for you' : 'Nuevo mensaje para ti';
+    const intro =
+        locale === 'en'
+            ? `You received a message from ${params.companyName}:`
+            : `Recibiste un mensaje de ${params.companyName}:`;
+    const messageHtml = escapeHtml(params.message).replace(/\r?\n/g, '<br/>');
+
+    try {
+        await transporter.sendMail({
+            to: params.email,
+            from: process.env.MAIL_FROM!,
+            subject,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 620px; margin: 0 auto; padding: 20px; background: #f8fafc;">
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
+                        <h2 style="margin-top: 0;">${title}</h2>
+                        <p>${intro}</p>
+                        <div style="margin-top: 16px; background: #f8fafc; border-radius: 8px; padding: 14px;">${messageHtml}</div>
+                    </div>
+                </div>
+            `,
+        });
+
+        return 1;
+    } catch (error) {
+        logger.error(
+            {
+                event: 'customer_mass_message_email_failed',
+                to: maskEmail(params.email),
+                companyName: params.companyName,
+                err: error,
+            },
+            'Error sending customer mass message email',
+        );
         return -1;
     }
 }

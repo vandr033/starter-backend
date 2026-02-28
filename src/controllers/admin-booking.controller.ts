@@ -396,3 +396,53 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
 
     return res.status(result.code).json(result);
 }
+
+/**
+ * GET /api/admin/bookings/reminders/today/preview
+ * Returns today's bookings reminder candidates.
+ */
+export async function getTodayReminderPreview(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await AdminBookingService.getTodayReminderPreview(companyId);
+    return res.status(result.code).json(result);
+}
+
+/**
+ * POST /api/admin/bookings/:id/reminders/today
+ * Sends today's reminder for a specific booking.
+ */
+export async function sendTodayReminder(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const bookingId = parseInt(req.params.id as string);
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (isNaN(bookingId)) {
+        mensaje = {
+            code: 400,
+            message: 'Invalid booking ID',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await AdminBookingService.sendTodayReminderForBooking(companyId, bookingId);
+    return res.status(result.code).json(result);
+}

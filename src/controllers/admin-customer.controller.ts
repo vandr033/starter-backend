@@ -59,3 +59,28 @@ export async function downloadImportTemplate(req: AuthenticatedRequest, res: Res
         return res.status(500).json({ code: 500, error: true, message: error.message || 'Internal server error' });
     }
 }
+
+export async function sendMassMessage(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const { message, search } = req.body as { message?: string; search?: string };
+
+        if (!companyId) {
+            return res.status(400).json({
+                code: 400,
+                error: true,
+                message: 'Company context not found',
+            });
+        }
+
+        const result = await CustomerService.sendMassCustomerMessage(companyId, {
+            message: message || '',
+            search: search || '',
+        });
+
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error sending mass customer message:', error);
+        return res.status(500).json({ code: 500, error: true, message: error.message || 'Internal server error' });
+    }
+}

@@ -4,6 +4,12 @@ import { CompanyUserRole } from '@prisma/client';
 import { getAuth } from '../config/auth';
 import bcrypt from 'bcryptjs';
 import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
+import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
+
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const DEFAULT_LANGUAGE_VALUE: 'es' | 'en' = 'es';
+const DEFAULT_LANGUAGE_LABEL = 'Default Language';
+const DEFAULT_LANGUAGE_DESCRIPTION = 'Default language for customer communications';
 
 /**
  * Generate a URL-friendly slug from a string
@@ -347,6 +353,27 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                 data: defaultHours
             });
 
+            await tx.configMessage.upsert({
+                where: {
+                    company_id_key: {
+                        company_id: shop.id,
+                        key: DEFAULT_LANGUAGE_KEY,
+                    },
+                },
+                update: {
+                    value: DEFAULT_LANGUAGE_VALUE,
+                    name: DEFAULT_LANGUAGE_LABEL,
+                    description: DEFAULT_LANGUAGE_DESCRIPTION,
+                },
+                create: {
+                    company_id: shop.id,
+                    key: DEFAULT_LANGUAGE_KEY,
+                    value: DEFAULT_LANGUAGE_VALUE,
+                    name: DEFAULT_LANGUAGE_LABEL,
+                    description: DEFAULT_LANGUAGE_DESCRIPTION,
+                },
+            });
+
             let ownerSummary: {
                 company_user_id: number;
                 user_id: string;
@@ -505,8 +532,10 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                     }
                 });
 
+                let ownerStaffProfileId: number;
+
                 if (existingOwnerStaffProfile) {
-                    await tx.staffProfile.update({
+                    const updatedOwnerStaffProfile = await tx.staffProfile.update({
                         where: { id: existingOwnerStaffProfile.id },
                         data: {
                             deleted_at: null,
@@ -515,8 +544,9 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                             is_bookable: ownerInput.is_bookable ?? false
                         }
                     });
+                    ownerStaffProfileId = updatedOwnerStaffProfile.id;
                 } else {
-                    await tx.staffProfile.create({
+                    const createdOwnerStaffProfile = await tx.staffProfile.create({
                         data: {
                             company_id: shop.id,
                             user_id: ownerUser.id,
@@ -525,7 +555,14 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                             status: 'ACTIVE'
                         }
                     });
+                    ownerStaffProfileId = createdOwnerStaffProfile.id;
                 }
+
+                await ensureDefaultStaffAvailabilityFromCompanyHours({
+                    companyId: shop.id,
+                    staffId: ownerStaffProfileId,
+                    db: tx,
+                });
 
                 ownerSummary = {
                     company_user_id: ownerCompanyUser.id,
@@ -1014,13 +1051,18 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
 
         // Create StaffProfile if role is OWNER, ADMIN, or STAFF
         if (['OWNER', 'ADMIN', 'STAFF'].includes(data.role)) {
-            await prisma.staffProfile.create({
+            const staffProfile = await prisma.staffProfile.create({
                 data: {
                     company_id: shopId,
                     user_id: user.id,
                     display_name: data.display_name || user.name,
                     is_bookable: data.is_bookable ?? true
                 }
+            });
+
+            await ensureDefaultStaffAvailabilityFromCompanyHours({
+                companyId: shopId,
+                staffId: staffProfile.id,
             });
         }
 

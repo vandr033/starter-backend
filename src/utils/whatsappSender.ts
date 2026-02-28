@@ -19,11 +19,15 @@ const wasender = createWasender(
 )
 
 export const sendWhatsappCode = async (phone: string, code: string) => {
+  return sendWhatsappText(phone, `Tu codigo de verificacion es: ${code}`)
+}
+
+export const sendWhatsappText = async (phone: string, text: string) => {
   try{
     const textPayload: TextOnlyMessage = {
       messageType: "text",
       to: phone,
-      text: `Tu codigo de verificacion es: ${code}`,
+      text,
     }
     const result = await wasender.send(textPayload)
     return result
