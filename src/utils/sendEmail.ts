@@ -3,11 +3,16 @@ import nodemailer from "nodemailer";
 import { User } from "better-auth/*";
 import { logger } from "../config/logger";
 const transporter = nodemailer.createTransport({
-    service:'gmail',
-    auth:{
-        user:process.env.MAIL_USER,
-        pass:process.env.MAIL_PASS
-    }
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.MAIL_USER,
+    pass: process.env.MAIL_PASS,
+  },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
 });
 
 const maskEmail = (email: string) => {
