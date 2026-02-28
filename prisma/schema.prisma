@@ -258,6 +258,7 @@ model Hours {
   updated_at  DateTime @updatedAt
   company     Company  @relation(fields: [company_id], references: [id])
 
+  @@index([company_id], map: "hours_company_id_idx")
   @@map("hours")
 }
 
