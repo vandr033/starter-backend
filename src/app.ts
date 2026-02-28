@@ -8,6 +8,7 @@ import { importEsm } from "./utils/importEsm";
 import { errorHandler } from "./middlewares/error";
 
 const app = express();
+app.set("trust proxy", 1);
 
 const healthHandler = (_req: express.Request, res: express.Response) => {
   res.status(200).json({

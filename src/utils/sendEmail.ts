@@ -1,6 +1,7 @@
 // src/services/emailSender.ts
 import nodemailer from "nodemailer";
 import { User } from "better-auth/*";
+import { logger } from "../config/logger";
 const transporter = nodemailer.createTransport({
     service:'gmail',
     auth:{
@@ -8,6 +9,13 @@ const transporter = nodemailer.createTransport({
         pass:process.env.MAIL_PASS
     }
 });
+
+const maskEmail = (email: string) => {
+    const [local, domain] = email.split("@");
+    if (!local || !domain) return email;
+    if (local.length <= 2) return `${local[0] ?? "*"}*@${domain}`;
+    return `${local.slice(0, 2)}***@${domain}`;
+};
 
 export async function sendEmailCode(
   email: string,
@@ -174,7 +182,7 @@ export async function sendAdminTempPasswordInviteEmail(params: {
     const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/admin/login`;
 
     try {
-        await transporter.sendMail({
+        const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
             subject: `Acceso temporal a ${companyName}`,
@@ -196,9 +204,32 @@ export async function sendAdminTempPasswordInviteEmail(params: {
                 </div>
             `,
         });
+        logger.info(
+            {
+                event: "admin_temp_password_invite_sent",
+                to: maskEmail(email),
+                companyName,
+                loginUrl: safeLoginUrl,
+                tempPasswordLength: temporaryPassword.length,
+                messageId: info.messageId,
+                accepted: info.accepted,
+                rejected: info.rejected,
+                response: info.response,
+            },
+            "Admin temp password invite email sent",
+        );
         return 1;
     } catch (error) {
-        console.error('Error sending admin temp password invite email:', error);
+        logger.error(
+            {
+                event: "admin_temp_password_invite_failed",
+                to: maskEmail(email),
+                companyName,
+                loginUrl: safeLoginUrl,
+                err: error,
+            },
+            "Error sending admin temp password invite email",
+        );
         return -1;
     }
 }
