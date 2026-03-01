@@ -34,11 +34,17 @@ interface BookingNotificationData {
 }
 
 export type ReminderChannel = "WHATSAPP" | "EMAIL";
+export type DirectNotificationChannel = "AUTO" | ReminderChannel;
 type SupportedLocale = "es" | "en";
 
 interface BookingReminderData extends BookingNotificationData {
     companySlug?: string | null;
     locale?: SupportedLocale;
+}
+
+interface BookingNoShowNotificationData extends BookingReminderData {
+    preferredChannel?: DirectNotificationChannel;
+    customMessage?: string | null;
 }
 
 type InternalRecipientRole = "staff" | "owner";
@@ -488,6 +494,94 @@ function buildTodayReminderWhatsappText(data: BookingReminderData): string {
     ].join("\n");
 }
 
+function buildNoShowDefaultMessage(data: BookingNoShowNotificationData): string {
+    const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
+    const manageUrl = getCustomerManageBookingUrl(data.companySlug);
+    if (locale === "en") {
+        return [
+            `Hi ${data.customerName || "there"},`,
+            `we marked your appointment as no-show.`,
+            `If you want to reschedule, please use this link: ${manageUrl}`,
+        ].join(" ");
+    }
+
+    return [
+        `Hola ${data.customerName || ""},`,
+        `marcamos tu reserva como no asistida.`,
+        `Si deseas reagendar, ingresa a este enlace por favor: ${manageUrl}`,
+    ].join(" ");
+}
+
+function escapeHtml(value: string): string {
+    return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: string): string {
+    const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
+    const serviceList = data.serviceNames.map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+    const localized = locale === "en"
+        ? {
+            title: "No-show notice",
+            greeting: `Hi ${escapeHtml(data.customerName || "")},`,
+            company: "Business",
+            staff: "Professional",
+            date: "Date",
+            time: "Time",
+            services: "Services",
+            total: "Total",
+        }
+        : {
+            title: "Aviso de no asistencia",
+            greeting: `Hola ${escapeHtml(data.customerName || "")},`,
+            company: "Negocio",
+            staff: "Profesional",
+            date: "Fecha",
+            time: "Hora",
+            services: "Servicios",
+            total: "Total",
+        };
+
+    const formattedMessage = escapeHtml(message).replace(/\n/g, "<br />");
+
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${localized.title}</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f4f4f4; }
+        .container { background-color: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header h1 { color: #7c2d12; font-size: 22px; margin-bottom: 16px; }
+        .details { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .details p { margin: 5px 0; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header"><h1>${localized.title}</h1></div>
+        <p>${localized.greeting}</p>
+        <p>${formattedMessage}</p>
+        <div class="details">
+          <p><strong>${localized.company}:</strong> ${escapeHtml(data.companyName)}</p>
+          <p><strong>${localized.staff}:</strong> ${escapeHtml(data.staffName || "")}</p>
+          <p><strong>${localized.date}:</strong> ${formatDate(data.startAt, locale)}</p>
+          <p><strong>${localized.time}:</strong> ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}</p>
+          <p><strong>${localized.services}:</strong></p>
+          <ul>${serviceList}</ul>
+          <p><strong>${localized.total}:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
+        </div>
+      </div>
+    </body>
+    </html>`;
+}
+
 // ─── PUBLIC API ──────────────────────────────────────────
 
 /**
@@ -631,6 +725,54 @@ export async function notifyBookingTodayReminder(
         return ok
             ? { sent: true, channel: "EMAIL" }
             : { sent: false, reason: "EMAIL_SEND_FAILED" };
+    }
+
+    return { sent: false, reason: "NO_CONTACT" };
+}
+
+/**
+ * Send no-show notification with manual channel selection and optional custom text.
+ * AUTO prefers WhatsApp and falls back to email.
+ */
+export async function notifyBookingNoShow(
+    data: BookingNoShowNotificationData,
+): Promise<{ sent: boolean; channel?: ReminderChannel; reason?: string }> {
+    const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
+    const customerPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
+    const customerEmail = normalizeEmail(data.customerEmail);
+    const preferred = data.preferredChannel || "AUTO";
+    const message = (data.customMessage || "").trim() || buildNoShowDefaultMessage(data);
+
+    if (preferred === "WHATSAPP") {
+        if (!customerPhone) return { sent: false, reason: "NO_WHATSAPP_CONTACT" };
+        const ok = await sendWhatsapp(customerPhone, message);
+        return ok ? { sent: true, channel: "WHATSAPP" } : { sent: false, reason: "WHATSAPP_SEND_FAILED" };
+    }
+
+    if (preferred === "EMAIL") {
+        if (!customerEmail) return { sent: false, reason: "NO_EMAIL_CONTACT" };
+        const subject =
+            locale === "en"
+                ? `No-show notice – ${data.companyName}`
+                : `Aviso de no asistencia – ${data.companyName}`;
+        const html = bookingNoShowEmailHtml(data, message);
+        const ok = await sendEmail(customerEmail, subject, html);
+        return ok ? { sent: true, channel: "EMAIL" } : { sent: false, reason: "EMAIL_SEND_FAILED" };
+    }
+
+    if (customerPhone) {
+        const ok = await sendWhatsapp(customerPhone, message);
+        if (ok) return { sent: true, channel: "WHATSAPP" };
+    }
+
+    if (customerEmail) {
+        const subject =
+            locale === "en"
+                ? `No-show notice – ${data.companyName}`
+                : `Aviso de no asistencia – ${data.companyName}`;
+        const html = bookingNoShowEmailHtml(data, message);
+        const ok = await sendEmail(customerEmail, subject, html);
+        return ok ? { sent: true, channel: "EMAIL" } : { sent: false, reason: "EMAIL_SEND_FAILED" };
     }
 
     return { sent: false, reason: "NO_CONTACT" };

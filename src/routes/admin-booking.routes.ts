@@ -30,6 +30,14 @@ router.post(
     AdminBookingController.sendTodayReminder
 );
 
+// POST /api/admin/bookings/:id/notifications/no-show - Send no-show notification for one booking
+router.post(
+    '/:id/notifications/no-show',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    AdminBookingController.sendNoShowNotification
+);
+
 // PUT /api/admin/bookings/:id - Update booking (staff can update their own)
 router.put('/:id', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.updateBooking);
 

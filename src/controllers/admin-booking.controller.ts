@@ -446,3 +446,58 @@ export async function sendTodayReminder(req: AuthenticatedRequest, res: Response
     const result = await AdminBookingService.sendTodayReminderForBooking(companyId, bookingId);
     return res.status(result.code).json(result);
 }
+
+/**
+ * POST /api/admin/bookings/:id/notifications/no-show
+ * Sends no-show notification for a specific booking.
+ */
+export async function sendNoShowNotification(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const bookingId = parseInt(req.params.id as string);
+    const { channel, message } = req.body || {};
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (isNaN(bookingId)) {
+        mensaje = {
+            code: 400,
+            message: 'Invalid booking ID',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (channel !== undefined) {
+        const allowed = ['AUTO', 'WHATSAPP', 'EMAIL'];
+        if (typeof channel !== 'string' || !allowed.includes(channel)) {
+            mensaje = {
+                code: 400,
+                message: 'Invalid notification channel',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+    }
+
+    if (message !== undefined && typeof message !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'Invalid message format',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await AdminBookingService.sendNoShowNotificationForBooking(companyId, bookingId, {
+        channel,
+        message,
+    });
+    return res.status(result.code).json(result);
+}

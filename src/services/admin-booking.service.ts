@@ -8,8 +8,9 @@ import {
     notifyBookingUpdated,
     notifyBookingCancelled,
     notifyBookingTodayReminder,
-    ReminderChannel,
+    notifyBookingNoShow,
 } from '../utils/bookingNotifications';
+import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookingNotifications';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -18,11 +19,13 @@ interface AdminBookingResult extends MensajeApi {
 const REMINDER_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const WASENDER_MIN_INTERVAL_MS = 350;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
+const NO_SHOW_NOTE_MARKER = '[NO_SHOW]';
 
 const reminderSentAtCache = new Map<string, number>();
 const reminderLastWhatsappAtByCompany = new Map<number, number>();
 
 type CustomerReminderChannel = ReminderChannel | 'NONE';
+export type NoShowNotificationChannel = DirectNotificationChannel;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -127,6 +130,10 @@ function resolveChannel(contact: {
     if (contact.customerPhone) return 'WHATSAPP';
     if (contact.customerEmail) return 'EMAIL';
     return 'NONE';
+}
+
+function isNoShowMarked(notes?: string | null): boolean {
+    return (notes || '').includes(NO_SHOW_NOTE_MARKER);
 }
 
 function reminderCacheKey(companyId: number, bookingId: number, channel: ReminderChannel, dateKey: string): string {
@@ -547,7 +554,7 @@ export async function updateBooking(
                 totalPriceCents: updatedBooking.total_price_cents || 0,
             };
 
-            if (updates.status === BookingStatus.CANCELLED) {
+            if (updates.status === BookingStatus.CANCELLED && !isNoShowMarked(updatedBooking.notes)) {
                 void notifyBookingCancelled(notificationData);
             } else if (updates.start_at || updates.staff_id || updates.service_ids) {
                 void notifyBookingUpdated(notificationData);
@@ -720,6 +727,169 @@ export async function createBooking(
         };
     } catch (error: any) {
         console.error('Error creating booking:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+export async function sendNoShowNotificationForBooking(
+    companyId: number,
+    bookingId: number,
+    options: { channel?: NoShowNotificationChannel; message?: string | null }
+): Promise<AdminBookingResult> {
+    try {
+        const company = await prisma.company.findUnique({
+            where: { id: companyId, deleted_at: null },
+            select: { id: true, name: true, slug: true },
+        });
+
+        if (!company) {
+            return {
+                code: 404,
+                message: 'Company not found',
+                error: true,
+            };
+        }
+
+        const languageConfig = await prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        });
+        const locale: 'en' | 'es' = (languageConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+
+        const booking = await prisma.booking.findFirst({
+            where: {
+                id: bookingId,
+                company_id: companyId,
+                deleted_at: null,
+            },
+            include: {
+                customer: {
+                    include: {
+                        user: {
+                            select: {
+                                email: true,
+                                name: true,
+                                first_name: true,
+                                last_name: true,
+                                phoneNumber: true,
+                                phone_prefix: true,
+                            },
+                        },
+                    },
+                },
+                staff: {
+                    select: {
+                        display_name: true,
+                    },
+                },
+                booking_services: {
+                    select: {
+                        service_name_snapshot: true,
+                    },
+                    orderBy: { position: 'asc' },
+                },
+            },
+        });
+
+        if (!booking) {
+            return {
+                code: 404,
+                message: 'Booking not found',
+                error: true,
+            };
+        }
+
+        const isMarkedAsNoShow = booking.status === BookingStatus.CANCELLED && isNoShowMarked(booking.notes);
+        if (!isMarkedAsNoShow) {
+            return {
+                code: 400,
+                message: 'Booking must be marked as no-show before sending this notification',
+                error: true,
+            };
+        }
+
+        const customerEmail =
+            normalizeEmail(booking.customer?.user?.email) ||
+            normalizeEmail(booking.client_email);
+        const customerPhone =
+            normalizePhone(booking.customer?.user?.phoneNumber) ||
+            normalizePhone(booking.client_phone_number);
+        const customerPhonePrefix =
+            (booking.customer?.user?.phone_prefix || booking.client_phone_prefix || '').replace(/\D/g, '') || null;
+        const customerName =
+            booking.customer?.user?.first_name && booking.customer?.user?.last_name
+                ? `${booking.customer.user.first_name} ${booking.customer.user.last_name}`
+                : booking.customer?.user?.name || booking.client_name || 'Cliente';
+
+        const preferred = options.channel || 'AUTO';
+        const supportedChannels: NoShowNotificationChannel[] = ['AUTO', 'WHATSAPP', 'EMAIL'];
+        if (!supportedChannels.includes(preferred)) {
+            return {
+                code: 400,
+                message: 'Invalid notification channel',
+                error: true,
+            };
+        }
+
+        const customMessage = (options.message || '').trim() || undefined;
+
+        const sendResult = await notifyBookingNoShow({
+            companyId,
+            bookingId: booking.id,
+            customerEmail,
+            customerPhone,
+            customerPhonePrefix,
+            customerName,
+            companyName: company.name,
+            companySlug: company.slug,
+            staffName: booking.staff?.display_name || '',
+            serviceNames: booking.booking_services
+                .map((s) => s.service_name_snapshot)
+                .filter((name): name is string => Boolean(name)),
+            startAt: booking.start_at,
+            endAt: booking.end_at,
+            totalPriceCents: booking.total_price_cents,
+            locale,
+            preferredChannel: preferred,
+            customMessage,
+        });
+
+        if (!sendResult.sent) {
+            const status = sendResult.reason?.startsWith('NO_') ? 'SKIPPED' : 'FAILED';
+            return {
+                code: 200,
+                message: 'No-show notification was not sent',
+                error: false,
+                data: {
+                    booking_id: booking.id,
+                    status,
+                    reason: sendResult.reason || 'SEND_FAILED',
+                },
+            };
+        }
+
+        return {
+            code: 200,
+            message: 'No-show notification sent',
+            error: false,
+            data: {
+                booking_id: booking.id,
+                status: 'SENT',
+                channel: sendResult.channel,
+            },
+        };
+    } catch (error: any) {
+        console.error('Error sending no-show notification:', error);
         return {
             code: 500,
             message: 'Internal server error',
