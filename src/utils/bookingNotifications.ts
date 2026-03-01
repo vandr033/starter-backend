@@ -4,12 +4,23 @@ import { prisma } from "../prisma/client";
 import { logger } from "../config/logger";
 import { CompanyUserRole } from "@prisma/client";
 
+const smtpHost = process.env.MAIL_HOST || "smtp.gmail.com";
+const smtpPort = Number(process.env.MAIL_PORT || 587);
+const smtpSecure =
+    (process.env.MAIL_SECURE || "").toLowerCase() === "true" || smtpPort === 465;
+
 const emailTransporter = nodemailer.createTransport({
-    service: "gmail",
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    requireTLS: !smtpSecure,
     auth: {
         user: process.env.MAIL_USER,
         pass: process.env.MAIL_PASS,
     },
+    connectionTimeout: Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 15000),
+    greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 15000),
+    socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000),
 });
 
 const wasenderApiKey = process.env.WASENDER_API_KEY!;
@@ -422,6 +433,14 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
 // ─── SEND HELPERS (fire-and-forget, never throw) ─────────
 
 async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS || !process.env.MAIL_FROM) {
+        logger.warn(
+            { to },
+            "Booking email skipped: MAIL_USER/MAIL_PASS/MAIL_FROM are not fully configured"
+        );
+        return false;
+    }
+
     try {
         await emailTransporter.sendMail({
             to,
@@ -431,7 +450,12 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
         });
         return true;
     } catch (err) {
-        logger.error({ err, to }, "Failed to send booking notification email");
+        const code = (err as { code?: string })?.code;
+        if (code === "ETIMEDOUT" || code === "ECONNECTION") {
+            logger.warn({ err, to }, "Booking notification email timed out");
+        } else {
+            logger.error({ err, to }, "Failed to send booking notification email");
+        }
         return false;
     }
 }

@@ -18,12 +18,13 @@ export const getAllCompanies = async () => {
   }
 };
 
-const BACKEND_BASE_URL = process.env.BASE_URL || 'http://localhost:3001';
+const BACKEND_BASE_URL = (process.env.BASE_URL || '').trim();
 
 /** Turn a relative path like `/api/storage/...` into a full URL */
 function resolveImageUrl(url: string | null | undefined): string {
   if (!url) return '';
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (!BACKEND_BASE_URL) return url;
   return `${BACKEND_BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
 }
 
@@ -311,4 +312,3 @@ export const getCompanyStatus = async (slug: string) => {
     return buildServiceErrorResponse('company', 'get status', error);
   }
 };
-
