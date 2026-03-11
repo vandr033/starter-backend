@@ -4,6 +4,7 @@ import * as BookingService from '../services/booking.service';
 import { logger } from '../config/logger';
 import { prisma } from '../prisma/client';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
+import { BookingSource } from '@prisma/client';
 
 let mensaje: MensajeApi;
 
@@ -32,6 +33,7 @@ export async function createCustomerBooking(req: AuthenticatedRequest, res: Resp
             payment_method,
             notes,
             qr_proof_image_url,
+            booking_source,
         } = req.body;
 
         // Validate required fields
@@ -91,6 +93,17 @@ export async function createCustomerBooking(req: AuthenticatedRequest, res: Resp
             };
             return res.status(400).json(mensaje);
         }
+
+        if (booking_source !== undefined) {
+            if (typeof booking_source !== 'string' || !Object.values(BookingSource).includes(booking_source as BookingSource)) {
+                mensaje = {
+                    code: 400,
+                    message: 'booking_source must be one of MARKETPLACE, SALON_SITE, ADMIN, MANUAL',
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+        }
         // Ensure customer profile exists for this authenticated user at this company.
         const customer = await prisma.customerProfile.upsert({
             where: {
@@ -138,6 +151,7 @@ export async function createCustomerBooking(req: AuthenticatedRequest, res: Resp
             payment_method,
             notes: notes || null,
             qr_proof_image_url: qr_proof_image_url || null,
+            booking_source: booking_source as BookingSource | undefined,
             ...clientData,
         });
 

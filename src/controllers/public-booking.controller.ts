@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as BookingService from '../services/booking.service';
 import { logger } from '../config/logger';
+import { BookingSource } from '@prisma/client';
 
 let mensaje: MensajeApi;
 
@@ -25,6 +26,7 @@ export async function createPublicBooking(req: Request, res: Response) {
             client_phone_number,
             // QR proof for QR payments
             qr_proof_image_url,
+            booking_source,
         } = req.body;
 
         // Validate required fields
@@ -127,6 +129,17 @@ export async function createPublicBooking(req: Request, res: Response) {
             return res.status(400).json(mensaje);
         }
 
+        if (booking_source !== undefined) {
+            if (typeof booking_source !== 'string' || !Object.values(BookingSource).includes(booking_source as BookingSource)) {
+                mensaje = {
+                    code: 400,
+                    message: 'booking_source must be one of MARKETPLACE, SALON_SITE, ADMIN, MANUAL',
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+        }
+
         // Create the booking
         const result = await BookingService.createPublicBooking({
             company_id,
@@ -140,6 +153,7 @@ export async function createPublicBooking(req: Request, res: Response) {
             client_phone_prefix: client_phone_prefix || '591', // Default to Bolivia
             client_phone_number: client_phone_number ? client_phone_number.trim() : null,
             qr_proof_image_url: qr_proof_image_url || null,
+            booking_source: booking_source as BookingSource | undefined,
         });
 
         return res.status(result.code).json(result);

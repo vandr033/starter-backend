@@ -1,12 +1,49 @@
 import * as UserRepo from "../repositories/user.repo";
 import * as VerificationRepo from "../repositories/verification.repo";
 import { MensajeApi } from "../types/MensajeApi";
-import { generateNumericCode, OTP_TTL_MINUTES } from "../utils/verification";
+import {
+    generateNumericCode,
+    OTP_RESEND_COOLDOWN_SECONDS,
+    OTP_TTL_MINUTES,
+} from "../utils/verification";
 import { VerificationChannel, VerificationPurpose } from "../types/verification-enums";
 import bcrypt from "bcryptjs";
 import { sendWhatsappCode } from "../utils/whatsappSender";
 import { sendEmailCode } from "../utils/sendEmail";
 import { prisma } from "../prisma/client";
+
+function getOtpResendCooldownSeconds(): number {
+    const safe = Number.isFinite(OTP_RESEND_COOLDOWN_SECONDS) ? OTP_RESEND_COOLDOWN_SECONDS : 60;
+    return Math.max(1, Math.trunc(safe));
+}
+
+async function ensureProfileOtpResendAllowed(params: {
+    channel: VerificationChannel;
+    identifier: string;
+}): Promise<MensajeApi | null> {
+    const latest = await VerificationRepo.getLatestVerification(
+        params.channel,
+        VerificationPurpose.PROFILE_UPDATE,
+        params.identifier,
+    );
+
+    if (!latest) return null;
+
+    const cooldownSeconds = getOtpResendCooldownSeconds();
+    const elapsedSeconds = Math.floor((Date.now() - latest.created_at.getTime()) / 1000);
+    if (elapsedSeconds >= cooldownSeconds) return null;
+
+    const retryAfter = Math.max(1, cooldownSeconds - elapsedSeconds);
+    return {
+        code: 429,
+        message: `Debes esperar ${retryAfter} segundos para reenviar el código`,
+        error: true,
+        data: {
+            retry_after_seconds: retryAfter,
+            resend_cooldown_seconds: cooldownSeconds,
+        },
+    };
+}
 
 export async function getProfile(userId: string): Promise<MensajeApi> {
     try {
@@ -169,6 +206,15 @@ export async function sendEmailChangeOtp(
 ): Promise<MensajeApi> {
     try {
         const trimmedEmail = newEmail.trim().toLowerCase();
+        const identifier = `${userId}:${trimmedEmail}`;
+
+        const resendGuard = await ensureProfileOtpResendAllowed({
+            channel: VerificationChannel.EMAIL,
+            identifier,
+        });
+        if (resendGuard) {
+            return resendGuard;
+        }
 
         // Check if email is already taken
         const existing = await UserRepo.getUserByEmail(trimmedEmail);
@@ -183,7 +229,7 @@ export async function sendEmailChangeOtp(
         await VerificationRepo.createVerification({
             channel: VerificationChannel.EMAIL,
             purpose: VerificationPurpose.PROFILE_UPDATE,
-            identifier: `${userId}:${trimmedEmail}`,
+            identifier,
             code_hash,
             expires_at,
         });
@@ -268,6 +314,16 @@ export async function sendPhoneChangeOtp(
     newPhone: string
 ): Promise<MensajeApi> {
     try {
+        const identifier = `${userId}:${newPhone}`;
+
+        const resendGuard = await ensureProfileOtpResendAllowed({
+            channel: VerificationChannel.WHATSAPP,
+            identifier,
+        });
+        if (resendGuard) {
+            return resendGuard;
+        }
+
         // Check if phone is already taken
         const existing = await prisma.user.findUnique({
             where: { phoneNumber: newPhone },
@@ -283,7 +339,7 @@ export async function sendPhoneChangeOtp(
         await VerificationRepo.createVerification({
             channel: VerificationChannel.WHATSAPP,
             purpose: VerificationPurpose.PROFILE_UPDATE,
-            identifier: `${userId}:${newPhone}`,
+            identifier,
             code_hash,
             expires_at,
         });

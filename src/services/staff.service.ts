@@ -33,7 +33,7 @@ export async function listStaff(companyId: number): Promise<StaffResult> {
         const transformedStaff = staff.map(s => ({
             id: s.id,
             display_name: s.display_name,
-            bio: s.bio,
+            bio: s.bio ?? '',
             image_url: s.image_url,
             is_bookable: s.is_bookable,
             status: s.status,
@@ -101,7 +101,10 @@ export async function getMyProfile(companyId: number, userId: string): Promise<S
             code: 200,
             message: 'Staff profile retrieved successfully',
             error: false,
-            data: profile,
+            data: {
+                ...profile,
+                bio: profile.bio ?? '',
+            },
         };
     } catch (error: any) {
         console.error('Error retrieving staff self profile:', error);
@@ -154,7 +157,7 @@ export async function updateMyProfile(
         await prisma.$transaction(async (tx) => {
             const staffUpdates: Record<string, any> = {};
             if (input.display_name !== undefined) staffUpdates.display_name = input.display_name;
-            if (input.bio !== undefined) staffUpdates.bio = input.bio || null;
+            if (input.bio !== undefined) staffUpdates.bio = input.bio;
 
             if (Object.keys(staffUpdates).length > 0) {
                 await tx.staffProfile.update({
@@ -352,7 +355,7 @@ export async function createStaff(
             companyId,
             userId: user.id,
             displayName: input.display_name,
-            bio: input.bio,
+            bio: input.bio ?? '',
             isBookable: false, // Not bookable until they accept the invite
             role,
             status: 'PENDING',
@@ -402,7 +405,7 @@ export async function createStaff(
             code: 201,
             message: 'Staff created and invite sent successfully',
             error: false,
-            data: completeStaff,
+            data: completeStaff ? { ...completeStaff, bio: completeStaff.bio ?? '' } : completeStaff,
         };
     } catch (error: any) {
         console.error('Error creating staff:', error);
@@ -487,7 +490,7 @@ export async function updateStaff(
             code: 200,
             message: 'Staff updated successfully',
             error: false,
-            data: updated,
+            data: updated ? { ...updated, bio: updated.bio ?? '' } : updated,
         };
     } catch (error: any) {
         console.error('Error updating staff:', error);

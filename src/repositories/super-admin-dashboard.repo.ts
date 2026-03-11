@@ -1,7 +1,15 @@
 import { prisma } from '../prisma/client';
-import { BookingStatus } from '@prisma/client';
+import { BookingSource, BookingStatus } from '@prisma/client';
 
 const NON_CANCELLED = { status: { not: BookingStatus.CANCELLED } };
+
+export type DashboardRangePreset = 'today' | '7d' | '30d';
+
+export interface DashboardRangeWindow {
+    preset: DashboardRangePreset;
+    start: Date;
+    end: Date;
+}
 
 function startOfDay(date: Date): Date {
     const d = new Date(date);
@@ -28,6 +36,26 @@ function startOfMonth(date: Date): Date {
     d.setDate(1);
     d.setHours(0, 0, 0, 0);
     return d;
+}
+
+export function getDashboardRangeWindow(preset: DashboardRangePreset): DashboardRangeWindow {
+    const now = new Date();
+    const end = now;
+
+    if (preset === 'today') {
+        return {
+            preset,
+            start: startOfDay(now),
+            end,
+        };
+    }
+
+    const days = preset === '7d' ? 7 : 30;
+    const start = new Date(now);
+    start.setDate(start.getDate() - (days - 1));
+    start.setHours(0, 0, 0, 0);
+
+    return { preset, start, end };
 }
 
 /** Platform-wide booking counts (no company filter) */
@@ -187,4 +215,62 @@ export async function getEntityCounts() {
     ]);
 
     return { activeShops, totalStaff, totalCustomers };
+}
+
+export async function getBookingsBySource(start: Date, end: Date) {
+    const rows = await prisma.booking.groupBy({
+        by: ['booking_source'],
+        where: {
+            deleted_at: null,
+            created_at: { gte: start, lte: end },
+            status: { not: BookingStatus.CANCELLED },
+        },
+        _count: { id: true },
+    });
+
+    const counts = {
+        marketplace: 0,
+        salonSite: 0,
+        admin: 0,
+        manual: 0,
+    };
+
+    for (const row of rows) {
+        if (row.booking_source === BookingSource.MARKETPLACE) counts.marketplace += row._count.id;
+        if (row.booking_source === BookingSource.SALON_SITE) counts.salonSite += row._count.id;
+        if (row.booking_source === BookingSource.ADMIN) counts.admin += row._count.id;
+        if (row.booking_source === BookingSource.MANUAL) counts.manual += row._count.id;
+    }
+
+    const total = counts.marketplace + counts.salonSite + counts.admin + counts.manual;
+
+    return {
+        ...counts,
+        total,
+    };
+}
+
+export async function getMarketplaceEventsInRange(start: Date, end: Date) {
+    return prisma.marketplaceEvent.findMany({
+        where: {
+            created_at: { gte: start, lte: end },
+        },
+        select: {
+            event_name: true,
+            payload: true,
+            created_at: true,
+        },
+        orderBy: { created_at: 'desc' },
+    });
+}
+
+export async function getGlobalServiceTypeNames(serviceTypeIds: number[]) {
+    if (serviceTypeIds.length === 0) return new Map<number, string>();
+
+    const rows = await prisma.globalServiceType.findMany({
+        where: { id: { in: serviceTypeIds } },
+        select: { id: true, name: true },
+    });
+
+    return new Map(rows.map((row) => [row.id, row.name]));
 }

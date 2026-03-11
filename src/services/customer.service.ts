@@ -1,9 +1,14 @@
 import { CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
-import { getCustomersWithBookingStats } from '../repositories/customer.repo';
+import {
+    getCustomerBookingHistory,
+    getCustomersWithBookingStats,
+    type CustomerWithStats,
+} from '../repositories/customer.repo';
 import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 import { logger } from '../config/logger';
+import axios from 'axios';
 
 // Runtime import to avoid compile-time type dependency in environments without installed typings.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -38,8 +43,15 @@ interface SendMassCustomerMessageInput {
     search?: string;
 }
 
+interface CustomerExportOptions {
+    search?: string;
+    requestedByUserId?: string;
+}
+
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const WHATSAPP_MIN_INTERVAL_MS = 350;
+const N8N_CUSTOMER_EXPORT_WEBHOOK_URL = (process.env.N8N_CUSTOMER_EXPORT_WEBHOOK_URL || '').trim();
+const N8N_CUSTOMER_EXPORT_TIMEOUT_MS = Number(process.env.N8N_CUSTOMER_EXPORT_TIMEOUT_MS || '10000');
 
 function normalizeEmail(email?: string | null): string | null {
     const value = (email || '').trim().toLowerCase();
@@ -120,6 +132,117 @@ function parseImportRows(buffer: Buffer): ParsedImportRow[] {
     });
 }
 
+function formatDateIso(date: Date | null | undefined): string {
+    if (!date) return '';
+    return date.toISOString();
+}
+
+function toCsvValue(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    const text = String(value).replace(/"/g, '""');
+    return /[",\n]/.test(text) ? `"${text}"` : text;
+}
+
+function buildCustomersCsv(customers: CustomerWithStats[]): string {
+    const headers = [
+        'name',
+        'email',
+        'phone_prefix',
+        'phone',
+        'total_bookings',
+        'completed_bookings',
+        'cancelled_bookings',
+        'no_show_bookings',
+        'total_spent_cents',
+        'avg_ticket_cents',
+        'last_booking_at',
+        'next_booking_at',
+        'favorite_staff',
+        'preferred_service',
+        'preferred_category',
+        'booking_frequency_per_month',
+    ];
+
+    const rows = customers.map((customer) => [
+        customer.name,
+        customer.email,
+        customer.phonePrefix,
+        customer.phone,
+        customer.totalBookings,
+        customer.completedBookings,
+        customer.cancelledBookings,
+        customer.noShowBookings,
+        customer.totalSpentCents,
+        customer.avgTicketCents,
+        formatDateIso(customer.lastBookingAt),
+        formatDateIso(customer.nextBookingAt),
+        customer.favoriteStaffName,
+        customer.preferredServiceName,
+        customer.preferredCategoryName,
+        customer.bookingFrequencyPerMonth,
+    ]);
+
+    return [headers, ...rows]
+        .map((row) => row.map((cell) => toCsvValue(cell)).join(','))
+        .join('\n');
+}
+
+async function triggerCustomerExportWebhook(params: {
+    companyId: number;
+    companyName: string;
+    requestedByUserId?: string;
+    search?: string;
+    customers: CustomerWithStats[];
+}) {
+    if (!N8N_CUSTOMER_EXPORT_WEBHOOK_URL) {
+        return { triggered: false };
+    }
+
+    const payload = {
+        company: {
+            id: params.companyId,
+            name: params.companyName,
+        },
+        requestedBy: {
+            userId: params.requestedByUserId || null,
+        },
+        filters: {
+            search: params.search || null,
+        },
+        exportedAt: new Date().toISOString(),
+        customers: params.customers.map((customer) => ({
+            customerKey: customer.customerKey,
+            name: customer.name,
+            email: customer.email,
+            phonePrefix: customer.phonePrefix,
+            phone: customer.phone,
+            totalBookings: customer.totalBookings,
+            completedBookings: customer.completedBookings,
+            cancelledBookings: customer.cancelledBookings,
+            noShowBookings: customer.noShowBookings,
+            totalSpentCents: customer.totalSpentCents,
+            avgTicketCents: customer.avgTicketCents,
+            lastBookingAt: formatDateIso(customer.lastBookingAt),
+            nextBookingAt: formatDateIso(customer.nextBookingAt),
+            favoriteStaffName: customer.favoriteStaffName,
+            preferredServiceName: customer.preferredServiceName,
+            preferredCategoryName: customer.preferredCategoryName,
+            bookingFrequencyPerMonth: customer.bookingFrequencyPerMonth,
+        })),
+    };
+
+    await axios.post(N8N_CUSTOMER_EXPORT_WEBHOOK_URL, payload, {
+        timeout: Number.isFinite(N8N_CUSTOMER_EXPORT_TIMEOUT_MS)
+            ? N8N_CUSTOMER_EXPORT_TIMEOUT_MS
+            : 10_000,
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    });
+
+    return { triggered: true };
+}
+
 async function ensureUniqueTempEmail(basePhone: string): Promise<string> {
     let attempt = 0;
     while (attempt < 1000) {
@@ -139,6 +262,93 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function listCustomers(companyId: number, search?: string) {
     return getCustomersWithBookingStats(companyId, search);
+}
+
+export async function getCustomersHistory(
+    companyId: number,
+    params: { customerKey: string; page: number; limit: number }
+) {
+    if (!params.customerKey || !params.customerKey.trim()) {
+        return {
+            code: 400,
+            error: true,
+            message: 'customer_key is required',
+        };
+    }
+
+    const result = await getCustomerBookingHistory({
+        companyId,
+        customerKey: params.customerKey.trim(),
+        page: params.page,
+        limit: params.limit,
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Customer booking history retrieved successfully',
+        data: result,
+    };
+}
+
+export async function exportCustomers(
+    companyId: number,
+    options: CustomerExportOptions = {},
+) {
+    const company = await prisma.company.findUnique({
+        where: { id: companyId, deleted_at: null },
+        select: { id: true, name: true, slug: true },
+    });
+
+    if (!company) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Company not found',
+        };
+    }
+
+    const customers = await getCustomersWithBookingStats(companyId, options.search || undefined);
+    const csv = buildCustomersCsv(customers);
+
+    try {
+        const webhookResult = await triggerCustomerExportWebhook({
+            companyId: company.id,
+            companyName: company.name,
+            requestedByUserId: options.requestedByUserId,
+            search: options.search,
+            customers,
+        });
+
+        return {
+            code: 200,
+            error: false,
+            message: 'Customer export generated',
+            data: {
+                csv,
+                fileName: `customers-${company.slug || company.id}-${Date.now()}.csv`,
+                webhookTriggered: webhookResult.triggered,
+                totalRows: customers.length,
+            },
+        };
+    } catch (error: any) {
+        logger.error(
+            {
+                event: 'customer_export_webhook_failed',
+                companyId,
+                requestedByUserId: options.requestedByUserId || null,
+                error: error?.message || String(error),
+            },
+            'Customer export webhook failed',
+        );
+
+        return {
+            code: 502,
+            error: true,
+            message: 'Customer export webhook failed',
+            technicalMessage: error?.message || String(error),
+        };
+    }
 }
 
 export async function sendMassCustomerMessage(

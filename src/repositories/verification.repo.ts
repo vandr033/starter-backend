@@ -22,6 +22,21 @@ export const getVerificationCode = (channel: VerificationChannel, purpose: Verif
     })
 }
 
+export const getLatestVerification = (
+    channel: VerificationChannel,
+    purpose: VerificationPurpose,
+    identifier: string
+) => {
+    return prisma.verificationCode.findFirst({
+        where: {
+            channel,
+            purpose,
+            identifier,
+        },
+        orderBy: { created_at: "desc" },
+    });
+}
+
 export const updateVerificationCode = (id: number, data: Prisma.VerificationCodeUpdateInput) => {
     return prisma.verificationCode.update({
         where: { id },

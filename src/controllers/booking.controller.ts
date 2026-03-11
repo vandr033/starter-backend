@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as BookingService from '../services/booking.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
+import { BookingSource } from '@prisma/client';
 
 let mensaje: MensajeApi;
 
@@ -186,7 +187,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         return res.status(401).json(mensaje);
     }
 
-    const { company_id, staff_id, service_ids, start_at, payment_method, notes } = req.body;
+    const { company_id, staff_id, service_ids, start_at, payment_method, notes, booking_source } = req.body;
 
     // Validate required fields
     if (!company_id || typeof company_id !== 'number') {
@@ -236,6 +237,17 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    if (booking_source !== undefined) {
+        if (typeof booking_source !== 'string' || !Object.values(BookingSource).includes(booking_source as BookingSource)) {
+            mensaje = {
+                code: 400,
+                message: 'booking_source must be one of MARKETPLACE, SALON_SITE, ADMIN, MANUAL',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+    }
+
     const result = await BookingService.createBooking({
         company_id,
         staff_id,
@@ -244,6 +256,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         payment_method,
         notes,
         user_id: user.id,
+        booking_source: booking_source as BookingSource | undefined,
     });
 
     return res.status(result.code).json(result);

@@ -56,6 +56,7 @@ model Company {
   theme_config         ThemeConfig?
 
   @@index([city, country_code, is_active])
+  @@index([is_active, city, state], map: "company_active_city_state_idx")
   @@index([company_type_id], map: "company_company_type_id_fkey")
   @@map("company")
 }
@@ -242,6 +243,7 @@ model Service {
   staff_services   StaffService[]
 
   @@index([company_id, is_active])
+  @@index([company_id, global_type_id, is_active], map: "service_company_global_active_idx")
   @@index([category_id, is_active, position])
   @@index([global_type_id], map: "service_global_type_id_fkey")
   @@map("service")
@@ -272,6 +274,7 @@ model Booking {
   client_phone_prefix String?           @db.VarChar(8)
   client_phone_number String?           @db.VarChar(32)
   booking_type        BookingType       @default(CUSTOMER)
+  booking_source      BookingSource     @default(SALON_SITE)
   start_at            DateTime
   end_at              DateTime
   status              BookingStatus     @default(CONFIRMED)
@@ -297,11 +300,22 @@ model Booking {
 
   @@index([company_id, staff_id, start_at, status])
   @@index([company_id, customer_id, start_at])
+  @@index([booking_source, created_at], map: "booking_source_created_at_idx")
   @@index([staff_id, start_at, end_at, status])
   @@index([created_by_user_id], map: "booking_created_by_user_id_fkey")
   @@index([customer_id], map: "booking_customer_id_fkey")
   @@index([updated_by_user_id], map: "booking_updated_by_user_id_fkey")
   @@map("booking")
+}
+
+model MarketplaceEvent {
+  id         Int      @id @default(autoincrement())
+  event_name String   @db.VarChar(64)
+  payload    Json
+  created_at DateTime @default(now())
+
+  @@index([event_name, created_at], map: "marketplace_event_name_created_at_idx")
+  @@map("marketplace_event")
 }
 
 model BookingService {
@@ -605,6 +619,13 @@ enum CompanyUserRole {
 enum BookingType {
   CUSTOMER
   BLOCK
+}
+
+enum BookingSource {
+  MARKETPLACE
+  SALON_SITE
+  ADMIN
+  MANUAL
 }
 
 enum BookingStatus {

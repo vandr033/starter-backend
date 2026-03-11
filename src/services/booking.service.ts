@@ -2,6 +2,8 @@ import { MensajeApi } from '../types/MensajeApi';
 import * as BookingRepo from '../repositories/booking.repo';
 import { prisma } from '../prisma/client';
 import { notifyBookingCreated } from '../utils/bookingNotifications';
+import { BookingSource } from '@prisma/client';
+import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 
 interface GetSlotsParams {
     company_id: number;
@@ -19,6 +21,20 @@ interface TimeSlot {
 
 interface GetSlotsResult extends MensajeApi {
     data?: TimeSlot[];
+}
+
+function toAnalyticsSource(bookingSource: BookingSource | undefined): 'marketplace' | 'salon_site' | 'admin' | 'manual' {
+    switch (bookingSource) {
+        case BookingSource.MARKETPLACE:
+            return 'marketplace';
+        case BookingSource.ADMIN:
+            return 'admin';
+        case BookingSource.MANUAL:
+            return 'manual';
+        case BookingSource.SALON_SITE:
+        default:
+            return 'salon_site';
+    }
 }
 
 /**
@@ -390,6 +406,7 @@ interface CreateBookingParams {
     payment_method: 'NONE' | 'CASH' | 'QR';
     notes?: string;
     user_id: string; // From authenticated session
+    booking_source?: BookingSource;
 }
 
 interface CreateBookingResult extends MensajeApi {
@@ -400,7 +417,7 @@ interface CreateBookingResult extends MensajeApi {
  * Create a new customer booking
  */
 export async function createBooking(params: CreateBookingParams): Promise<CreateBookingResult> {
-    const { company_id, staff_id, service_ids, start_at, payment_method, notes, user_id } = params;
+    const { company_id, staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source } = params;
 
     try {
         // 1. Validate company exists and is active
@@ -506,6 +523,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
                 notes,
                 created_by_user_id: user_id,
                 total_price_cents: totalPrice,
+                booking_source: booking_source ?? BookingSource.SALON_SITE,
             },
             serviceSnapshots
         );
@@ -529,6 +547,20 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
                 totalPriceCents: totalPrice,
             });
         }
+
+        const resolvedSource = booking_source ?? BookingSource.SALON_SITE;
+        void MarketplaceAnalyticsService.trackBookingStarted({
+            source: toAnalyticsSource(resolvedSource),
+            booking_source: resolvedSource,
+            company_id,
+            booking_id: booking?.id ?? null,
+            service_ids: service_ids,
+            staff_id,
+            start_at: startAt.toISOString(),
+            date: start_at.slice(0, 10),
+            time: start_at.slice(11, 16),
+            total_price_cents: totalPrice,
+        });
 
         return {
             code: 201,
@@ -678,6 +710,7 @@ interface CreateCustomerBookingParams {
     client_email: string | null;
     client_phone_prefix: string;
     client_phone_number: string | null;
+    booking_source?: BookingSource;
 }
 
 /**
@@ -755,6 +788,7 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
                 total_price_cents: totalPrice,
                 notes: params.notes,
                 created_by_user_id: params.created_by_user_id,
+                booking_source: params.booking_source ?? BookingSource.SALON_SITE,
             },
         });
 
@@ -789,6 +823,20 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             startAt: booking.start_at,
             endAt: endAt,
             totalPriceCents: totalPrice,
+        });
+
+        const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;
+        void MarketplaceAnalyticsService.trackBookingConfirmed({
+            source: toAnalyticsSource(resolvedSource),
+            booking_source: resolvedSource,
+            company_id: params.company_id,
+            booking_id: booking.id,
+            service_ids: params.service_ids,
+            staff_id: params.staff_id,
+            start_at: startAt.toISOString(),
+            date: params.start_at.slice(0, 10),
+            time: params.start_at.slice(11, 16),
+            total_price_cents: totalPrice,
         });
 
         return {
@@ -842,6 +890,7 @@ interface CreatePublicBookingParams {
     client_phone_prefix: string;
     client_phone_number?: string | null;
     qr_proof_image_url?: string | null;
+    booking_source?: BookingSource;
 }
 
 /**
@@ -919,6 +968,7 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
                 total_price_cents: totalPrice,
                 notes: params.notes,
                 created_by_user_id: undefined, // No user for guest bookings
+                booking_source: params.booking_source ?? BookingSource.SALON_SITE,
             },
         });
 
@@ -956,6 +1006,20 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
                 totalPriceCents: totalPrice,
             });
         }
+
+        const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;
+        void MarketplaceAnalyticsService.trackBookingConfirmed({
+            source: toAnalyticsSource(resolvedSource),
+            booking_source: resolvedSource,
+            company_id: params.company_id,
+            booking_id: booking.id,
+            service_ids: params.service_ids,
+            staff_id: params.staff_id,
+            start_at: startAt.toISOString(),
+            date: params.start_at.slice(0, 10),
+            time: params.start_at.slice(11, 16),
+            total_price_cents: totalPrice,
+        });
 
         return {
             code: 201,

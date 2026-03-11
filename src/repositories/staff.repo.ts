@@ -181,7 +181,7 @@ export async function createStaffProfile(data: {
             where: { id: deletedStaff.id },
             data: {
                 display_name: data.displayName,
-                bio: data.bio,
+                bio: data.bio ?? '',
                 is_bookable: data.isBookable ?? true,
                 status: data.status || 'ACTIVE',
                 invite_token: data.inviteToken,
@@ -215,7 +215,7 @@ export async function createStaffProfile(data: {
             company_id: data.companyId,
             user_id: data.userId,
             display_name: data.displayName,
-            bio: data.bio,
+            bio: data.bio ?? '',
             is_bookable: data.isBookable ?? true,
             status: data.status || 'ACTIVE',
             invite_token: data.inviteToken,

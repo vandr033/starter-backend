@@ -1,5 +1,5 @@
 import { prisma } from '../prisma/client';
-import { BookingStatus, StaffTimeOffStatus } from '@prisma/client';
+import { BookingSource, BookingStatus, StaffTimeOffStatus } from '@prisma/client';
 
 /**
  * Get bookings for a date range, optionally filtered by staff IDs
@@ -305,6 +305,7 @@ export interface CreateBookingData {
     notes?: string;
     created_by_user_id: string;
     total_price_cents: number;
+    booking_source?: BookingSource;
 }
 
 export interface ServiceSnapshot {
@@ -335,6 +336,7 @@ export async function createBookingWithServices(
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
                 booking_type: 'CUSTOMER',
+                booking_source: bookingData.booking_source ?? BookingSource.SALON_SITE,
             },
         });
 

@@ -13,6 +13,8 @@ const upload = multer({
 const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
 
 router.get('/', requireAuth, requireCompanyRole(adminRoles), AdminCustomerController.listCustomers);
+router.get('/history', requireAuth, requireCompanyRole(adminRoles), AdminCustomerController.getCustomerHistory);
+router.get('/export', requireAuth, requireCompanyRole(adminRoles), AdminCustomerController.exportCustomers);
 router.get(
     '/import/template',
     requireAuth,

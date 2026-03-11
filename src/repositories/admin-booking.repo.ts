@@ -1,5 +1,5 @@
 import { prisma } from '../prisma/client';
-import { BookingStatus, PaymentStatus, PaymentMethod, BookingType } from '@prisma/client';
+import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, BookingType } from '@prisma/client';
 
 /**
  * Get bookings with filters
@@ -345,6 +345,7 @@ export interface CreateWalkInData {
     created_by_user_id: string;
     total_price_cents: number;
     payment_method?: PaymentMethod;
+    booking_source?: BookingSource;
 }
 
 export async function createWalkInBooking(
@@ -377,6 +378,7 @@ export async function createWalkInBooking(
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
                 booking_type: BookingType.CUSTOMER,
+                booking_source: bookingData.booking_source ?? BookingSource.ADMIN,
             },
         });
 
@@ -495,6 +497,7 @@ export interface CreateCustomerBookingData {
     created_by_user_id: string;
     total_price_cents: number;
     payment_method?: PaymentMethod;
+    booking_source?: BookingSource;
 }
 
 export async function createCustomerBooking(
@@ -523,6 +526,7 @@ export async function createCustomerBooking(
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
                 booking_type: BookingType.CUSTOMER,
+                booking_source: bookingData.booking_source ?? BookingSource.ADMIN,
             },
         });
 

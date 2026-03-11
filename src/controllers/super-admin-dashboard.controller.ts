@@ -8,7 +8,18 @@ import * as SuperAdminDashboardService from '../services/super-admin-dashboard.s
  */
 export async function getDashboardMetrics(req: AuthenticatedRequest, res: Response) {
     try {
-        const result = await SuperAdminDashboardService.getDashboardMetrics();
+        const rangeRaw = typeof req.query.range === 'string' ? req.query.range : '7d';
+        const range = rangeRaw === 'today' || rangeRaw === '7d' || rangeRaw === '30d' ? rangeRaw : null;
+
+        if (!range) {
+            return res.status(400).json({
+                code: 400,
+                error: true,
+                message: 'range must be one of: today, 7d, 30d',
+            });
+        }
+
+        const result = await SuperAdminDashboardService.getDashboardMetrics(range);
         return res.status(result.code).json(result);
     } catch (error) {
         console.error('Error in super admin getDashboardMetrics:', error);

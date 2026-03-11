@@ -6,6 +6,9 @@ import { VerificationChannel } from "../types/verification-enums";
 export const OTP_LENGTH = 6;
 export const OTP_TTL_MINUTES = 5;
 export const PREREG_TTL_MINUTES = 30;
+export const OTP_RESEND_COOLDOWN_SECONDS = Number(
+  process.env.OTP_RESEND_COOLDOWN_SECONDS || process.env.NEXT_PUBLIC_OTP_RESEND_COOLDOWN_SECONDS || '60',
+);
 
 export function generateNumericCode(length = OTP_LENGTH): string {
   let code = "";

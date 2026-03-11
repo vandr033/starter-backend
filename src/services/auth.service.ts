@@ -4,6 +4,7 @@ import { MensajeApi } from "../types/MensajeApi";
 import {
   createPreRegToken,
   generateNumericCode,
+  OTP_RESEND_COOLDOWN_SECONDS,
   OTP_TTL_MINUTES,
   parsePreRegToken,
 } from "../utils/verification";
@@ -17,6 +18,41 @@ import { logger } from "../config/logger";
 
 let mensaje: MensajeApi;
 
+function getOtpResendCooldownSeconds(): number {
+  const safe = Number.isFinite(OTP_RESEND_COOLDOWN_SECONDS) ? OTP_RESEND_COOLDOWN_SECONDS : 60;
+  return Math.max(1, Math.trunc(safe));
+}
+
+async function ensureOtpResendAllowed(params: {
+  channel: VerificationChannel;
+  purpose: VerificationPurpose;
+  identifier: string;
+}): Promise<MensajeApi | null> {
+  const latest = await VerificationRepo.getLatestVerification(
+    params.channel,
+    params.purpose,
+    params.identifier,
+  );
+
+  if (!latest) return null;
+
+  const cooldownSeconds = getOtpResendCooldownSeconds();
+  const elapsedSeconds = Math.floor((Date.now() - latest.created_at.getTime()) / 1000);
+
+  if (elapsedSeconds >= cooldownSeconds) return null;
+
+  const retryAfter = Math.max(1, cooldownSeconds - elapsedSeconds);
+  return {
+    code: 429,
+    message: `Debes esperar ${retryAfter} segundos para reenviar el código`,
+    error: true,
+    data: {
+      retry_after_seconds: retryAfter,
+      resend_cooldown_seconds: cooldownSeconds,
+    },
+  };
+}
+
 // ────────────────────────────────────────────
 // REGISTRATION — Email OTP flow (no password)
 // ────────────────────────────────────────────
@@ -24,6 +60,15 @@ let mensaje: MensajeApi;
 export async function sendVerificationCodeEmail(email: string) {
   try {
     const trimmedEmail = email.trim().toLowerCase();
+
+    const resendGuard = await ensureOtpResendAllowed({
+      channel: VerificationChannel.EMAIL,
+      purpose: VerificationPurpose.CUSTOMER_SIGNUP,
+      identifier: trimmedEmail,
+    });
+    if (resendGuard) {
+      return resendGuard;
+    }
 
     const existing = await UserRepo.getUserByEmail(trimmedEmail);
     if (existing) {
@@ -205,6 +250,15 @@ export async function sendVerificationCodePhone(
   try {
     const normalizedPhone = normalizePhone(phone, phonePrefix);
 
+    const resendGuard = await ensureOtpResendAllowed({
+      channel: VerificationChannel.WHATSAPP,
+      purpose: VerificationPurpose.CUSTOMER_SIGNUP,
+      identifier: normalizedPhone,
+    });
+    if (resendGuard) {
+      return resendGuard;
+    }
+
     const existingUser = await UserRepo.getUserByPhone(phone, phonePrefix);
     if (existingUser) {
       throw new Error("User already exists");
@@ -309,6 +363,20 @@ export async function sendLoginOtpEmail(email: string): Promise<MensajeApi> {
         code: 200,
         message: "Si la cuenta existe, recibirás un código de verificación",
         error: false,
+      };
+    }
+
+    const resendGuard = await ensureOtpResendAllowed({
+      channel: VerificationChannel.EMAIL,
+      purpose: VerificationPurpose.LOGIN,
+      identifier: trimmedEmail,
+    });
+    if (resendGuard) {
+      return {
+        code: 200,
+        message: "Si la cuenta existe, recibirás un código de verificación",
+        error: false,
+        data: resendGuard.data,
       };
     }
 

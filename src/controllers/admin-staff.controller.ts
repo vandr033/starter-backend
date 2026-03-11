@@ -102,7 +102,7 @@ export async function updateMyProfile(req: AuthenticatedRequest, res: Response) 
         }
     }
 
-    if (bio !== undefined && typeof bio !== 'string') {
+    if (bio !== undefined && bio !== null && typeof bio !== 'string') {
         mensaje = {
             code: 400,
             message: 'bio must be a string',
@@ -149,7 +149,7 @@ export async function updateMyProfile(req: AuthenticatedRequest, res: Response) 
 
     const result = await StaffService.updateMyProfile(companyId, userId, {
         display_name: typeof display_name === 'string' ? display_name.trim() : undefined,
-        bio: typeof bio === 'string' ? bio.trim() : undefined,
+        bio: bio === undefined ? undefined : (typeof bio === 'string' ? bio.trim() : ''),
         first_name: typeof first_name === 'string' ? first_name.trim() : undefined,
         last_name: typeof last_name === 'string' ? last_name.trim() : undefined,
         phone: typeof phone === 'string' ? phone.trim() : undefined,
@@ -266,7 +266,7 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    if (bio && typeof bio !== 'string') {
+    if (bio !== undefined && bio !== null && typeof bio !== 'string') {
         mensaje = {
             code: 400,
             message: 'bio must be a string',
@@ -313,7 +313,7 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         role: role as CompanyUserRole | undefined,
         phone_prefix: phone_prefix?.trim(),
         phone: phone?.trim(),
-        bio: bio?.trim(),
+        bio: typeof bio === 'string' ? bio.trim() : '',
         is_bookable,
         service_ids,
         start_date,
@@ -371,7 +371,7 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         }
     }
 
-    if (bio !== undefined && typeof bio !== 'string') {
+    if (bio !== undefined && bio !== null && typeof bio !== 'string') {
         mensaje = {
             code: 400,
             message: 'bio must be a string',
@@ -433,7 +433,7 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
 
     const result = await StaffService.updateStaff(companyId, staffId, {
         display_name: display_name?.trim(),
-        bio: bio?.trim(),
+        bio: bio === undefined ? undefined : (typeof bio === 'string' ? bio.trim() : ''),
         image_url: image_url?.trim(),
         is_bookable,
         service_ids,

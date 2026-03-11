@@ -1,7 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as AdminBookingRepo from '../repositories/admin-booking.repo';
 import * as BookingRepo from '../repositories/booking.repo';
-import { BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
+import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import {
     notifyBookingCreated,
@@ -10,6 +10,7 @@ import {
     notifyBookingTodayReminder,
     notifyBookingNoShow,
 } from '../utils/bookingNotifications';
+import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookingNotifications';
 
 interface AdminBookingResult extends MensajeApi {
@@ -691,6 +692,7 @@ export async function createBooking(
                 created_by_user_id: createdByUserId,
                 total_price_cents: totalPrice,
                 payment_method: PaymentMethod.NONE,
+                booking_source: BookingSource.ADMIN,
             },
             serviceSnapshots
         );
@@ -716,6 +718,21 @@ export async function createBooking(
                 startAt,
                 endAt,
                 totalPriceCents: totalPrice,
+            });
+        }
+
+        if (booking?.id) {
+            void MarketplaceAnalyticsService.trackBookingConfirmed({
+                source: 'admin',
+                booking_source: BookingSource.ADMIN,
+                company_id: data.companyId,
+                booking_id: booking.id,
+                service_ids: data.service_ids,
+                staff_id: data.staff_id,
+                start_at: startAt.toISOString(),
+                date: data.start_at.slice(0, 10),
+                time: data.start_at.slice(11, 16),
+                total_price_cents: totalPrice,
             });
         }
 

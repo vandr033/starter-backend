@@ -16,6 +16,51 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
     }
 }
 
+export async function getCustomerHistory(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const customerKey = (req.query.customer_key as string | undefined) || '';
+        const page = Number(req.query.page || 1);
+        const limit = Number(req.query.limit || 20);
+
+        const result = await CustomerService.getCustomersHistory(companyId, {
+            customerKey,
+            page,
+            limit,
+        });
+
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error getting customer history:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
+export async function exportCustomers(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const search = req.query.search as string | undefined;
+        const requestedByUserId = req.authUser?.id;
+
+        const result = await CustomerService.exportCustomers(companyId, {
+            search: search || undefined,
+            requestedByUserId,
+        });
+
+        if (result.error || !result.data) {
+            return res.status(result.code).json(result);
+        }
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${result.data.fileName}"`);
+        res.setHeader('X-Customer-Export-Webhook', result.data.webhookTriggered ? 'triggered' : 'skipped');
+        return res.status(200).send(result.data.csv);
+    } catch (error: any) {
+        console.error('Error exporting customers:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
 export async function importCustomers(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
