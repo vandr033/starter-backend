@@ -7,6 +7,45 @@ import bcrypt from "bcryptjs";
 
 let authPromise: Promise<any> | null = null;
 
+function parseOriginList(value?: string | null): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function buildTrustedOrigins(): string[] {
+  const defaults = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
+    "http://ow0ggc084gkkk844s4s8gow8.89.167.82.92.sslip.io",
+    "https://priconpri.com",
+    "https://www.priconpri.com",
+    "https://bookinsite.com",
+    "https://www.bookinsite.com",
+    "https://bookinsite.com.ar",
+    "https://www.bookinsite.com.ar",
+  ];
+
+  const configured = [
+    process.env.FRONTEND_URL,
+    process.env.NEXT_PUBLIC_FRONTEND_URL,
+    ...parseOriginList(process.env.TRUSTED_ORIGINS),
+    ...parseOriginList(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
+  ];
+
+  return Array.from(
+    new Set(
+      [...defaults, ...configured]
+        .map((origin) => origin?.trim())
+        .filter((origin): origin is string => Boolean(origin)),
+    ),
+  );
+}
+
 async function createAuth() {
   const globalAny = globalThis as any;
   if (!globalAny.crypto && nodeWebCrypto) {
@@ -22,17 +61,11 @@ async function createAuth() {
   return betterAuth({
     database: prismaAdapter(prisma, { provider: "mysql" }),
     baseURL: process.env.BASE_URL || "http://localhost:3001",
-    frontendURL: process.env.BASE_URL || "http://localhost:3000",
-    trustedOrigins: [
+    frontendURL:
+      process.env.FRONTEND_URL ||
+      process.env.NEXT_PUBLIC_FRONTEND_URL ||
       "http://localhost:3000",
-      "http://localhost:3001",
-      "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
-      "http://ow0ggc084gkkk844s4s8gow8.89.167.82.92.sslip.io",
-      "https://bookinsite.com",
-      "https://www.bookinsite.com",
-      "https://bookinsite.com.ar",
-      "https://www.bookinsite.com.ar",
-    ],
+    trustedOrigins: buildTrustedOrigins(),
     session: {
       expiresIn: 60 * 60 * 24 * 7,
       updateAge: 60 * 60 * 24,

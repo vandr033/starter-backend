@@ -10,6 +10,39 @@ import { errorHandler } from "./middlewares/error";
 const app = express();
 app.set("trust proxy", 1);
 
+function parseOriginList(value?: string | null): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function buildCorsOrigins(): string[] {
+  const defaults = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
+    "http://ow0ggc084gkkk844s4s8gow8.89.167.82.92.sslip.io",
+    "https://priconpri.com",
+    "https://www.priconpri.com",
+  ];
+
+  const configured = [
+    process.env.FRONTEND_URL,
+    process.env.NEXT_PUBLIC_FRONTEND_URL,
+    ...parseOriginList(process.env.CORS_ORIGINS),
+  ];
+
+  return Array.from(
+    new Set(
+      [...defaults, ...configured]
+        .map((origin) => origin?.trim())
+        .filter((origin): origin is string => Boolean(origin)),
+    ),
+  );
+}
+
 const healthHandler = (_req: express.Request, res: express.Response) => {
   res.status(200).json({
     status: "ok",
@@ -25,13 +58,7 @@ app.get("/api/health", healthHandler);
 // CORS, helmet, rateLimit
 app.use(
   cors({
-    origin: [
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-      "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
-      "http://ow0ggc084gkkk844s4s8gow8.89.167.82.92.sslip.io",
-      "https://www.priconpri.com"
-    ],
+    origin: buildCorsOrigins(),
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
