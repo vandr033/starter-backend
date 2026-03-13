@@ -23,6 +23,15 @@ router.post('/change-password', requireAuth, AdminAuthController.changeAdminPass
 // GET /api/admin/auth/session - Requires auth only (no role check for basic validation)
 router.get('/session', requireAuth, AdminAuthController.getAdminSession);
 
+// GET /api/admin/auth/shops - list all shops for current user
+router.get('/shops', requireAuth, AdminAuthController.getMyShops);
+
+// GET /api/admin/auth/active-shop - get current active shop context
+router.get('/active-shop', requireAuth, AdminAuthController.getActiveShop);
+
+// POST /api/admin/auth/active-shop - switch active shop context
+router.post('/active-shop', requireAuth, AdminAuthController.setActiveShop);
+
 // GET /api/admin/auth/session-with-role - Requires auth + admin/owner/staff role
 router.get(
     '/session-with-role',

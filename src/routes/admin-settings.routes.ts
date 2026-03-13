@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { CompanyUserRole } from '@prisma/client';
-import { getCompanySettings, updateCompanySettings, resetCompanySettings } from '../controllers/admin-settings.controller';
+import {
+    getCompanySettings,
+    getCompanySubscriptionHistory,
+    updateCompanySettings,
+    resetCompanySettings,
+} from '../controllers/admin-settings.controller';
 
 const router = Router();
 
@@ -13,6 +18,14 @@ router.get(
     requireAuth,
     requireCompanyRole(adminRoles),
     getCompanySettings
+);
+
+// GET /api/admin/settings/subscription-history - Get current plan snapshot and subscription history
+router.get(
+    '/subscription-history',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    getCompanySubscriptionHistory,
 );
 
 // PUT /api/admin/settings - Update company settings

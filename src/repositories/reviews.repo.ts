@@ -1,5 +1,6 @@
 import { logger } from "../config/logger";
 import { Prisma, prisma } from "../prisma/client";
+import { buildMarketplaceVisibilityWhere } from "./marketplace-visibility";
 
 export const getTopRatedReviews = async (limit:number = 10) => {
     try {
@@ -13,9 +14,7 @@ export const getTopRatedReviews = async (limit:number = 10) => {
         // or use _all: true if you prefer
       },
       where: {
-        company: {
-          is_active: true,
-        },
+        company: buildMarketplaceVisibilityWhere(),
       },
       orderBy: [
         {

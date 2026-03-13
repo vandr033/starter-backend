@@ -8,6 +8,11 @@ import { VerificationChannel, VerificationPurpose } from '../types/verification-
 import { generateNumericCode } from '../utils/verification';
 import { sendStaffInviteEmail } from '../utils/sendEmail';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
+import {
+    buildStaffLimitReachedMessage,
+    getStaffSeatUsageForCompany,
+} from './plan-enforcement.service';
+import { isPlanFeatureEnabled } from '../config/plan-capabilities';
 
 interface StaffResult extends MensajeApi {
     data?: any;
@@ -265,6 +270,7 @@ export async function createStaff(
         const cleanPhone = (input.phone || '').replace(/\D/g, '');
         const cleanPhonePrefix = (input.phone_prefix || '591').replace(/\D/g, '') || '591';
         const role = input.role ?? CompanyUserRole.STAFF;
+        const seatUsage = await getStaffSeatUsageForCompany(companyId);
 
         if (!normalizedEmail) {
             return {
@@ -285,6 +291,19 @@ export async function createStaff(
                 error: true,
             };
         }
+
+        if (
+            seatUsage.currentPlan &&
+            !isPlanFeatureEnabled(seatUsage.currentPlan, 'ROLES_PERMISSIONS') &&
+            role !== CompanyUserRole.STAFF
+        ) {
+            return {
+                code: 403,
+                message: 'Available on the Business plan',
+                error: true,
+            };
+        }
+
 
         // Find or create user
         let user = await StaffRepo.findUserByEmail(normalizedEmail);
@@ -344,6 +363,22 @@ export async function createStaff(
                 code: 400,
                 message: 'User is already a member of this company',
                 error: true,
+            };
+        }
+
+        if (
+            seatUsage.maxStaffMembers !== null &&
+            seatUsage.currentStaffMembers >= seatUsage.maxStaffMembers
+        ) {
+            return {
+                code: 403,
+                message: buildStaffLimitReachedMessage(),
+                error: true,
+                data: {
+                    currentPlan: seatUsage.currentPlan,
+                    currentStaffMembers: seatUsage.currentStaffMembers,
+                    maxStaffMembers: seatUsage.maxStaffMembers,
+                },
             };
         }
 

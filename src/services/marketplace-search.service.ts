@@ -17,6 +17,7 @@ const EVALUATION_CONCURRENCY = 6;
 
 type SortOption = 'best_match' | 'earliest' | 'nearest' | 'rating' | 'price';
 type MatchType = MarketplaceMatchType;
+type I18nMap = Record<string, string>;
 
 interface SearchMarketplaceParams {
   serviceTypeId: number;
@@ -44,6 +45,7 @@ interface EvaluatedCandidate {
   slug: string;
   name: string;
   businessType: string | null;
+  businessTypeI18n: I18nMap | null;
   zoneOrArea: string | null;
   city: string | null;
   latitude: number | null;
@@ -74,6 +76,22 @@ interface EvaluatedCandidate {
     rating: number;
     price: number;
   };
+}
+
+function toI18nMap(value: unknown): I18nMap | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const normalized: I18nMap = {};
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const key = rawKey.trim().toLowerCase();
+    const text = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!key || !text) continue;
+    normalized[key] = text;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
 function parseTimeToMinutes(time: string): number | null {
@@ -327,6 +345,7 @@ async function evaluateCompany(
     slug: company.slug,
     name: company.name,
     businessType: company.company_type?.name ?? null,
+    businessTypeI18n: toI18nMap(company.company_type?.name_i18n),
     zoneOrArea: company.state ?? company.address ?? null,
     city: company.city ?? null,
     latitude: company.latitude,
@@ -459,6 +478,7 @@ function toApiResult(item: EvaluatedCandidate, serviceTypeId: number, requestedT
     slug: item.slug,
     name: item.name,
     businessType: item.businessType,
+    businessTypeI18n: item.businessTypeI18n,
     zoneOrArea: item.zoneOrArea,
     city: item.city,
     latitude: item.latitude,
@@ -521,6 +541,7 @@ function toMapPin(item: EvaluatedCandidate, isPrimaryMatch: boolean) {
     popup: {
       name: item.name,
       businessType: item.businessType,
+      businessTypeI18n: item.businessTypeI18n,
       rating: item.rating,
       reviewCount: item.reviewCount,
       matchedSlotTime: item.matchedSlotTime,

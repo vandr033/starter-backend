@@ -61,14 +61,64 @@ export async function getShopById(req: AuthenticatedRequest, res: Response) {
 }
 
 /**
+ * GET /api/super-admin/users/search
+ * Search existing users to assign as owner during shop creation
+ */
+export async function searchUsersForOwner(req: AuthenticatedRequest, res: Response) {
+    try {
+        const query = firstQueryString(req.query.q);
+        const limitRaw = firstQueryString(req.query.limit) ?? '20';
+        const limit = Number.parseInt(limitRaw, 10);
+
+        const result = await SuperAdminShopsService.searchUsersForOwner(
+            query,
+            Number.isInteger(limit) ? limit : 20,
+        );
+
+        return res.status(result.code).json(result);
+    } catch (error) {
+        console.error('Error in searchUsersForOwner:', error);
+        return res.status(500).json({
+            code: 500,
+            error: true,
+            message: 'Internal server error',
+        });
+    }
+}
+
+/**
+ * GET /api/super-admin/shops/:id/subscription-history
+ * Get subscription history for a specific shop
+ */
+export async function getShopSubscriptionHistory(req: AuthenticatedRequest, res: Response) {
+    try {
+        const { id } = req.params;
+
+        const result = await SuperAdminShopsService.getShopSubscriptionHistory(
+            parseInt(Array.isArray(id) ? id[0] : id),
+        );
+
+        return res.status(result.code).json(result);
+    } catch (error) {
+        console.error('Error in getShopSubscriptionHistory:', error);
+        return res.status(500).json({
+            code: 500,
+            error: true,
+            message: 'Internal server error',
+        });
+    }
+}
+
+/**
  * POST /api/super-admin/shops
  * Create a new shop
  */
 export async function createShop(req: AuthenticatedRequest, res: Response) {
     try {
-        const shopData = req.body;
+        const shopData = (req as any).validated || req.body;
+        const changedByUserId = req.authUser?.id;
         
-        const result = await SuperAdminShopsService.createShop(shopData);
+        const result = await SuperAdminShopsService.createShop(shopData, changedByUserId);
         
         return res.status(result.code).json(result);
     } catch (error) {
@@ -88,9 +138,14 @@ export async function createShop(req: AuthenticatedRequest, res: Response) {
 export async function updateShop(req: AuthenticatedRequest, res: Response) {
     try {
         const { id } = req.params;
-        const updateData = req.body;
+        const updateData = (req as any).validated || req.body;
+        const changedByUserId = req.authUser?.id;
         
-        const result = await SuperAdminShopsService.updateShop(parseInt(Array.isArray(id) ? id[0] : id), updateData);
+        const result = await SuperAdminShopsService.updateShop(
+            parseInt(Array.isArray(id) ? id[0] : id),
+            updateData,
+            changedByUserId,
+        );
         
         return res.status(result.code).json(result);
     } catch (error) {

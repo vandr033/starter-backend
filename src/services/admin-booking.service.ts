@@ -12,6 +12,7 @@ import {
 } from '../utils/bookingNotifications';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookingNotifications';
+import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -510,7 +511,12 @@ export async function updateBooking(
         const updatedBooking = await AdminBookingRepo.getBookingById(bookingId, companyId);
 
         // Send notification based on what changed (fire-and-forget)
-        if (updatedBooking) {
+        const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
+            companyId,
+            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+        );
+
+        if (updatedBooking && canSendTransactionalNotifications) {
             const company = await prisma.company.findUnique({ where: { id: companyId }, select: { name: true } });
             const staffProfile = await prisma.staffProfile.findFirst({
                 where: { id: updatedBooking.staff_id, company_id: companyId },
@@ -697,8 +703,12 @@ export async function createBooking(
             serviceSnapshots
         );
 
-        // Send notification if contact info available (fire-and-forget)
-        if (booking && (data.client_email || phoneNumber)) {
+        // Send notification if contact info available (fire-and-forget) and included in plan
+        const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
+            data.companyId,
+            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+        );
+        if (canSendTransactionalNotifications && booking && (data.client_email || phoneNumber)) {
             const company = await prisma.company.findUnique({ where: { id: data.companyId }, select: { name: true } });
             const staffProfile = await prisma.staffProfile.findFirst({
                 where: { id: data.staff_id, company_id: data.companyId },
@@ -759,6 +769,18 @@ export async function sendNoShowNotificationForBooking(
     options: { channel?: NoShowNotificationChannel; message?: string | null }
 ): Promise<AdminBookingResult> {
     try {
+        const hasTransactionalNotifications = await isFeatureEnabledForCompany(
+            companyId,
+            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+        );
+        if (!hasTransactionalNotifications) {
+            return {
+                code: 403,
+                message: 'Available on the Business plan',
+                error: true,
+            };
+        }
+
         const company = await prisma.company.findUnique({
             where: { id: companyId, deleted_at: null },
             select: { id: true, name: true, slug: true },
@@ -918,6 +940,18 @@ export async function sendNoShowNotificationForBooking(
 
 export async function getTodayReminderPreview(companyId: number): Promise<AdminBookingResult> {
     try {
+        const hasBookingReminders = await isFeatureEnabledForCompany(
+            companyId,
+            'BOOKING_REMINDERS',
+        );
+        if (!hasBookingReminders) {
+            return {
+                code: 403,
+                message: 'Available on the Business plan',
+                error: true,
+            };
+        }
+
         const context = await getReminderBookingContext(companyId);
         if (!context) {
             return {
@@ -984,6 +1018,18 @@ export async function getTodayReminderPreview(companyId: number): Promise<AdminB
 
 export async function sendTodayReminderForBooking(companyId: number, bookingId: number): Promise<AdminBookingResult> {
     try {
+        const hasBookingReminders = await isFeatureEnabledForCompany(
+            companyId,
+            'BOOKING_REMINDERS',
+        );
+        if (!hasBookingReminders) {
+            return {
+                code: 403,
+                message: 'Available on the Business plan',
+                error: true,
+            };
+        }
+
         const context = await getReminderBookingContext(companyId, bookingId);
         if (!context) {
             return {

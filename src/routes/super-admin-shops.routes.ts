@@ -1,9 +1,14 @@
 import { Router } from 'express';
 import { requireAuth, requireSuperAdmin } from '../middlewares/requireAuth';
+import { validate } from '../middlewares/validate';
 import * as SuperAdminShopsController from '../controllers/super-admin-shops.controller';
 import * as SuperAdminDashboardController from '../controllers/super-admin-dashboard.controller';
 import * as SuperAdminDataController from '../controllers/super-admin-data.controller';
 import * as SuperAdminCompanyTypesController from '../controllers/super-admin-company-types.controller';
+import {
+  createSuperAdminShopSchema,
+  updateSuperAdminShopSchema,
+} from '../schemas/super-admin-shops.schema';
 
 const router = Router();
 
@@ -24,11 +29,15 @@ router.get('/customers', SuperAdminDataController.getAllCustomers);
 // Staff (cross-shop)
 router.get('/staff', SuperAdminDataController.getAllStaff);
 
+// Users search (owner assignment)
+router.get('/users/search', SuperAdminShopsController.searchUsersForOwner);
+
 // Shop management routes
 router.get('/shops', SuperAdminShopsController.getAllShops);
 router.get('/shops/:id', SuperAdminShopsController.getShopById);
-router.post('/shops', SuperAdminShopsController.createShop);
-router.put('/shops/:id', SuperAdminShopsController.updateShop);
+router.get('/shops/:id/subscription-history', SuperAdminShopsController.getShopSubscriptionHistory);
+router.post('/shops', validate(createSuperAdminShopSchema), SuperAdminShopsController.createShop);
+router.put('/shops/:id', validate(updateSuperAdminShopSchema), SuperAdminShopsController.updateShop);
 router.delete('/shops/:id', SuperAdminShopsController.deleteShop);
 
 // Shop user management routes

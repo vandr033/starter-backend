@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as AdminBookingController from '../controllers/admin-booking.controller';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { CompanyUserRole } from '@prisma/client';
+import { requirePlanFeature } from '../middlewares/requirePlanFeature';
 
 const router = Router();
 
@@ -16,6 +17,7 @@ router.get(
     '/reminders/today/preview',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requirePlanFeature('BOOKING_REMINDERS'),
     AdminBookingController.getTodayReminderPreview
 );
 
@@ -27,6 +29,7 @@ router.post(
     '/:id/reminders/today',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requirePlanFeature('BOOKING_REMINDERS'),
     AdminBookingController.sendTodayReminder
 );
 
@@ -35,6 +38,7 @@ router.post(
     '/:id/notifications/no-show',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requirePlanFeature('TRANSACTIONAL_BOOKING_NOTIFICATIONS'),
     AdminBookingController.sendNoShowNotification
 );
 

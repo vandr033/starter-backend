@@ -3,6 +3,11 @@ import { MensajeApi } from '../types/MensajeApi';
 import * as AdminAuthService from '../services/admin-auth.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { getAuth } from '../config/auth';
+import {
+    clearActiveCompanyCookie,
+    getActiveCompanyIdFromRequest,
+    setActiveCompanyCookie,
+} from '../utils/active-shop-cookie';
 
 let mensaje: MensajeApi;
 
@@ -33,10 +38,19 @@ export async function adminSignIn(req: Request, res: Response) {
         return res.status(result.code).json(result);
     }
 
+    const activeCompanyId = result.data?.activeCompanyId;
+    if (typeof activeCompanyId === 'number' && activeCompanyId > 0) {
+        setActiveCompanyCookie(res, activeCompanyId);
+    } else {
+        clearActiveCompanyCookie(res);
+    }
+
     return res.status(result.code).json({
         data: {
             user: result.data?.user,
             companyUser: result.data?.companyUser,
+            companyUsers: result.data?.companyUsers ?? [],
+            activeCompanyId: result.data?.activeCompanyId ?? null,
         },
     });
 }
@@ -135,6 +149,7 @@ export async function adminSignOut(req: Request, res: Response) {
             }
         }
 
+        clearActiveCompanyCookie(res);
         res.json({
             code: 200,
             message: 'Sign-out successful',
@@ -243,33 +258,169 @@ export async function getAdminSession(req: AuthenticatedRequest, res: Response) 
             }
         }
 
-        const result = await AdminAuthService.getAdminSessionData(user.id);
+        const preferredCompanyId = getActiveCompanyIdFromRequest(req);
+        const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId);
 
         // Return the data in the format expected by frontend
         if (result.error) {
             return res.status(result.code).json(result);
         }
 
-        return res.json({
-            data: {
-                user: result.data?.user,
-                companyUser: result.data?.companyUser,
-            },
-        });
-    } catch (error) {
-        console.error('Session refresh error:', error);
-        // Continue without refresh if there's an error
-        const result = await AdminAuthService.getAdminSessionData(user.id);
-
-        if (result.error) {
-            return res.status(result.code).json(result);
+        const resolvedActiveCompanyId = result.data?.activeCompanyId ?? null;
+        if (resolvedActiveCompanyId) {
+            setActiveCompanyCookie(res, resolvedActiveCompanyId);
+        } else {
+            clearActiveCompanyCookie(res);
         }
 
         return res.json({
             data: {
                 user: result.data?.user,
                 companyUser: result.data?.companyUser,
+                companyUsers: result.data?.companyUsers ?? [],
+                activeCompanyId: result.data?.activeCompanyId ?? null,
+            },
+        });
+    } catch (error) {
+        console.error('Session refresh error:', error);
+        // Continue without refresh if there's an error
+        const preferredCompanyId = getActiveCompanyIdFromRequest(req);
+        const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId);
+
+        if (result.error) {
+            return res.status(result.code).json(result);
+        }
+
+        const resolvedActiveCompanyId = result.data?.activeCompanyId ?? null;
+        if (resolvedActiveCompanyId) {
+            setActiveCompanyCookie(res, resolvedActiveCompanyId);
+        } else {
+            clearActiveCompanyCookie(res);
+        }
+
+        return res.json({
+            data: {
+                user: result.data?.user,
+                companyUser: result.data?.companyUser,
+                companyUsers: result.data?.companyUsers ?? [],
+                activeCompanyId: result.data?.activeCompanyId ?? null,
             },
         });
     }
+}
+
+/**
+ * GET /api/admin/auth/shops
+ * List all shops where the current user has admin/shop membership.
+ */
+export async function getMyShops(req: AuthenticatedRequest, res: Response) {
+    const user = req.authUser;
+    if (!user?.id) {
+        return res.status(401).json({
+            code: 401,
+            message: 'Not authenticated',
+            error: true,
+        });
+    }
+
+    const preferredCompanyId = getActiveCompanyIdFromRequest(req);
+    const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId);
+    if (result.error) {
+        return res.status(result.code).json(result);
+    }
+
+    const resolvedActiveCompanyId = result.data?.activeCompanyId ?? null;
+    if (resolvedActiveCompanyId) {
+        setActiveCompanyCookie(res, resolvedActiveCompanyId);
+    } else {
+        clearActiveCompanyCookie(res);
+    }
+
+    return res.status(200).json({
+        code: 200,
+        error: false,
+        message: 'Shops retrieved successfully',
+        data: {
+            companyUsers: result.data?.companyUsers ?? [],
+            activeCompanyId: resolvedActiveCompanyId,
+        },
+    });
+}
+
+/**
+ * GET /api/admin/auth/active-shop
+ * Return the current active shop membership context.
+ */
+export async function getActiveShop(req: AuthenticatedRequest, res: Response) {
+    const user = req.authUser;
+    if (!user?.id) {
+        return res.status(401).json({
+            code: 401,
+            message: 'Not authenticated',
+            error: true,
+        });
+    }
+
+    const preferredCompanyId = getActiveCompanyIdFromRequest(req);
+    const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId);
+    if (result.error) {
+        return res.status(result.code).json(result);
+    }
+
+    const resolvedActiveCompanyId = result.data?.activeCompanyId ?? null;
+    if (resolvedActiveCompanyId) {
+        setActiveCompanyCookie(res, resolvedActiveCompanyId);
+    } else {
+        clearActiveCompanyCookie(res);
+    }
+
+    return res.status(200).json({
+        code: 200,
+        error: false,
+        message: 'Active shop retrieved successfully',
+        data: {
+            companyUser: result.data?.companyUser ?? null,
+            activeCompanyId: resolvedActiveCompanyId,
+        },
+    });
+}
+
+/**
+ * POST /api/admin/auth/active-shop
+ * Update active shop context for current user.
+ */
+export async function setActiveShop(req: AuthenticatedRequest, res: Response) {
+    const user = req.authUser;
+    if (!user?.id) {
+        return res.status(401).json({
+            code: 401,
+            message: 'Not authenticated',
+            error: true,
+        });
+    }
+
+    const companyIdRaw = req.body?.company_id;
+    const companyId =
+        typeof companyIdRaw === 'number'
+            ? companyIdRaw
+            : typeof companyIdRaw === 'string'
+                ? Number.parseInt(companyIdRaw, 10)
+                : NaN;
+
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+        return res.status(400).json({
+            code: 400,
+            message: 'company_id must be a positive integer',
+            error: true,
+        });
+    }
+
+    const result = await AdminAuthService.switchActiveShop(user.id, companyId);
+    if (result.error) {
+        return res.status(result.code).json(result);
+    }
+
+    setActiveCompanyCookie(res, companyId);
+
+    return res.status(200).json(result);
 }

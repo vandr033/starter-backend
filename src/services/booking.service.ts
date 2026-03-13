@@ -4,6 +4,7 @@ import { prisma } from '../prisma/client';
 import { notifyBookingCreated } from '../utils/bookingNotifications';
 import { BookingSource } from '@prisma/client';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
+import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 
 interface GetSlotsParams {
     company_id: number;
@@ -528,8 +529,12 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             serviceSnapshots
         );
 
-        // 11. Send notification (fire-and-forget)
-        if (company && booking) {
+        // 11. Send notification (fire-and-forget) only when included in plan
+        const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
+            company_id,
+            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+        );
+        if (canSendTransactionalNotifications && company && booking) {
             const user = await prisma.user.findUnique({ where: { id: user_id }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
             void notifyBookingCreated({
                 companyId: company_id,
@@ -807,23 +812,29 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             data: bookingServices,
         });
 
-        // Send notification (fire-and-forget)
-        const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
-        void notifyBookingCreated({
-            companyId: params.company_id,
-            bookingId: booking.id,
-            staffId: params.staff_id,
-            customerEmail: params.client_email,
-            customerPhone: params.client_phone_number,
-            customerPhonePrefix: params.client_phone_prefix,
-            customerName: params.client_name,
-            companyName: company.name,
-            staffName: staffProfile?.display_name || '',
-            serviceNames: services.map(s => s.name),
-            startAt: booking.start_at,
-            endAt: endAt,
-            totalPriceCents: totalPrice,
-        });
+        // Send notification (fire-and-forget) only when included in plan
+        const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
+            params.company_id,
+            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+        );
+        if (canSendTransactionalNotifications) {
+            const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
+            void notifyBookingCreated({
+                companyId: params.company_id,
+                bookingId: booking.id,
+                staffId: params.staff_id,
+                customerEmail: params.client_email,
+                customerPhone: params.client_phone_number,
+                customerPhonePrefix: params.client_phone_prefix,
+                customerName: params.client_name,
+                companyName: company.name,
+                staffName: staffProfile?.display_name || '',
+                serviceNames: services.map(s => s.name),
+                startAt: booking.start_at,
+                endAt: endAt,
+                totalPriceCents: totalPrice,
+            });
+        }
 
         const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;
         void MarketplaceAnalyticsService.trackBookingConfirmed({
@@ -987,8 +998,12 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             data: bookingServices,
         });
 
-        // Send notification if contact info available (fire-and-forget)
-        if (params.client_email || params.client_phone_number) {
+        // Send notification if contact info available (fire-and-forget) and included in plan
+        const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
+            params.company_id,
+            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+        );
+        if (canSendTransactionalNotifications && (params.client_email || params.client_phone_number)) {
             const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
             void notifyBookingCreated({
                 companyId: params.company_id,

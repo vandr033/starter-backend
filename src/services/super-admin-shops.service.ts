@@ -1,10 +1,16 @@
 import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
-import { CompanyUserRole } from '@prisma/client';
+import { BillingCycle, CompanyUserRole, Prisma, ShopPlan } from '@prisma/client';
 import { getAuth } from '../config/auth';
 import bcrypt from 'bcryptjs';
 import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
+import {
+    buildStaffLimitReachedMessage,
+    getStaffSeatUsageForCompany,
+} from './plan-enforcement.service';
+import { isPlanFeatureEnabled } from '../config/plan-capabilities';
+import { getCompanySubscriptionHistoryPayload } from './company-subscription-history.service';
 
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const DEFAULT_LANGUAGE_VALUE: 'es' | 'en' = 'es';
@@ -35,23 +41,31 @@ interface GetAllShopsOptions {
 interface CreateShopData {
     name: string;
     slug?: string;
-    address?: string;
-    phone_prefix?: string;
+    address?: string | null;
+    phone_prefix?: string | null;
     phone: string;
-    email?: string;
-    city?: string;
-    state?: string;
-    country_code?: string;
-    timezone?: string;
+    email?: string | null;
+    city?: string | null;
+    state?: string | null;
+    country_code?: string | null;
+    timezone?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
     company_type_id: number;
+    plan: ShopPlan;
+    billingCycle: BillingCycle;
+    availableUntil: string;
+    pricePaid?: number | null;
+    isMarketplaceVisible: boolean;
     owner: {
-        email: string;
-        password: string;
-        first_name?: string;
-        last_name?: string;
-        phone_prefix?: string;
-        phone: string;
-        display_name?: string;
+        existingUserId?: string | null;
+        email?: string | null;
+        password?: string | null;
+        first_name?: string | null;
+        last_name?: string | null;
+        phone_prefix?: string | null;
+        phone?: string | null;
+        display_name?: string | null;
         is_bookable?: boolean;
     };
 }
@@ -59,15 +73,24 @@ interface CreateShopData {
 interface UpdateShopData {
     name?: string;
     slug?: string;
-    address?: string;
-    phone_prefix?: string;
+    address?: string | null;
+    phone_prefix?: string | null;
     phone?: string;
-    email?: string;
-    city?: string;
-    state?: string;
-    country_code?: string;
-    timezone?: string;
+    email?: string | null;
+    city?: string | null;
+    state?: string | null;
+    country_code?: string | null;
+    timezone?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
     company_type_id?: number;
+    is_active?: boolean;
+    plan?: ShopPlan;
+    billingCycle?: BillingCycle;
+    availableUntil?: string;
+    pricePaid?: number | null;
+    isMarketplaceVisible?: boolean;
+    note?: string;
 }
 
 interface AddUserToShopData {
@@ -80,6 +103,37 @@ interface AddUserToShopData {
     role: CompanyUserRole;
     display_name?: string;
     is_bookable?: boolean;
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeRequiredText(value: string): string {
+    return value.trim();
+}
+
+function parseDateTime(value: string | Date): Date | null {
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+}
+
+function normalizePricePaid(value: number | null | undefined): number | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (!Number.isFinite(value) || value < 0) return undefined;
+
+    return Number(value.toFixed(2));
+}
+
+function decimalLikeToString(value: Prisma.Decimal | number | null | undefined): string | null {
+    if (value === null || value === undefined) return null;
+    return value.toString();
 }
 
 /**
@@ -140,6 +194,11 @@ export async function getAllShops(options: GetAllShopsOptions): Promise<MensajeA
                     name: shop.name,
                     city: shop.city,
                     is_active: shop.is_active,
+                    plan: shop.plan,
+                    billingCycle: shop.billingCycle,
+                    pricePaid: shop.pricePaid,
+                    availableUntil: shop.availableUntil,
+                    isMarketplaceVisible: shop.isMarketplaceVisible,
                     created_at: shop.created_at,
                     company_type: shop.company_type,
                     user_count: shop._count.company_users
@@ -158,6 +217,94 @@ export async function getAllShops(options: GetAllShopsOptions): Promise<MensajeA
             code: 500,
             error: true,
             message: 'Failed to retrieve shops'
+        };
+    }
+}
+
+/**
+ * Search existing users to assign as owner during shop creation
+ */
+export async function searchUsersForOwner(query?: string, limit: number = 20): Promise<MensajeApi> {
+    try {
+        const trimmedQuery = query?.trim() || '';
+        const normalizedLimit = Math.max(1, Math.min(limit, 50));
+
+        const where: Prisma.UserWhereInput = {
+            deleted_at: null,
+        };
+
+        if (trimmedQuery.length > 0) {
+            where.OR = [
+                { email: { contains: trimmedQuery } },
+                { name: { contains: trimmedQuery } },
+                { first_name: { contains: trimmedQuery } },
+                { last_name: { contains: trimmedQuery } },
+                { phoneNumber: { contains: trimmedQuery } },
+            ];
+        }
+
+        const users = await prisma.user.findMany({
+            where,
+            take: normalizedLimit,
+            orderBy: {
+                updatedAt: 'desc',
+            },
+            select: {
+                id: true,
+                email: true,
+                name: true,
+                first_name: true,
+                last_name: true,
+                phone_prefix: true,
+                phoneNumber: true,
+                is_active: true,
+                company_users: {
+                    where: {
+                        deleted_at: null,
+                    },
+                    select: {
+                        role: true,
+                        company: {
+                            select: {
+                                id: true,
+                                name: true,
+                                slug: true,
+                            },
+                        },
+                    },
+                    orderBy: {
+                        updated_at: 'desc',
+                    },
+                    take: 5,
+                },
+            },
+        });
+
+        return {
+            code: 200,
+            error: false,
+            message: 'Users retrieved successfully',
+            data: users.map((user) => ({
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                phone_prefix: user.phone_prefix,
+                phone: user.phoneNumber,
+                is_active: user.is_active,
+                memberships: user.company_users.map((membership) => ({
+                    role: membership.role,
+                    company: membership.company,
+                })),
+            })),
+        };
+    } catch (error) {
+        console.error('Error searching users for owner assignment:', error);
+        return {
+            code: 500,
+            error: true,
+            message: 'Failed to search users',
         };
     }
 }
@@ -208,10 +355,18 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                 state: shop.state,
                 country_code: shop.country_code,
                 timezone: shop.timezone,
+                latitude: shop.latitude,
+                longitude: shop.longitude,
                 is_active: shop.is_active,
+                plan: shop.plan,
+                billingCycle: shop.billingCycle,
+                pricePaid: shop.pricePaid,
+                availableUntil: shop.availableUntil,
+                isMarketplaceVisible: shop.isMarketplaceVisible,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
-                updated_at: shop.updated_at
+                updated_at: shop.updated_at,
+                company_type: shop.company_type,
             }
         };
     } catch (error) {
@@ -225,12 +380,64 @@ export async function getShopById(id: number): Promise<MensajeApi> {
 }
 
 /**
+ * Get subscription history for a specific shop
+ */
+export async function getShopSubscriptionHistory(id: number): Promise<MensajeApi> {
+    try {
+        const payload = await getCompanySubscriptionHistoryPayload(id);
+
+        if (!payload) {
+            return {
+                code: 404,
+                error: true,
+                message: 'Shop not found',
+            };
+        }
+
+        return {
+            code: 200,
+            error: false,
+            message: 'Shop subscription history retrieved successfully',
+            data: payload,
+        };
+    } catch (error) {
+        console.error('Error getting shop subscription history:', error);
+        return {
+            code: 500,
+            error: true,
+            message: 'Failed to retrieve shop subscription history',
+        };
+    }
+}
+
+/**
  * Create a new shop
  */
-export async function createShop(data: CreateShopData): Promise<MensajeApi> {
+export async function createShop(data: CreateShopData, changedByUserId?: string): Promise<MensajeApi> {
     try {
+        const normalizedName = normalizeRequiredText(data.name);
+        const normalizedPhone = normalizeRequiredText(data.phone);
+        const normalizedAvailableUntil = parseDateTime(data.availableUntil);
+        const normalizedPricePaid = normalizePricePaid(data.pricePaid);
+
+        if (!normalizedAvailableUntil) {
+            return {
+                code: 400,
+                error: true,
+                message: 'availableUntil must be a valid datetime',
+            };
+        }
+
+        if (data.pricePaid !== undefined && normalizedPricePaid === undefined) {
+            return {
+                code: 400,
+                error: true,
+                message: 'pricePaid must be a non-negative number',
+            };
+        }
+
         // Generate slug if not provided
-        const slug = data.slug || generateSlug(data.name);
+        const slug = data.slug?.trim() || generateSlug(normalizedName);
 
         // Check if slug is unique
         const existingShop = await prisma.company.findFirst({
@@ -249,6 +456,8 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
         }
 
         const ownerInput = data.owner;
+        const ownerExistingUserId = ownerInput?.existingUserId?.trim() || '';
+        const useExistingOwner = ownerExistingUserId.length > 0;
         const ownerEmail = ownerInput?.email?.trim().toLowerCase() || '';
         const ownerPassword = ownerInput?.password?.trim() || '';
         const ownerPhone = (ownerInput?.phone || '').replace(/\D/g, '');
@@ -262,50 +471,59 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
             };
         }
 
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!ownerEmail) {
-            return {
-                code: 400,
-                error: true,
-                message: 'Owner email is required'
-            };
-        }
-        if (!emailRegex.test(ownerEmail)) {
-            return {
-                code: 400,
-                error: true,
-                message: 'Invalid owner email format'
-            };
-        }
-        if (!ownerPassword || ownerPassword.length < 8) {
-            return {
-                code: 400,
-                error: true,
-                message: 'Owner password must be at least 8 characters'
-            };
-        }
-        if (!ownerPhone) {
-            return {
-                code: 400,
-                error: true,
-                message: 'Owner phone number is required'
-            };
+        if (!useExistingOwner) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!ownerEmail) {
+                return {
+                    code: 400,
+                    error: true,
+                    message: 'Owner email is required'
+                };
+            }
+            if (!emailRegex.test(ownerEmail)) {
+                return {
+                    code: 400,
+                    error: true,
+                    message: 'Invalid owner email format'
+                };
+            }
+            if (!ownerPassword || ownerPassword.length < 8) {
+                return {
+                    code: 400,
+                    error: true,
+                    message: 'Owner password must be at least 8 characters'
+                };
+            }
+            if (!ownerPhone) {
+                return {
+                    code: 400,
+                    error: true,
+                    message: 'Owner phone number is required'
+                };
+            }
         }
 
         const result = await prisma.$transaction(async (tx) => {
             const shop = await tx.company.create({
                 data: {
-                    name: data.name,
+                    name: normalizedName,
                     slug,
-                    address: data.address,
-                    phone_prefix: data.phone_prefix || '591',
-                    phone: data.phone,
-                    email: data.email,
-                    city: data.city,
-                    state: data.state,
-                    country_code: data.country_code,
-                    timezone: data.timezone || 'America/La_Paz',
+                    address: normalizeOptionalText(data.address),
+                    phone_prefix: normalizeOptionalText(data.phone_prefix) || '591',
+                    phone: normalizedPhone,
+                    email: normalizeOptionalText(data.email),
+                    city: normalizeOptionalText(data.city),
+                    state: normalizeOptionalText(data.state),
+                    country_code: normalizeOptionalText(data.country_code),
+                    timezone: normalizeOptionalText(data.timezone) || 'America/La_Paz',
+                    latitude: data.latitude ?? null,
+                    longitude: data.longitude ?? null,
                     company_type_id: data.company_type_id,
+                    plan: data.plan,
+                    billingCycle: data.billingCycle,
+                    pricePaid: normalizedPricePaid ?? null,
+                    availableUntil: normalizedAvailableUntil,
+                    isMarketplaceVisible: data.isMarketplaceVisible,
                     // Create default CompanySettings
                     company_settings: {
                         create: {
@@ -374,6 +592,24 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                 },
             });
 
+            await tx.companySubscriptionHistory.create({
+                data: {
+                    companyId: shop.id,
+                    previousPlan: null,
+                    newPlan: shop.plan,
+                    previousBillingCycle: null,
+                    newBillingCycle: shop.billingCycle,
+                    previousPricePaid: null,
+                    newPricePaid: shop.pricePaid,
+                    previousAvailableUntil: null,
+                    newAvailableUntil: shop.availableUntil,
+                    previousMarketplaceVisible: null,
+                    newMarketplaceVisible: shop.isMarketplaceVisible,
+                    changedByUserId: changedByUserId ?? null,
+                    note: 'Shop created via super-admin',
+                },
+            });
+
             let ownerSummary: {
                 company_user_id: number;
                 user_id: string;
@@ -382,60 +618,62 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
             } | null = null;
 
             if (ownerInput) {
-                const existingUserByPhone = await tx.user.findFirst({
-                    where: {
-                        phoneNumber: ownerPhone,
-                        deleted_at: null
-                    }
-                });
+                let ownerUser: {
+                    id: string;
+                    email: string;
+                    name: string;
+                    first_name: string | null;
+                    last_name: string | null;
+                    phoneNumber: string | null;
+                } | null = null;
+                let ownerDisplayName = '';
 
-                let ownerUser = await tx.user.findFirst({
-                    where: {
-                        email: ownerEmail,
-                        deleted_at: null
-                    }
-                });
-
-                if (!ownerUser && existingUserByPhone) {
-                    return {
-                        error: true as const,
-                        code: 400,
-                        message: 'Owner phone number is already in use by another user'
-                    };
-                }
-
-                const ownerFirstName = ownerInput.first_name?.trim() || '';
-                const ownerLastName = ownerInput.last_name?.trim() || '';
-                const ownerNameFromParts = `${ownerFirstName} ${ownerLastName}`.trim();
-                const ownerDisplayName =
-                    ownerInput.display_name?.trim() ||
-                    ownerNameFromParts ||
-                    ownerEmail.split('@')[0];
-
-                if (!ownerUser) {
-                    ownerUser = await tx.user.create({
-                        data: {
-                            email: ownerEmail,
-                            first_name: ownerFirstName || null,
-                            last_name: ownerLastName || null,
-                            name: ownerDisplayName,
-                            phone_prefix: ownerPhonePrefix,
-                            phoneNumber: ownerPhone,
-                            is_active: true,
-                            emailVerified: true,
-                            must_change_password: true
-                        }
+                if (useExistingOwner) {
+                    ownerUser = await tx.user.findFirst({
+                        where: {
+                            id: ownerExistingUserId,
+                            deleted_at: null,
+                        },
+                        select: {
+                            id: true,
+                            email: true,
+                            name: true,
+                            first_name: true,
+                            last_name: true,
+                            phoneNumber: true,
+                        },
                     });
-                } else {
-                    if (ownerPhone && ownerUser.phoneNumber && ownerUser.phoneNumber !== ownerPhone) {
+
+                    if (!ownerUser) {
                         return {
                             error: true as const,
-                            code: 400,
-                            message: 'Owner phone number is already configured on a different account'
+                            code: 404,
+                            message: 'Selected owner user was not found',
                         };
                     }
 
-                    if (existingUserByPhone && existingUserByPhone.id !== ownerUser.id) {
+                    const ownerNameFromUser = `${ownerUser.first_name ?? ''} ${ownerUser.last_name ?? ''}`.trim();
+                    ownerDisplayName =
+                        ownerInput.display_name?.trim() ||
+                        ownerNameFromUser ||
+                        ownerUser.name?.trim() ||
+                        ownerUser.email.split('@')[0];
+                } else {
+                    const existingUserByPhone = await tx.user.findFirst({
+                        where: {
+                            phoneNumber: ownerPhone,
+                            deleted_at: null
+                        }
+                    });
+
+                    let ownerUserByEmail = await tx.user.findFirst({
+                        where: {
+                            email: ownerEmail,
+                            deleted_at: null
+                        }
+                    });
+
+                    if (!ownerUserByEmail && existingUserByPhone) {
                         return {
                             error: true as const,
                             code: 400,
@@ -443,67 +681,124 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                         };
                     }
 
-                    ownerUser = await tx.user.update({
-                        where: { id: ownerUser.id },
-                        data: {
-                            ...(ownerFirstName ? { first_name: ownerFirstName } : {}),
-                            ...(ownerLastName ? { last_name: ownerLastName } : {}),
-                            ...(ownerDisplayName ? { name: ownerDisplayName } : {}),
-                            ...(!ownerUser.phoneNumber
-                                ? { phoneNumber: ownerPhone, phone_prefix: ownerPhonePrefix }
-                                : {})
+                    const ownerFirstName = ownerInput.first_name?.trim() || '';
+                    const ownerLastName = ownerInput.last_name?.trim() || '';
+                    const ownerNameFromParts = `${ownerFirstName} ${ownerLastName}`.trim();
+                    ownerDisplayName =
+                        ownerInput.display_name?.trim() ||
+                        ownerNameFromParts ||
+                        ownerEmail.split('@')[0];
+
+                    if (!ownerUserByEmail) {
+                        ownerUserByEmail = await tx.user.create({
+                            data: {
+                                email: ownerEmail,
+                                first_name: ownerFirstName || null,
+                                last_name: ownerLastName || null,
+                                name: ownerDisplayName,
+                                phone_prefix: ownerPhonePrefix,
+                                phoneNumber: ownerPhone,
+                                is_active: true,
+                                emailVerified: true,
+                                must_change_password: true
+                            }
+                        });
+                    } else {
+                        if (ownerPhone && ownerUserByEmail.phoneNumber && ownerUserByEmail.phoneNumber !== ownerPhone) {
+                            return {
+                                error: true as const,
+                                code: 400,
+                                message: 'Owner phone number is already configured on a different account'
+                            };
                         }
-                    });
-                }
 
-                const hashedOwnerPassword = await bcrypt.hash(ownerPassword, 10);
-                const ownerAccounts = await tx.account.findMany({
-                    where: {
-                        providerId: { in: ['credential', 'credentials'] },
-                        accountId: ownerEmail
-                    },
-                    orderBy: { createdAt: 'asc' }
-                });
-                const ownerPrimaryAccount =
-                    ownerAccounts.find((a) => a.providerId === 'credential') || ownerAccounts[0] || null;
-
-                if (ownerPrimaryAccount) {
-                    await tx.account.update({
-                        where: { id: ownerPrimaryAccount.id },
-                        data: {
-                            providerId: 'credential',
-                            accountId: ownerEmail,
-                            userId: ownerUser.id,
-                            password: hashedOwnerPassword
+                        if (existingUserByPhone && existingUserByPhone.id !== ownerUserByEmail.id) {
+                            return {
+                                error: true as const,
+                                code: 400,
+                                message: 'Owner phone number is already in use by another user'
+                            };
                         }
-                    });
 
-                    if (ownerAccounts.length > 1) {
-                        await tx.account.deleteMany({
-                            where: {
-                                providerId: { in: ['credential', 'credentials'] },
-                                accountId: ownerEmail,
-                                id: { not: ownerPrimaryAccount.id }
+                        ownerUserByEmail = await tx.user.update({
+                            where: { id: ownerUserByEmail.id },
+                            data: {
+                                ...(ownerFirstName ? { first_name: ownerFirstName } : {}),
+                                ...(ownerLastName ? { last_name: ownerLastName } : {}),
+                                ...(ownerDisplayName ? { name: ownerDisplayName } : {}),
+                                ...(!ownerUserByEmail.phoneNumber
+                                    ? { phoneNumber: ownerPhone, phone_prefix: ownerPhonePrefix }
+                                    : {})
                             }
                         });
                     }
-                } else {
-                    await tx.account.create({
-                        data: {
-                            providerId: 'credential',
-                            accountId: ownerEmail,
-                            userId: ownerUser.id,
-                            password: hashedOwnerPassword
-                        }
+
+                    const hashedOwnerPassword = await bcrypt.hash(ownerPassword, 10);
+                    const ownerAccounts = await tx.account.findMany({
+                        where: {
+                            providerId: { in: ['credential', 'credentials'] },
+                            accountId: ownerEmail
+                        },
+                        orderBy: { createdAt: 'asc' }
                     });
+                    const ownerPrimaryAccount =
+                        ownerAccounts.find((a) => a.providerId === 'credential') || ownerAccounts[0] || null;
+
+                    if (ownerPrimaryAccount) {
+                        await tx.account.update({
+                            where: { id: ownerPrimaryAccount.id },
+                            data: {
+                                providerId: 'credential',
+                                accountId: ownerEmail,
+                                userId: ownerUserByEmail.id,
+                                password: hashedOwnerPassword
+                            }
+                        });
+
+                        if (ownerAccounts.length > 1) {
+                            await tx.account.deleteMany({
+                                where: {
+                                    providerId: { in: ['credential', 'credentials'] },
+                                    accountId: ownerEmail,
+                                    id: { not: ownerPrimaryAccount.id }
+                                }
+                            });
+                        }
+                    } else {
+                        await tx.account.create({
+                            data: {
+                                providerId: 'credential',
+                                accountId: ownerEmail,
+                                userId: ownerUserByEmail.id,
+                                password: hashedOwnerPassword
+                            }
+                        });
+                    }
+
+                    await tx.user.update({
+                        where: { id: ownerUserByEmail.id },
+                        data: {
+                            must_change_password: true,
+                        },
+                    });
+
+                    ownerUser = {
+                        id: ownerUserByEmail.id,
+                        email: ownerUserByEmail.email,
+                        name: ownerUserByEmail.name,
+                        first_name: ownerUserByEmail.first_name,
+                        last_name: ownerUserByEmail.last_name,
+                        phoneNumber: ownerUserByEmail.phoneNumber,
+                    };
                 }
 
-                await tx.user.update({
-                    where: { id: ownerUser.id },
-                    data: {
-                        must_change_password: true,
-                    },
-                });
+                if (!ownerUser) {
+                    return {
+                        error: true as const,
+                        code: 400,
+                        message: 'Owner profile could not be resolved',
+                    };
+                }
 
                 const ownerCompanyUser = await tx.companyUser.upsert({
                     where: {
@@ -589,21 +884,24 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
 
         const shop = result.shop;
 
-        const ownerInviteStatus = await sendAdminTempPasswordInviteEmail({
-            email: ownerEmail,
-            temporaryPassword: ownerPassword,
-            companyName: shop.name,
-            loginUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
-        });
-        if (ownerInviteStatus !== 1) {
-            console.error(`Failed to send owner temp password invite to ${ownerEmail}`);
+        let ownerInviteStatus: number | null = null;
+        if (!useExistingOwner) {
+            ownerInviteStatus = await sendAdminTempPasswordInviteEmail({
+                email: ownerEmail,
+                temporaryPassword: ownerPassword,
+                companyName: shop.name,
+                loginUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
+            });
+            if (ownerInviteStatus !== 1) {
+                console.error(`Failed to send owner temp password invite to ${ownerEmail}`);
+            }
         }
 
         return {
             code: 201,
             error: false,
             message:
-                ownerInviteStatus === 1
+                ownerInviteStatus === null || ownerInviteStatus === 1
                     ? 'Shop created successfully'
                     : 'Shop created successfully, but invite email could not be sent',
             data: {
@@ -618,7 +916,14 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
                 state: shop.state,
                 country_code: shop.country_code,
                 timezone: shop.timezone,
+                latitude: shop.latitude,
+                longitude: shop.longitude,
                 is_active: shop.is_active,
+                plan: shop.plan,
+                billingCycle: shop.billingCycle,
+                pricePaid: shop.pricePaid,
+                availableUntil: shop.availableUntil,
+                isMarketplaceVisible: shop.isMarketplaceVisible,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
@@ -639,7 +944,7 @@ export async function createShop(data: CreateShopData): Promise<MensajeApi> {
 /**
  * Update an existing shop
  */
-export async function updateShop(id: number, data: UpdateShopData): Promise<MensajeApi> {
+export async function updateShop(id: number, data: UpdateShopData, changedByUserId?: string): Promise<MensajeApi> {
     try {
         // Check if shop exists
         const existingShop = await prisma.company.findUnique({
@@ -678,24 +983,115 @@ export async function updateShop(id: number, data: UpdateShopData): Promise<Mens
             }
         }
 
-        // Generate slug if name is being updated and no slug provided
-        const updateData: any = { ...data };
-        if (data.name && !data.slug) {
-            updateData.slug = generateSlug(data.name);
+        const normalizedAvailableUntil = data.availableUntil !== undefined
+            ? parseDateTime(data.availableUntil)
+            : undefined;
+
+        if (data.availableUntil !== undefined && !normalizedAvailableUntil) {
+            return {
+                code: 400,
+                error: true,
+                message: 'availableUntil must be a valid datetime',
+            };
         }
 
-        const shop = await prisma.company.update({
-            where: { id },
-            data: updateData,
-            include: {
-                company_type: {
-                    select: {
-                        id: true,
-                        name: true,
-                        name_i18n: true
+        const normalizedPricePaid = normalizePricePaid(data.pricePaid);
+        if (data.pricePaid !== undefined && normalizedPricePaid === undefined) {
+            return {
+                code: 400,
+                error: true,
+                message: 'pricePaid must be a non-negative number',
+            };
+        }
+
+        // Generate slug if name is being updated and no slug provided
+        const updateData: Prisma.CompanyUncheckedUpdateInput = {};
+        if (data.name !== undefined) {
+            const normalizedName = normalizeRequiredText(data.name);
+            updateData.name = normalizedName;
+            if (data.slug === undefined) {
+                updateData.slug = generateSlug(normalizedName);
+            }
+        }
+        if (data.slug !== undefined) {
+            updateData.slug = data.slug.trim();
+        }
+        if (data.address !== undefined) updateData.address = normalizeOptionalText(data.address);
+        if (data.phone_prefix !== undefined) updateData.phone_prefix = normalizeOptionalText(data.phone_prefix) || '591';
+        if (data.phone !== undefined) updateData.phone = normalizeRequiredText(data.phone);
+        if (data.email !== undefined) updateData.email = normalizeOptionalText(data.email);
+        if (data.city !== undefined) updateData.city = normalizeOptionalText(data.city);
+        if (data.state !== undefined) updateData.state = normalizeOptionalText(data.state);
+        if (data.country_code !== undefined) updateData.country_code = normalizeOptionalText(data.country_code);
+        if (data.timezone !== undefined) updateData.timezone = normalizeOptionalText(data.timezone) || 'America/La_Paz';
+        if (data.latitude !== undefined) updateData.latitude = data.latitude;
+        if (data.longitude !== undefined) updateData.longitude = data.longitude;
+        if (data.company_type_id !== undefined) updateData.company_type_id = data.company_type_id;
+        if (data.is_active !== undefined) updateData.is_active = data.is_active;
+        if (data.plan !== undefined) updateData.plan = data.plan;
+        if (data.billingCycle !== undefined) updateData.billingCycle = data.billingCycle;
+        if (data.availableUntil !== undefined && normalizedAvailableUntil) {
+            updateData.availableUntil = normalizedAvailableUntil;
+        }
+        if (data.pricePaid !== undefined) updateData.pricePaid = normalizedPricePaid;
+        if (data.isMarketplaceVisible !== undefined) updateData.isMarketplaceVisible = data.isMarketplaceVisible;
+
+        const nextPlan = data.plan ?? existingShop.plan;
+        const nextBillingCycle = data.billingCycle ?? existingShop.billingCycle;
+        const nextAvailableUntil = normalizedAvailableUntil ?? existingShop.availableUntil;
+        const nextMarketplaceVisible = data.isMarketplaceVisible ?? existingShop.isMarketplaceVisible;
+        const nextPricePaid = data.pricePaid !== undefined ? normalizedPricePaid ?? null : existingShop.pricePaid;
+
+        const planChanged = nextPlan !== existingShop.plan;
+        const billingCycleChanged = nextBillingCycle !== existingShop.billingCycle;
+        const availableUntilChanged = nextAvailableUntil.getTime() !== existingShop.availableUntil.getTime();
+        const marketplaceVisibilityChanged = nextMarketplaceVisible !== existingShop.isMarketplaceVisible;
+        const pricePaidChanged =
+            decimalLikeToString(nextPricePaid) !== decimalLikeToString(existingShop.pricePaid);
+
+        const subscriptionFieldsChanged =
+            planChanged ||
+            billingCycleChanged ||
+            availableUntilChanged ||
+            marketplaceVisibilityChanged ||
+            pricePaidChanged;
+
+        const shop = await prisma.$transaction(async (tx) => {
+            const updatedShop = await tx.company.update({
+                where: { id },
+                data: updateData,
+                include: {
+                    company_type: {
+                        select: {
+                            id: true,
+                            name: true,
+                            name_i18n: true
+                        }
                     }
                 }
+            });
+
+            if (subscriptionFieldsChanged) {
+                await tx.companySubscriptionHistory.create({
+                    data: {
+                        companyId: updatedShop.id,
+                        previousPlan: existingShop.plan,
+                        newPlan: updatedShop.plan,
+                        previousBillingCycle: existingShop.billingCycle,
+                        newBillingCycle: updatedShop.billingCycle,
+                        previousPricePaid: existingShop.pricePaid,
+                        newPricePaid: updatedShop.pricePaid,
+                        previousAvailableUntil: existingShop.availableUntil,
+                        newAvailableUntil: updatedShop.availableUntil,
+                        previousMarketplaceVisible: existingShop.isMarketplaceVisible,
+                        newMarketplaceVisible: updatedShop.isMarketplaceVisible,
+                        changedByUserId: changedByUserId ?? null,
+                        note: data.note?.trim() || 'Updated via super-admin shop edit',
+                    }
+                });
             }
+
+            return updatedShop;
         });
 
         return {
@@ -714,7 +1110,14 @@ export async function updateShop(id: number, data: UpdateShopData): Promise<Mens
                 state: shop.state,
                 country_code: shop.country_code,
                 timezone: shop.timezone,
+                latitude: shop.latitude,
+                longitude: shop.longitude,
                 is_active: shop.is_active,
+                plan: shop.plan,
+                billingCycle: shop.billingCycle,
+                pricePaid: shop.pricePaid,
+                availableUntil: shop.availableUntil,
+                isMarketplaceVisible: shop.isMarketplaceVisible,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
@@ -895,6 +1298,43 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
             };
         }
 
+        const isStaffSeatRole =
+            data.role === CompanyUserRole.OWNER ||
+            data.role === CompanyUserRole.ADMIN ||
+            data.role === CompanyUserRole.STAFF;
+
+        if (isStaffSeatRole) {
+            const seatUsage = await getStaffSeatUsageForCompany(shopId);
+
+            if (
+                seatUsage.currentPlan &&
+                !isPlanFeatureEnabled(seatUsage.currentPlan, 'ROLES_PERMISSIONS') &&
+                data.role !== CompanyUserRole.STAFF
+            ) {
+                return {
+                    code: 403,
+                    error: true,
+                    message: 'Available on the Business plan',
+                };
+            }
+
+            if (
+                seatUsage.maxStaffMembers !== null &&
+                seatUsage.currentStaffMembers >= seatUsage.maxStaffMembers
+            ) {
+                return {
+                    code: 403,
+                    error: true,
+                    message: buildStaffLimitReachedMessage(),
+                    data: {
+                        currentPlan: seatUsage.currentPlan,
+                        currentStaffMembers: seatUsage.currentStaffMembers,
+                        maxStaffMembers: seatUsage.maxStaffMembers,
+                    },
+                };
+            }
+        }
+
         let user = await prisma.user.findFirst({
             where: {
                 email: normalizedEmail,
@@ -1050,7 +1490,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
         });
 
         // Create StaffProfile if role is OWNER, ADMIN, or STAFF
-        if (['OWNER', 'ADMIN', 'STAFF'].includes(data.role)) {
+        if (isStaffSeatRole) {
             const staffProfile = await prisma.staffProfile.create({
                 data: {
                     company_id: shopId,
@@ -1118,6 +1558,48 @@ export async function updateUserRoleInShop(companyUserId: number, role: CompanyU
                 error: true,
                 message: 'User assignment not found'
             };
+        }
+
+        const targetIsStaffSeat =
+            role === CompanyUserRole.OWNER ||
+            role === CompanyUserRole.ADMIN ||
+            role === CompanyUserRole.STAFF;
+        const currentIsStaffSeat =
+            companyUser.role === CompanyUserRole.OWNER ||
+            companyUser.role === CompanyUserRole.ADMIN ||
+            companyUser.role === CompanyUserRole.STAFF;
+
+        if (targetIsStaffSeat) {
+            const seatUsage = await getStaffSeatUsageForCompany(companyUser.company_id);
+
+            if (
+                seatUsage.currentPlan &&
+                !isPlanFeatureEnabled(seatUsage.currentPlan, 'ROLES_PERMISSIONS') &&
+                role !== CompanyUserRole.STAFF
+            ) {
+                return {
+                    code: 403,
+                    error: true,
+                    message: 'Available on the Business plan',
+                };
+            }
+
+            if (
+                !currentIsStaffSeat &&
+                seatUsage.maxStaffMembers !== null &&
+                seatUsage.currentStaffMembers >= seatUsage.maxStaffMembers
+            ) {
+                return {
+                    code: 403,
+                    error: true,
+                    message: buildStaffLimitReachedMessage(),
+                    data: {
+                        currentPlan: seatUsage.currentPlan,
+                        currentStaffMembers: seatUsage.currentStaffMembers,
+                        maxStaffMembers: seatUsage.maxStaffMembers,
+                    },
+                };
+            }
         }
 
         const updated = await prisma.companyUser.update({

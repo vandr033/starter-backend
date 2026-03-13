@@ -3,6 +3,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
+import { getCompanySubscriptionHistoryPayload } from '../services/company-subscription-history.service';
 
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
@@ -91,6 +92,51 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
         });
     } catch (error) {
         logger.error('Error getting company settings:', error as any);
+        mensaje = {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+        };
+        return res.status(500).json(mensaje);
+    }
+}
+
+/**
+ * GET /api/admin/settings/subscription-history
+ * Get current subscription values and change history for the active shop
+ */
+export async function getCompanySubscriptionHistory(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+
+        if (!companyId) {
+            mensaje = {
+                code: 400,
+                message: 'Company context not found',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+
+        const payload = await getCompanySubscriptionHistoryPayload(companyId);
+
+        if (!payload) {
+            mensaje = {
+                code: 404,
+                message: 'Company not found',
+                error: true,
+            };
+            return res.status(404).json(mensaje);
+        }
+
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Subscription history retrieved successfully',
+            data: payload,
+        });
+    } catch (error) {
+        logger.error('Error getting company subscription history:', error as any);
         mensaje = {
             code: 500,
             message: 'Internal server error',

@@ -8,39 +8,44 @@ datasource db {
 }
 
 model Company {
-  id                   Int               @id @default(autoincrement())
-  slug                 String            @unique @db.VarChar(64)
+  id                   Int                          @id @default(autoincrement())
+  slug                 String                       @unique @db.VarChar(64)
   name                 String
-  address              String?           @db.VarChar(255)
-  phone_prefix         String            @default("591") @db.VarChar(8)
-  phone                String            @db.VarChar(32)
+  address              String?                      @db.VarChar(255)
+  phone_prefix         String                       @default("591") @db.VarChar(8)
+  phone                String                       @db.VarChar(32)
   email                String?
-  google_maps_url      String?           @db.VarChar(512)
-  timezone             String            @db.VarChar(64)
-  logo_url             String?           @db.VarChar(512)
-  home_hero_image_url  String?           @db.VarChar(512)
-  about_hero_image_url String?           @db.VarChar(512)
-  about_image_1_url    String?           @db.VarChar(512)
-  about_image_2_url    String?           @db.VarChar(512)
-  about_image_3_url    String?           @db.VarChar(512)
-  is_active            Boolean           @default(true)
-  created_at           DateTime          @default(now())
-  updated_at           DateTime          @updatedAt
+  google_maps_url      String?                      @db.VarChar(512)
+  timezone             String                       @db.VarChar(64)
+  logo_url             String?                      @db.VarChar(512)
+  home_hero_image_url  String?                      @db.VarChar(512)
+  about_hero_image_url String?                      @db.VarChar(512)
+  about_image_1_url    String?                      @db.VarChar(512)
+  about_image_2_url    String?                      @db.VarChar(512)
+  about_image_3_url    String?                      @db.VarChar(512)
+  is_active            Boolean                      @default(true)
+  created_at           DateTime                     @default(now())
+  updated_at           DateTime                     @updatedAt
   deleted_at           DateTime?
   company_type_id      Int
-  city                 String?           @db.VarChar(128)
-  country_code         String?           @db.VarChar(2)
-  state                String?           @db.VarChar(128)
+  city                 String?                      @db.VarChar(128)
+  country_code         String?                      @db.VarChar(2)
+  state                String?                      @db.VarChar(128)
   latitude             Float?
   longitude            Float?
-  about_us_hero_text   String?           @db.Text
-  about_us_text        String?           @db.Text
-  our_story_text       String?           @db.Text
+  about_us_hero_text   String?                      @db.Text
+  about_us_text        String?                      @db.Text
+  our_story_text       String?                      @db.Text
+  plan                 ShopPlan                     @default(BUSINESS)
+  billingCycle         BillingCycle                 @default(MONTHLY) @map("billing_cycle")
+  pricePaid            Decimal?                     @map("price_paid") @db.Decimal(10, 2)
+  availableUntil       DateTime                     @default(dbgenerated("'2027-03-12 23:59:59.000'")) @map("available_until")
+  isMarketplaceVisible Boolean                      @default(true) @map("is_marketplace_visible")
   bookings             Booking[]
   booking_discounts    BookingDiscount[]
   booking_services     BookingService[]
   categories           Category[]
-  company_type         CompanyType       @relation(fields: [company_type_id], references: [id])
+  company_type         CompanyType                  @relation(fields: [company_type_id], references: [id])
   company_settings     CompanySettings?
   company_users        CompanyUser[]
   config_messages      ConfigMessage[]
@@ -50,11 +55,15 @@ model Company {
   reviews              Review[]
   services             Service[]
   staff_profiles       StaffProfile[]
+  subscription_history CompanySubscriptionHistory[]
   staff_availability   StaffAvailability[]
   staff_time_off       StaffTimeOff[]
   staff_services       StaffService[]
   theme_config         ThemeConfig?
 
+  @@index([availableUntil], map: "company_available_until_idx")
+  @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
+  @@index([isMarketplaceVisible, is_active, city], map: "company_marketplace_visible_active_city_idx")
   @@index([city, country_code, is_active])
   @@index([is_active, city, state], map: "company_active_city_state_idx")
   @@index([company_type_id], map: "company_company_type_id_fkey")
@@ -102,34 +111,60 @@ model CompanySettings {
 }
 
 model User {
-  id                  String            @id @default(cuid())
-  email               String            @unique
-  first_name          String?           @db.VarChar(100)
-  last_name           String?           @db.VarChar(100)
-  is_super_admin      Boolean           @default(false)
-  is_active           Boolean           @default(true)
-  must_change_password Boolean          @default(false)
-  deleted_at          DateTime?
-  phone_prefix        String?           @db.VarChar(8)
-  createdAt           DateTime          @default(now())
-  emailVerified       Boolean           @default(false)
-  image               String?           @db.VarChar(512)
-  name                String
-  updatedAt           DateTime          @updatedAt
-  phoneNumber         String?           @unique @db.VarChar(32)
-  phoneNumberVerified Boolean?          @default(false)
-  accounts            Account[]
-  created_bookings    Booking[]         @relation("BookingCreatedBy")
-  updated_bookings    Booking[]         @relation("BookingUpdatedBy")
-  company_users       CompanyUser[]
-  customer_profiles   CustomerProfile[]
-  requested_time_off  StaffTimeOff[]      @relation("StaffTimeOffRequestedBy")
-  reviewed_time_off   StaffTimeOff[]      @relation("StaffTimeOffReviewedBy")
-  user_reviews        Review[]
-  sessions            Session[]
-  staff_profiles      StaffProfile[]
+  id                           String                       @id @default(cuid())
+  email                        String                       @unique
+  first_name                   String?                      @db.VarChar(100)
+  last_name                    String?                      @db.VarChar(100)
+  is_super_admin               Boolean                      @default(false)
+  is_active                    Boolean                      @default(true)
+  must_change_password         Boolean                      @default(false)
+  deleted_at                   DateTime?
+  phone_prefix                 String?                      @db.VarChar(8)
+  createdAt                    DateTime                     @default(now())
+  emailVerified                Boolean                      @default(false)
+  image                        String?                      @db.VarChar(512)
+  name                         String
+  updatedAt                    DateTime                     @updatedAt
+  phoneNumber                  String?                      @unique @db.VarChar(32)
+  phoneNumberVerified          Boolean?                     @default(false)
+  accounts                     Account[]
+  created_bookings             Booking[]                    @relation("BookingCreatedBy")
+  updated_bookings             Booking[]                    @relation("BookingUpdatedBy")
+  company_users                CompanyUser[]
+  customer_profiles            CustomerProfile[]
+  requested_time_off           StaffTimeOff[]               @relation("StaffTimeOffRequestedBy")
+  reviewed_time_off            StaffTimeOff[]               @relation("StaffTimeOffReviewedBy")
+  subscription_history_changes CompanySubscriptionHistory[] @relation("CompanySubscriptionHistoryChangedBy")
+  user_reviews                 Review[]
+  sessions                     Session[]
+  staff_profiles               StaffProfile[]
 
   @@map("user")
+}
+
+model CompanySubscriptionHistory {
+  id                         Int           @id @default(autoincrement())
+  companyId                  Int           @map("company_id")
+  previousPlan               ShopPlan?     @map("previous_plan")
+  newPlan                    ShopPlan      @map("new_plan")
+  previousBillingCycle       BillingCycle? @map("previous_billing_cycle")
+  newBillingCycle            BillingCycle  @map("new_billing_cycle")
+  previousPricePaid          Decimal?      @map("previous_price_paid") @db.Decimal(10, 2)
+  newPricePaid               Decimal?      @map("new_price_paid") @db.Decimal(10, 2)
+  previousAvailableUntil     DateTime?     @map("previous_available_until")
+  newAvailableUntil          DateTime      @map("new_available_until")
+  previousMarketplaceVisible Boolean?      @map("previous_marketplace_visible")
+  newMarketplaceVisible      Boolean       @map("new_marketplace_visible")
+  changedByUserId            String?       @map("changed_by_user_id")
+  changedAt                  DateTime      @default(now()) @map("changed_at")
+  note                       String?       @db.VarChar(500)
+  changedBy                  User?         @relation("CompanySubscriptionHistoryChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  company                    Company       @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([companyId, changedAt], map: "company_subscription_history_company_changed_at_idx")
+  @@index([changedByUserId], map: "company_subscription_history_changed_by_user_id_idx")
+  @@index([newPlan, changedAt], map: "company_subscription_history_new_plan_changed_at_idx")
+  @@map("company_subscription_history")
 }
 
 model CompanyUser {
@@ -151,25 +186,25 @@ model CompanyUser {
 }
 
 model StaffProfile {
-  id                  Int                @id @default(autoincrement())
+  id                  Int                 @id @default(autoincrement())
   company_id          Int
   user_id             String
   display_name        String
-  bio                 String?            @db.Text
-  image_url           String?            @db.VarChar(512)
-  is_bookable         Boolean            @default(true)
-  status              StaffProfileStatus @default(ACTIVE)
-  invite_token        String?            @unique @db.VarChar(255)
+  bio                 String?             @db.Text
+  image_url           String?             @db.VarChar(512)
+  is_bookable         Boolean             @default(true)
+  status              StaffProfileStatus  @default(ACTIVE)
+  invite_token        String?             @unique @db.VarChar(255)
   start_date          DateTime?
   end_date            DateTime?
-  created_at          DateTime           @default(now())
-  updated_at          DateTime           @updatedAt
+  created_at          DateTime            @default(now())
+  updated_at          DateTime            @updatedAt
   deleted_at          DateTime?
   availability_slots  StaffAvailability[]
   bookings            Booking[]
   preferred_customers CustomerProfile[]
-  company             Company            @relation(fields: [company_id], references: [id])
-  user                User               @relation(fields: [user_id], references: [id])
+  company             Company             @relation(fields: [company_id], references: [id])
+  user                User                @relation(fields: [user_id], references: [id])
   time_off_requests   StaffTimeOff[]
   staff_services      StaffService[]
 
@@ -200,21 +235,21 @@ model CustomerProfile {
 }
 
 model Category {
-  id                    Int       @id @default(autoincrement())
-  company_id            Int
+  id                     Int       @id @default(autoincrement())
+  company_id             Int
   global_service_type_id Int?
-  name                  String
-  slug                  String
-  description           String?
-  position              Int       @default(0)
-  is_active             Boolean   @default(true)
-  created_at            DateTime  @default(now())
-  updated_at            DateTime  @updatedAt
-  deleted_at            DateTime?
+  name                   String
+  slug                   String
+  description            String?
+  position               Int       @default(0)
+  is_active              Boolean   @default(true)
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+  deleted_at             DateTime?
 
-  company               Company   @relation(fields: [company_id], references: [id])
-  global_service_type   GlobalServiceType? @relation(fields: [global_service_type_id], references: [id])
-  services              Service[]
+  company             Company            @relation(fields: [company_id], references: [id])
+  global_service_type GlobalServiceType? @relation(fields: [global_service_type_id], references: [id])
+  services            Service[]
 
   @@unique([company_id, slug])
   @@index([global_service_type_id])
@@ -472,30 +507,30 @@ model types {
 }
 
 model CompanyType {
-  id          Int       @id @default(autoincrement())
-  key         String    @unique @db.VarChar(64)
-  name        String
-  name_i18n   Json      @default("{}")
-  description String?   @db.VarChar(255)
-  description_i18n Json @default("{}")
-  icon_name   String?   @db.VarChar(64)
-  is_active   Boolean   @default(true)
-  created_at  DateTime  @default(now())
-  updated_at  DateTime  @updatedAt
-  companies   Company[]
+  id               Int       @id @default(autoincrement())
+  key              String    @unique @db.VarChar(64)
+  name             String
+  name_i18n        Json      @default("{}")
+  description      String?   @db.VarChar(255)
+  description_i18n Json      @default("{}")
+  icon_name        String?   @db.VarChar(64)
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+  companies        Company[]
 
   @@map("company_type")
 }
 
 model GlobalServiceType {
-  id          Int       @id @default(autoincrement())
-  key         String    @unique @db.VarChar(64)
-  name        String
-  name_i18n   Json      @default("{}")
-  description String?   @db.VarChar(255)
-  description_i18n Json @default("{}")
-  services    Service[]
-  categories  Category[]
+  id               Int        @id @default(autoincrement())
+  key              String     @unique @db.VarChar(64)
+  name             String
+  name_i18n        Json       @default("{}")
+  description      String?    @db.VarChar(255)
+  description_i18n Json       @default("{}")
+  services         Service[]
+  categories       Category[]
 
   @@map("global_service_type")
 }
@@ -553,17 +588,17 @@ model StaffService {
 }
 
 model StaffAvailability {
-  id         Int          @id @default(autoincrement())
-  company_id Int
-  staff_id   Int
+  id          Int          @id @default(autoincrement())
+  company_id  Int
+  staff_id    Int
   day_of_week Int
-  start_time String       @db.VarChar(8)
-  end_time   String       @db.VarChar(8)
-  is_active  Boolean      @default(true)
-  created_at DateTime     @default(now())
-  updated_at DateTime     @updatedAt
-  company    Company      @relation(fields: [company_id], references: [id])
-  staff      StaffProfile @relation(fields: [staff_id], references: [id])
+  start_time  String       @db.VarChar(8)
+  end_time    String       @db.VarChar(8)
+  is_active   Boolean      @default(true)
+  created_at  DateTime     @default(now())
+  updated_at  DateTime     @updatedAt
+  company     Company      @relation(fields: [company_id], references: [id])
+  staff       StaffProfile @relation(fields: [staff_id], references: [id])
 
   @@index([company_id, staff_id, day_of_week, is_active])
   @@index([staff_id], map: "staff_availability_staff_id_fkey")
@@ -676,4 +711,15 @@ enum StaffTimeOffStatus {
   APPROVED
   REJECTED
   CANCELLED
+}
+
+enum ShopPlan {
+  STARTER
+  BUSINESS
+  PRO
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
 }

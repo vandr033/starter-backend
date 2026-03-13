@@ -3,6 +3,7 @@ import * as BookingController from '../controllers/booking.controller';
 import { createPublicBooking } from '../controllers/public-booking.controller';
 import { createCustomerBooking } from '../controllers/customer-booking.controller';
 import { requireAuth, AuthenticatedRequest } from '../middlewares/requireAuth';
+import { requireActiveCompany } from '../middlewares/requireActiveCompany';
 import * as CustomerAppointments from '../services/customer-appointments.service';
 import { Request, Response } from 'express';
 
@@ -18,19 +19,41 @@ router.get('/my', requireAuth, async (req: Request, res: Response) => {
 });
 
 // GET /api/booking/slots - Get available booking time slots
-router.get('/slots', BookingController.getAvailableSlots);
+router.get(
+    '/slots',
+    requireActiveCompany({ source: 'query', key: 'company_id' }),
+    BookingController.getAvailableSlots,
+);
 
 // GET /api/booking/available-dates - Get available booking dates with hours
-router.get('/available-dates', BookingController.getAvailableDates);
+router.get(
+    '/available-dates',
+    requireActiveCompany({ source: 'query', key: 'company_id' }),
+    BookingController.getAvailableDates,
+);
 
 // POST /api/booking - Create a new booking (requires auth)
-router.post('/', requireAuth, BookingController.createBooking);
+router.post(
+    '/',
+    requireAuth,
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    BookingController.createBooking,
+);
 
 // POST /api/booking/public - Create a new booking as a guest (no auth required)
-router.post('/public', createPublicBooking);
+router.post(
+    '/public',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    createPublicBooking,
+);
 
 // POST /api/booking/customer - Create a new booking for existing customer (requires auth)
-router.post('/customer', requireAuth, createCustomerBooking);
+router.post(
+    '/customer',
+    requireAuth,
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    createCustomerBooking,
+);
 
 // PUT /api/booking/:id - Modify a booking (requires auth)
 router.put('/:id', requireAuth, async (req: Request, res: Response) => {

@@ -4,6 +4,8 @@ import {
   PageBackgroundPreset,
   CornerRadius,
   CompanyUserRole,
+  ShopPlan,
+  BillingCycle,
   DiscountType,
   BookingType,
   BookingStatus,
@@ -19,6 +21,7 @@ const prisma = new PrismaClient();
 async function main() {
   const baseCreatedAt = new Date("2025-01-01T12:00:00.000Z");
   const baseUpdatedAt = new Date("2025-01-02T12:00:00.000Z");
+  const defaultAvailableUntil = new Date("2027-03-12T23:59:59.000Z");
 
   /**
    * 1) COMPANY TYPES / GLOBAL SERVICE TYPES / TYPES / FAQ
@@ -342,6 +345,11 @@ async function main() {
       about_image_2_url: "https://cdn.example.com/fade-factory/about-2.jpg",
       about_image_3_url: "https://cdn.example.com/fade-factory/about-3.jpg",
       is_active: true,
+      plan: ShopPlan.BUSINESS,
+      billingCycle: BillingCycle.MONTHLY,
+      pricePaid: null,
+      availableUntil: defaultAvailableUntil,
+      isMarketplaceVisible: true,
       created_at: baseCreatedAt,
       updated_at: baseUpdatedAt,
       deleted_at: null,
@@ -369,6 +377,11 @@ async function main() {
       about_image_2_url: "https://cdn.example.com/glow-nails/about-2.jpg",
       about_image_3_url: "https://cdn.example.com/glow-nails/about-3.jpg",
       is_active: true,
+      plan: ShopPlan.BUSINESS,
+      billingCycle: BillingCycle.MONTHLY,
+      pricePaid: null,
+      availableUntil: defaultAvailableUntil,
+      isMarketplaceVisible: true,
       created_at: baseCreatedAt,
       updated_at: baseUpdatedAt,
       deleted_at: null,

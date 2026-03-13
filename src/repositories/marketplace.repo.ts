@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { buildMarketplaceVisibilityWhere } from './marketplace-visibility';
 
 export type BoundsFilter = {
   minLng: number;
@@ -34,6 +35,7 @@ export type MarketplaceCompanyCandidate = {
   logo_url: string | null;
   company_type: {
     name: string;
+    name_i18n: Prisma.JsonValue;
   } | null;
   services: Array<{
     id: number;
@@ -64,10 +66,7 @@ function buildPrimaryWhere(query: MarketplaceCandidateQuery): Prisma.CompanyWher
   const zone = withTrimmedValue(query.zone);
   const q = withTrimmedValue(query.q);
 
-  const where: Prisma.CompanyWhereInput = {
-    is_active: true,
-    deleted_at: null,
-  };
+  const where: Prisma.CompanyWhereInput = buildMarketplaceVisibilityWhere();
 
   if (query.applyPrimaryAreaFilters) {
     if (query.bounds) {
@@ -167,6 +166,7 @@ async function queryCandidates(
       company_type: {
         select: {
           name: true,
+          name_i18n: true,
         },
       },
       services: {

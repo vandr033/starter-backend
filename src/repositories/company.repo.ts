@@ -1,9 +1,13 @@
 import { BookingStatus } from '@prisma/client';
 import { Prisma, prisma } from '../prisma/client';
+import {
+  buildMarketplaceVisibilityWhere,
+  withMarketplaceVisibilityWhere,
+} from './marketplace-visibility';
 
 export const getAllCompanies = async (limit?: number) => {
   const companies = await prisma.company.findMany({
-    where: { is_active: true },
+    where: buildMarketplaceVisibilityWhere(),
     take: limit ? limit : undefined,
   });
   return companies;
@@ -12,10 +16,7 @@ export const getAllCompanies = async (limit?: number) => {
 export const getFeaturedCompanies = async (limit: number = 8) => {
   // 1. Fetch active, non-deleted companies with basic info
   const companies = await prisma.company.findMany({
-    where: {
-      is_active: true,
-      deleted_at: null,
-    },
+    where: buildMarketplaceVisibilityWhere(),
     select: {
       id: true,
       name: true,
@@ -90,6 +91,21 @@ export const getCompaniesByIds = async (ids: number[]) => {
   });
 }
 
+export const getMarketplaceDiscoverableCompaniesByIds = async (ids: number[]) => {
+  return await prisma.company.findMany({
+    where: withMarketplaceVisibilityWhere({
+      id: { in: ids },
+    }),
+  });
+}
+
+export const getMarketplaceDiscoverableCompanies = async (limit?: number) => {
+  return await prisma.company.findMany({
+    where: buildMarketplaceVisibilityWhere(),
+    take: limit ? limit : undefined,
+  });
+}
+
 export const getCompanyBySlug = async (slug: string) => {
   return await prisma.company.findUnique({
     where: { slug, is_active: true },
@@ -132,11 +148,11 @@ export const getCities = async (query: string) => {
       city: true,
     },
     distinct: ['city'],
-    where: {
+    where: withMarketplaceVisibilityWhere({
       city: {
         contains: query,
       },
-    },
+    }),
   });
 }
 
@@ -146,6 +162,7 @@ export const getTopFourCompanyTypesIds = async () => {
   try {
     const topFourCompanyTypesIds = await prisma.company.groupBy({
       by: ['company_type_id'],
+      where: buildMarketplaceVisibilityWhere(),
       _count: {
         company_type_id: true,
       },
@@ -203,9 +220,7 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
   }
 
   // 2) Build Company.where dynamically
-  const where: Prisma.CompanyWhereInput = {
-    is_active: true,
-  };
+  const where: Prisma.CompanyWhereInput = buildMarketplaceVisibilityWhere();
 
   // 2.a) Filter by city / "Location"
   if (location) {

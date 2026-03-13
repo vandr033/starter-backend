@@ -3,6 +3,11 @@ import type { Request, Response, NextFunction } from "express";
 import { getAuth } from "../config/auth";
 import { prisma } from "../prisma/client";
 import { CompanyUserRole } from "@prisma/client";
+import {
+  buildShopUnavailablePayload,
+  isCompanyAvailableNow,
+} from "../utils/company-availability";
+import { getActiveCompanyIdFromRequest } from "../utils/active-shop-cookie";
 
 export interface AuthenticatedRequest extends Request {
   authUser?: any;
@@ -198,6 +203,10 @@ export function requireCompanyRole(allowedRoles: CompanyUserRole[]) {
                 id: true,
                 name: true,
                 slug: true,
+                plan: true,
+                availableUntil: true,
+                is_active: true,
+                deleted_at: true,
               },
             },
           },
@@ -214,33 +223,91 @@ export function requireCompanyRole(allowedRoles: CompanyUserRole[]) {
     }
 
     try {
-      // Find a CompanyUser record with one of the allowed roles
-      const companyUser = await prisma.companyUser.findFirst({
-        where: {
-          user_id: user.id,
-          deleted_at: null,
-          role: { in: allowedRoles },
-        },
-        orderBy: [
-          { role: 'asc' },
-          { updated_at: 'desc' },
-        ],
-        include: {
-          company: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
+      const activeCompanyId = getActiveCompanyIdFromRequest(req);
+      const baseWhere = {
+        user_id: user.id,
+        deleted_at: null as null,
+      };
+
+      let companyUser: any = null;
+
+      if (activeCompanyId) {
+        const activeShopMembership = await prisma.companyUser.findFirst({
+          where: {
+            ...baseWhere,
+            company_id: activeCompanyId,
+          },
+          include: {
+            company: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                plan: true,
+                availableUntil: true,
+                is_active: true,
+                deleted_at: true,
+              },
             },
           },
-        },
-      });
-
-      if (!companyUser) {
-        return res.status(403).json({
-          error: "Forbidden - insufficient role permissions",
-          requiredRoles: allowedRoles,
         });
+
+        if (!activeShopMembership) {
+          return res.status(403).json({
+            error: "Forbidden - invalid active shop context",
+            activeCompanyId,
+          });
+        }
+
+        if (!allowedRoles.includes(activeShopMembership.role)) {
+          return res.status(403).json({
+            error: "Forbidden - insufficient role in active shop",
+            activeCompanyId,
+            requiredRoles: allowedRoles,
+            currentRole: activeShopMembership.role,
+          });
+        }
+
+        companyUser = activeShopMembership;
+      } else {
+        // Backward-compatible fallback when no active shop was selected yet.
+        companyUser = await prisma.companyUser.findFirst({
+          where: {
+            ...baseWhere,
+            role: { in: allowedRoles },
+          },
+          orderBy: [
+            { role: 'asc' },
+            { updated_at: 'desc' },
+          ],
+          include: {
+            company: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                plan: true,
+                availableUntil: true,
+                is_active: true,
+                deleted_at: true,
+              },
+            },
+          },
+        });
+
+        if (!companyUser) {
+          return res.status(403).json({
+            error: "Forbidden - insufficient role permissions",
+            requiredRoles: allowedRoles,
+          });
+        }
+      }
+
+      if (!companyUser.company || !isCompanyAvailableNow(companyUser.company)) {
+        const availableUntil = companyUser.company?.availableUntil ?? new Date(0);
+        return res.status(403).json(
+          buildShopUnavailablePayload(availableUntil, "Shop subscription expired"),
+        );
       }
 
       // Attach companyUser to request for downstream use

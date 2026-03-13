@@ -46,11 +46,11 @@ export const getTopRatedShops = async () => {
         const shopWithMostReviews = await reviewsRepo.getTopRatedReviews(limit);
         const shopIds = shopWithMostReviews.map((item) => item.company_id);
         if(shopIds.length === 0){
-            const topRatedShops = await companyRepo.getAllCompanies(limit);
+            const topRatedShops = await companyRepo.getMarketplaceDiscoverableCompanies(limit);
             mensaje = buildSuccessResponse('home', topRatedShops);        
             return mensaje;
         }
-        const topRatedShops = await companyRepo.getCompaniesByIds(shopIds);
+        const topRatedShops = await companyRepo.getMarketplaceDiscoverableCompaniesByIds(shopIds);
         mensaje = buildSuccessResponse('home', topRatedShops);        
     } catch (error) {
         mensaje = buildServiceErrorResponse('home', 'get top rated shops', error);

@@ -1,27 +1,33 @@
 import { prisma } from '../prisma/client';
 import { getAuth } from '../config/auth';
 import { MensajeApi } from '../types/MensajeApi';
-import { CompanyUserRole } from '@prisma/client';
+import { CompanyUserRole, ShopPlan } from '@prisma/client';
 import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
 import bcrypt from 'bcryptjs';
 import { generateNumericCode } from '../utils/otp';
 import { sendEmailCode } from '../utils/sendEmail';
 
+export type AdminCompanyUserSummary = {
+    id: number;
+    company_id: number;
+    role: CompanyUserRole;
+    is_primary_contact: boolean;
+    company?: {
+        id: number;
+        name: string;
+        slug: string;
+        plan: ShopPlan;
+        availableUntil: Date;
+    };
+};
+
 interface AdminSignInResult extends MensajeApi {
     data?: {
         user: any;
         session: any;
-        companyUser: {
-            id: number;
-            company_id: number;
-            role: CompanyUserRole;
-            is_primary_contact: boolean;
-            company?: {
-                id: number;
-                name: string;
-                slug: string;
-            };
-        } | null;
+        companyUser: AdminCompanyUserSummary | null;
+        companyUsers: AdminCompanyUserSummary[];
+        activeCompanyId: number | null;
     };
     cookies?: string[]; // All Set-Cookie headers to forward
 }
@@ -34,8 +40,8 @@ const ADMIN_ALLOWED_ROLES: CompanyUserRole[] = [
 
 const RESET_CODE_TTL_MINUTES = 15;
 
-async function getAdminCompanyUser(userId: string) {
-    return prisma.companyUser.findFirst({
+async function getAdminCompanyUsers(userId: string) {
+    return prisma.companyUser.findMany({
         where: {
             user_id: userId,
             deleted_at: null,
@@ -49,6 +55,8 @@ async function getAdminCompanyUser(userId: string) {
                     id: true,
                     name: true,
                     slug: true,
+                    plan: true,
+                    availableUntil: true,
                 },
             },
         },
@@ -57,6 +65,28 @@ async function getAdminCompanyUser(userId: string) {
             { updated_at: 'desc' },
         ],
     });
+}
+
+function toAdminCompanyUserSummary(companyUser: Awaited<ReturnType<typeof getAdminCompanyUsers>>[number]): AdminCompanyUserSummary {
+    return {
+        id: companyUser.id,
+        company_id: companyUser.company_id,
+        role: companyUser.role,
+        is_primary_contact: companyUser.is_primary_contact,
+        company: companyUser.company ?? undefined,
+    };
+}
+
+function resolveActiveCompanyUser(
+    companyUsers: AdminCompanyUserSummary[],
+    preferredCompanyId?: number | null,
+): AdminCompanyUserSummary | null {
+    if (companyUsers.length === 0) return null;
+    if (preferredCompanyId) {
+        const preferred = companyUsers.find((companyUser) => companyUser.company_id === preferredCompanyId);
+        if (preferred) return preferred;
+    }
+    return companyUsers[0] ?? null;
 }
 
 async function hasAdminAccess(userId: string, isSuperAdmin: boolean): Promise<boolean> {
@@ -179,16 +209,18 @@ export async function signInAdmin(
             };
         }
 
-        // 4. Check if user has a CompanyUser record (admin/staff access)
-        const companyUser = await getAdminCompanyUser(session.user.id);
+        // 4. Resolve memberships (multi-shop support)
+        const companyUsers = (await getAdminCompanyUsers(session.user.id)).map(toAdminCompanyUserSummary);
 
-        if (!companyUser && !user.is_super_admin) {
+        if (companyUsers.length === 0 && !user.is_super_admin) {
             return {
                 code: 403,
                 message: 'User does not have admin access to any company',
                 error: true,
             };
         }
+
+        const activeCompanyUser = resolveActiveCompanyUser(companyUsers);
 
         return {
             code: 200,
@@ -200,13 +232,9 @@ export async function signInAdmin(
                     ...signInData.session,
                     token: signInData.token,
                 },
-                companyUser: companyUser ? {
-                    id: companyUser.id,
-                    company_id: companyUser.company_id,
-                    role: companyUser.role,
-                    is_primary_contact: companyUser.is_primary_contact,
-                    company: companyUser.company ?? undefined,
-                } : null,
+                companyUser: activeCompanyUser,
+                companyUsers,
+                activeCompanyId: activeCompanyUser?.company_id ?? null,
             },
             cookies: setCookies.length > 0 ? setCookies : undefined,
         };
@@ -231,7 +259,10 @@ export async function signInAdmin(
 /**
  * Get admin session with company context
  */
-export async function getAdminSessionData(userId: string): Promise<AdminSignInResult> {
+export async function getAdminSessionData(
+    userId: string,
+    preferredCompanyId?: number | null,
+): Promise<AdminSignInResult> {
     try {
         // Get user from database
         const user = await prisma.user.findUnique({
@@ -256,10 +287,11 @@ export async function getAdminSessionData(userId: string): Promise<AdminSignInRe
             };
         }
 
-        // Get CompanyUser record
-        const companyUser = await getAdminCompanyUser(userId);
+        // Resolve memberships (multi-shop support)
+        const companyUsers = (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary);
+        const activeCompanyUser = resolveActiveCompanyUser(companyUsers, preferredCompanyId);
 
-        if (!companyUser && !user.is_super_admin) {
+        if (companyUsers.length === 0 && !user.is_super_admin) {
             return {
                 code: 403,
                 message: 'User does not have admin access to any company',
@@ -274,17 +306,47 @@ export async function getAdminSessionData(userId: string): Promise<AdminSignInRe
             data: {
                 user,
                 session: null, // Session already validated by middleware
-                companyUser: companyUser ? {
-                    id: companyUser.id,
-                    company_id: companyUser.company_id,
-                    role: companyUser.role,
-                    is_primary_contact: companyUser.is_primary_contact,
-                    company: companyUser.company ?? undefined,
-                } : null,
+                companyUser: activeCompanyUser,
+                companyUsers,
+                activeCompanyId: activeCompanyUser?.company_id ?? null,
             },
         };
     } catch (error: any) {
         console.error('Get admin session error:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+export async function switchActiveShop(userId: string, companyId: number): Promise<MensajeApi> {
+    try {
+        const companyUsers = (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary);
+
+        const selected = companyUsers.find((companyUser) => companyUser.company_id === companyId);
+        if (!selected) {
+            return {
+                code: 403,
+                message: 'You do not belong to this shop',
+                error: true,
+            };
+        }
+
+        return {
+            code: 200,
+            error: false,
+            message: 'Active shop updated',
+            data: {
+                companyUser: selected,
+                companyUsers,
+                activeCompanyId: selected.company_id,
+            },
+        };
+    } catch (error: any) {
+        console.error('Switch active shop error:', error);
         return {
             code: 500,
             message: 'Internal server error',
