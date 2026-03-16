@@ -20,6 +20,9 @@ router.get('/', requireAuth, requireCompanyRole(adminRoles), AdminStaffControlle
 // POST /api/admin/staff - Create a new staff profile
 router.post('/', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.createStaff);
 
+// POST /api/admin/staff/:id/resend-invite - Resend invitation for pending staff
+router.post('/:id/resend-invite', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.resendStaffInvite);
+
 // PUT /api/admin/staff/:id - Update a staff profile
 router.put('/:id', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.updateStaff);
 

@@ -4,6 +4,7 @@ import { BillingCycle, CompanyUserRole, Prisma, ShopPlan } from '@prisma/client'
 import { getAuth } from '../config/auth';
 import bcrypt from 'bcryptjs';
 import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
+import * as StaffService from './staff.service';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
 import {
     buildStaffLimitReachedMessage,
@@ -1217,7 +1218,10 @@ export async function getShopUsers(shopId: number): Promise<MensajeApi> {
                 id: true,
                 user_id: true,
                 display_name: true,
-                is_bookable: true
+                image_url: true,
+                is_bookable: true,
+                status: true,
+                invite_token: true,
             }
         });
 
@@ -1622,6 +1626,62 @@ export async function updateUserRoleInShop(companyUserId: number, role: CompanyU
             code: 500,
             error: true,
             message: 'Failed to update user role'
+        };
+    }
+}
+
+/**
+ * Resend invitation email for a pending shop user
+ */
+export async function resendPendingUserInvite(shopId: number, companyUserId: number): Promise<MensajeApi> {
+    try {
+        const assignment = await prisma.companyUser.findFirst({
+            where: {
+                id: companyUserId,
+                company_id: shopId,
+                deleted_at: null,
+            },
+            select: {
+                id: true,
+                company_id: true,
+                user_id: true,
+            },
+        });
+
+        if (!assignment) {
+            return {
+                code: 404,
+                error: true,
+                message: 'User assignment not found',
+            };
+        }
+
+        const staffProfile = await prisma.staffProfile.findFirst({
+            where: {
+                company_id: shopId,
+                user_id: assignment.user_id,
+                deleted_at: null,
+            },
+            select: {
+                id: true,
+            },
+        });
+
+        if (!staffProfile) {
+            return {
+                code: 400,
+                error: true,
+                message: 'This user does not have a staff invitation to resend',
+            };
+        }
+
+        return await StaffService.resendStaffInvite(shopId, staffProfile.id);
+    } catch (error) {
+        console.error('Error resending pending user invite:', error);
+        return {
+            code: 500,
+            error: true,
+            message: 'Failed to resend invite',
         };
     }
 }

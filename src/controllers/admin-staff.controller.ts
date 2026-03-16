@@ -324,6 +324,36 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
 }
 
 /**
+ * POST /api/admin/staff/:id/resend-invite
+ * Resend invitation email for a pending staff member
+ */
+export async function resendStaffInvite(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const staffId = parseInt(req.params.id as string, 10);
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (isNaN(staffId)) {
+        mensaje = {
+            code: 400,
+            message: 'Invalid staff ID',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await StaffService.resendStaffInvite(companyId, staffId);
+    return res.status(result.code).json(result);
+}
+
+/**
  * PUT /api/admin/staff/:id
  * Update a staff profile
  */

@@ -269,6 +269,41 @@ export async function removeUserFromShop(req: AuthenticatedRequest, res: Respons
 }
 
 /**
+ * POST /api/super-admin/shops/:shopId/users/:companyUserId/resend-invite
+ * Resend invitation email for a pending shop user
+ */
+export async function resendPendingUserInvite(req: AuthenticatedRequest, res: Response) {
+    try {
+        const { shopId, companyUserId } = req.params;
+
+        const parsedShopId = parseInt(Array.isArray(shopId) ? shopId[0] : shopId);
+        const parsedCompanyUserId = parseInt(Array.isArray(companyUserId) ? companyUserId[0] : companyUserId);
+
+        if (Number.isNaN(parsedShopId) || Number.isNaN(parsedCompanyUserId)) {
+            return res.status(400).json({
+                code: 400,
+                error: true,
+                message: 'Invalid shop or user assignment id',
+            });
+        }
+
+        const result = await SuperAdminShopsService.resendPendingUserInvite(
+            parsedShopId,
+            parsedCompanyUserId
+        );
+
+        return res.status(result.code).json(result);
+    } catch (error) {
+        console.error('Error in resendPendingUserInvite:', error);
+        return res.status(500).json({
+            code: 500,
+            error: true,
+            message: 'Internal server error'
+        });
+    }
+}
+
+/**
  * GET /api/super-admin/company-types
  * Get all company types
  */

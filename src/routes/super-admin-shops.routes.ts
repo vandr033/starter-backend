@@ -44,6 +44,7 @@ router.delete('/shops/:id', SuperAdminShopsController.deleteShop);
 router.get('/shops/:id/users', SuperAdminShopsController.getShopUsers);
 router.post('/shops/:id/users', SuperAdminShopsController.addUserToShop);
 router.put('/shops/:shopId/users/:companyUserId', SuperAdminShopsController.updateUserRoleInShop);
+router.post('/shops/:shopId/users/:companyUserId/resend-invite', SuperAdminShopsController.resendPendingUserInvite);
 router.delete('/shops/:shopId/users/:companyUserId', SuperAdminShopsController.removeUserFromShop);
 
 // Company types CRUD

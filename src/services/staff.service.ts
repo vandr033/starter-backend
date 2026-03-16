@@ -473,6 +473,130 @@ export async function createStaff(
 }
 
 /**
+ * Resend invitation email for a pending staff profile
+ */
+export async function resendStaffInvite(
+    companyId: number,
+    staffId: number
+): Promise<StaffResult> {
+    try {
+        const staff = await prisma.staffProfile.findFirst({
+            where: {
+                id: staffId,
+                company_id: companyId,
+                deleted_at: null,
+            },
+            select: {
+                id: true,
+                invite_token: true,
+                status: true,
+                user: {
+                    select: {
+                        email: true,
+                    },
+                },
+                company: {
+                    select: {
+                        name: true,
+                    },
+                },
+            },
+        });
+
+        if (!staff) {
+            return {
+                code: 404,
+                message: 'Staff not found',
+                error: true,
+            };
+        }
+
+        if (staff.status !== 'PENDING') {
+            return {
+                code: 400,
+                message: 'Invitation can only be resent for pending staff',
+                error: true,
+            };
+        }
+
+        const normalizedEmail = (staff.user.email || '').trim().toLowerCase();
+        if (!normalizedEmail) {
+            return {
+                code: 400,
+                message: 'Pending staff user has no email to receive invitation',
+                error: true,
+            };
+        }
+
+        const inviteToken = staff.invite_token || crypto.randomBytes(32).toString('hex');
+        const otp = generateNumericCode();
+        const codeHash = await bcrypt.hash(otp, 10);
+        const now = new Date();
+
+        await prisma.$transaction(async (tx) => {
+            if (!staff.invite_token) {
+                await tx.staffProfile.update({
+                    where: { id: staff.id },
+                    data: { invite_token: inviteToken },
+                });
+            }
+
+            await tx.verificationCode.updateMany({
+                where: {
+                    identifier: normalizedEmail,
+                    channel: VerificationChannel.EMAIL,
+                    purpose: VerificationPurpose.STAFF_INVITE,
+                    consumed_at: null,
+                },
+                data: {
+                    consumed_at: now,
+                },
+            });
+
+            await tx.verificationCode.create({
+                data: {
+                    channel: VerificationChannel.EMAIL,
+                    purpose: VerificationPurpose.STAFF_INVITE,
+                    identifier: normalizedEmail,
+                    code_hash: codeHash,
+                    expires_at: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+                },
+            });
+        });
+
+        const inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/staff/invite/${inviteToken}`;
+        const emailStatus = await sendStaffInviteEmail(
+            normalizedEmail,
+            otp,
+            inviteLink,
+            staff.company.name || 'Our Company'
+        );
+
+        if (emailStatus !== 1) {
+            return {
+                code: 500,
+                message: 'Failed to send invitation email',
+                error: true,
+            };
+        }
+
+        return {
+            code: 200,
+            message: 'Invitation resent successfully',
+            error: false,
+        };
+    } catch (error: any) {
+        console.error('Error resending staff invite:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+/**
  * Update a staff profile
  */
 export interface UpdateStaffInput {
