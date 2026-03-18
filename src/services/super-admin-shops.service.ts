@@ -50,6 +50,7 @@ interface CreateShopData {
     state?: string | null;
     country_code?: string | null;
     timezone?: string | null;
+    currency: string;
     latitude?: number | null;
     longitude?: number | null;
     company_type_id: number;
@@ -82,6 +83,7 @@ interface UpdateShopData {
     state?: string | null;
     country_code?: string | null;
     timezone?: string | null;
+    currency?: string;
     latitude?: number | null;
     longitude?: number | null;
     company_type_id?: number;
@@ -116,6 +118,13 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
 
 function normalizeRequiredText(value: string): string {
     return value.trim();
+}
+
+function normalizeCurrency(value: string | null | undefined): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (normalized.length === 0 || normalized.length > 3) return undefined;
+    return normalized;
 }
 
 function parseDateTime(value: string | Date): Date | null {
@@ -193,6 +202,7 @@ export async function getAllShops(options: GetAllShopsOptions): Promise<MensajeA
                     id: shop.id,
                     slug: shop.slug,
                     name: shop.name,
+                    currency: shop.currency,
                     city: shop.city,
                     is_active: shop.is_active,
                     plan: shop.plan,
@@ -356,6 +366,7 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                 state: shop.state,
                 country_code: shop.country_code,
                 timezone: shop.timezone,
+                currency: shop.currency,
                 latitude: shop.latitude,
                 longitude: shop.longitude,
                 is_active: shop.is_active,
@@ -418,8 +429,17 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
     try {
         const normalizedName = normalizeRequiredText(data.name);
         const normalizedPhone = normalizeRequiredText(data.phone);
+        const normalizedCurrency = normalizeCurrency(data.currency);
         const normalizedAvailableUntil = parseDateTime(data.availableUntil);
         const normalizedPricePaid = normalizePricePaid(data.pricePaid);
+
+        if (!normalizedCurrency) {
+            return {
+                code: 400,
+                error: true,
+                message: 'currency is required',
+            };
+        }
 
         if (!normalizedAvailableUntil) {
             return {
@@ -517,6 +537,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     state: normalizeOptionalText(data.state),
                     country_code: normalizeOptionalText(data.country_code),
                     timezone: normalizeOptionalText(data.timezone) || 'America/La_Paz',
+                    currency: normalizedCurrency,
                     latitude: data.latitude ?? null,
                     longitude: data.longitude ?? null,
                     company_type_id: data.company_type_id,
@@ -917,6 +938,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 state: shop.state,
                 country_code: shop.country_code,
                 timezone: shop.timezone,
+                currency: shop.currency,
                 latitude: shop.latitude,
                 longitude: shop.longitude,
                 is_active: shop.is_active,
@@ -1005,6 +1027,16 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             };
         }
 
+        const normalizedCurrency =
+            data.currency !== undefined ? normalizeCurrency(data.currency) : undefined;
+        if (data.currency !== undefined && !normalizedCurrency) {
+            return {
+                code: 400,
+                error: true,
+                message: 'currency must be a non-empty string up to 3 characters',
+            };
+        }
+
         // Generate slug if name is being updated and no slug provided
         const updateData: Prisma.CompanyUncheckedUpdateInput = {};
         if (data.name !== undefined) {
@@ -1025,6 +1057,7 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
         if (data.state !== undefined) updateData.state = normalizeOptionalText(data.state);
         if (data.country_code !== undefined) updateData.country_code = normalizeOptionalText(data.country_code);
         if (data.timezone !== undefined) updateData.timezone = normalizeOptionalText(data.timezone) || 'America/La_Paz';
+        if (data.currency !== undefined && normalizedCurrency) updateData.currency = normalizedCurrency;
         if (data.latitude !== undefined) updateData.latitude = data.latitude;
         if (data.longitude !== undefined) updateData.longitude = data.longitude;
         if (data.company_type_id !== undefined) updateData.company_type_id = data.company_type_id;
@@ -1111,6 +1144,7 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
                 state: shop.state,
                 country_code: shop.country_code,
                 timezone: shop.timezone,
+                currency: shop.currency,
                 latitude: shop.latitude,
                 longitude: shop.longitude,
                 is_active: shop.is_active,

@@ -1115,15 +1115,26 @@ async function main() {
   /**
    * 14) REVIEWS
    */
+  // Mark bookings 1 and 3 as COMPLETED so reviews are consistent
+  await prisma.booking.updateMany({
+    where: { id: { in: [1, 3] } },
+    data: { status: "COMPLETED" },
+  });
+
   const reviews = [
     {
       id: 1,
       company_id: 1,
       user_id: "user_barber_customer",
       service_id: 1,
+      staff_id: 1,
       booking_id: 1,
       rating: 5,
       comment: "Excelente corte, súper prolijo y puntual.",
+      rating_service_quality: 5,
+      rating_staff_attention: 5,
+      rating_punctuality: 5,
+      rating_cleanliness: 4,
       created_at: baseCreatedAt,
       updated_at: baseUpdatedAt,
     },
@@ -1132,9 +1143,14 @@ async function main() {
       company_id: 2,
       user_id: "user_nails_customer",
       service_id: 4,
+      staff_id: 3,
       booking_id: 3,
       rating: 4,
       comment: "Las uñas quedaron increíbles, un poco de espera al llegar.",
+      rating_service_quality: 5,
+      rating_staff_attention: 4,
+      rating_punctuality: 3,
+      rating_cleanliness: 5,
       created_at: baseCreatedAt,
       updated_at: baseUpdatedAt,
     },

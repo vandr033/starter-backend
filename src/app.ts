@@ -21,6 +21,7 @@ function parseOriginList(value?: string | null): string[] {
 function buildCorsOrigins(): string[] {
   const defaults = [
     "http://localhost:3000",
+    "http://localhost:3002",
     "http://127.0.0.1:3000",
     "http://g0kc8cgg40oso4c800s8ks80.89.167.82.92.sslip.io",
     "http://ow0ggc084gkkk844s4s8gow8.89.167.82.92.sslip.io",

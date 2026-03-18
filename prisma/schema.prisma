@@ -17,6 +17,7 @@ model Company {
   email                String?
   google_maps_url      String?                      @db.VarChar(512)
   timezone             String                       @db.VarChar(64)
+  currency             String                       @default("Bs.") @db.VarChar(3)
   logo_url             String?                      @db.VarChar(512)
   home_hero_image_url  String?                      @db.VarChar(512)
   about_hero_image_url String?                      @db.VarChar(512)
@@ -203,6 +204,7 @@ model StaffProfile {
   availability_slots  StaffAvailability[]
   bookings            Booking[]
   preferred_customers CustomerProfile[]
+  reviews             Review[]
   company             Company             @relation(fields: [company_id], references: [id])
   user                User                @relation(fields: [user_id], references: [id])
   time_off_requests   StaffTimeOff[]
@@ -546,23 +548,31 @@ model FrequentlyAskedQuestion {
 }
 
 model Review {
-  id         Int      @id @default(autoincrement())
-  company_id Int
-  user_id    String
-  service_id Int?
-  booking_id Int?     @unique
-  rating     Int
-  comment    String   @db.VarChar(255)
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-  booking    Booking? @relation(fields: [booking_id], references: [id])
-  company    Company  @relation(fields: [company_id], references: [id])
-  service    Service? @relation(fields: [service_id], references: [id])
-  user       User     @relation(fields: [user_id], references: [id])
+  id                       Int           @id @default(autoincrement())
+  company_id               Int
+  user_id                  String
+  service_id               Int?
+  booking_id               Int?          @unique
+  staff_id                 Int?
+  rating                   Int
+  comment                  String?       @db.Text
+  rating_service_quality   Int?
+  rating_staff_attention   Int?
+  rating_punctuality       Int?
+  rating_cleanliness       Int?
+  created_at               DateTime      @default(now())
+  updated_at               DateTime      @updatedAt
+  booking                  Booking?      @relation(fields: [booking_id], references: [id])
+  company                  Company       @relation(fields: [company_id], references: [id])
+  service                  Service?      @relation(fields: [service_id], references: [id])
+  staff                    StaffProfile? @relation(fields: [staff_id], references: [id])
+  user                     User          @relation(fields: [user_id], references: [id])
 
   @@index([company_id], map: "review_company_id_fkey")
   @@index([service_id], map: "review_service_id_fkey")
   @@index([user_id], map: "review_user_id_fkey")
+  @@index([staff_id], map: "review_staff_id_fkey")
+  @@index([company_id, created_at(sort: Desc)])
   @@map("review")
 }
 

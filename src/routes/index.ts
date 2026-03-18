@@ -27,6 +27,8 @@ import superAdminShopsRoutes from './super-admin-shops.routes';
 import profileRoutes from './profile.routes';
 import staffInviteRoutes from './staff-invite.routes';
 import marketplaceRoutes from './marketplace.routes';
+import reviewRoutes from './review.routes';
+import adminReviewRoutes from './admin-review.routes';
 
 export const router = Router();
 router.use('/v1/auth', authRoutes);
@@ -57,3 +59,5 @@ router.use('/staff', staffInviteRoutes);
 router.use('/admin/categories', adminCategoriesRoutes);
 router.use('/home', homeRoutes);
 router.use('/marketplace', marketplaceRoutes);
+router.use('/review', reviewRoutes);
+router.use('/admin/reviews', adminReviewRoutes);

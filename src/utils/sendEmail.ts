@@ -414,6 +414,27 @@ export async function sendStaffTimeOffRequestEmail(params: {
     }
 }
 
+export async function sendGenericEmail(
+    to: string,
+    subject: string,
+    html: string,
+): Promise<void> {
+    try {
+        await transporter.sendMail({
+            to,
+            from: process.env.MAIL_FROM!,
+            subject,
+            html,
+        });
+    } catch (error) {
+        logger.error(
+            { event: 'generic_email_failed', to: maskEmail(to), subject, err: error },
+            'Error sending generic email',
+        );
+        throw error;
+    }
+}
+
 export async function sendCustomerMassMessageEmail(params: {
     email: string;
     companyName: string;

@@ -13,6 +13,7 @@ import {
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookingNotifications';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
+import { sendReviewRequestReminder } from '../utils/reviewNotifications';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -566,6 +567,43 @@ export async function updateBooking(
             } else if (updates.start_at || updates.staff_id || updates.service_ids) {
                 void notifyBookingUpdated(notificationData);
             }
+        }
+
+        // Send review request reminder when booking is completed (fire-and-forget)
+        if (updates.status === BookingStatus.COMPLETED && updatedBooking) {
+            const companyForSlug = await prisma.company.findUnique({
+                where: { id: companyId },
+                select: { name: true, slug: true },
+            });
+
+            let reviewCustomerEmail = updatedBooking.client_email;
+            let reviewCustomerPhone = updatedBooking.client_phone_number;
+            let reviewCustomerPhonePrefix = updatedBooking.client_phone_prefix;
+            let reviewCustomerName = updatedBooking.client_name || 'Customer';
+
+            if (updatedBooking.customer_id) {
+                const cp = await prisma.customerProfile.findUnique({
+                    where: { id: updatedBooking.customer_id },
+                    include: { user: { select: { email: true, name: true, first_name: true, phoneNumber: true, phone_prefix: true } } },
+                });
+                if (cp?.user) {
+                    reviewCustomerEmail = reviewCustomerEmail || cp.user.email;
+                    reviewCustomerPhone = reviewCustomerPhone || cp.user.phoneNumber;
+                    reviewCustomerPhonePrefix = reviewCustomerPhonePrefix || cp.user.phone_prefix;
+                    reviewCustomerName = reviewCustomerName || cp.user.first_name || cp.user.name || 'Customer';
+                }
+            }
+
+            void sendReviewRequestReminder({
+                companyId,
+                bookingId,
+                customerEmail: reviewCustomerEmail,
+                customerPhone: reviewCustomerPhone,
+                customerPhonePrefix: reviewCustomerPhonePrefix,
+                customerName: reviewCustomerName,
+                companyName: companyForSlug?.name || '',
+                companySlug: companyForSlug?.slug || null,
+            });
         }
 
         return {

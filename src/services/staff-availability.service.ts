@@ -308,7 +308,10 @@ export async function createTimeOffRequest(params: {
             return { code: 409, error: true, message: 'Overlapping time-off request already exists' };
         }
 
-        const autoApprove = await getAutoApproveSetting(companyId);
+        const companyAutoApprove = await getAutoApproveSetting(companyId);
+        // OWNER and ADMIN requests are always auto-approved
+        const isPrivilegedRole = actorRole === CompanyUserRole.OWNER || actorRole === CompanyUserRole.ADMIN;
+        const autoApprove = isPrivilegedRole || companyAutoApprove;
         const status = autoApprove ? StaffTimeOffStatus.APPROVED : StaffTimeOffStatus.PENDING;
 
         const created = await prisma.staffTimeOff.create({

@@ -44,6 +44,7 @@ interface EvaluatedCandidate {
   companyId: number;
   slug: string;
   name: string;
+  currency: string;
   businessType: string | null;
   businessTypeI18n: I18nMap | null;
   zoneOrArea: string | null;
@@ -344,6 +345,7 @@ async function evaluateCompany(
     companyId: company.id,
     slug: company.slug,
     name: company.name,
+    currency: company.currency,
     businessType: company.company_type?.name ?? null,
     businessTypeI18n: toI18nMap(company.company_type?.name_i18n),
     zoneOrArea: company.state ?? company.address ?? null,
@@ -477,6 +479,7 @@ function toApiResult(item: EvaluatedCandidate, serviceTypeId: number, requestedT
     companyId: item.companyId,
     slug: item.slug,
     name: item.name,
+    currency: item.currency,
     businessType: item.businessType,
     businessTypeI18n: item.businessTypeI18n,
     zoneOrArea: item.zoneOrArea,
@@ -540,6 +543,7 @@ function toMapPin(item: EvaluatedCandidate, isPrimaryMatch: boolean) {
     isPrimaryMatch,
     popup: {
       name: item.name,
+      currency: item.currency,
       businessType: item.businessType,
       businessTypeI18n: item.businessTypeI18n,
       rating: item.rating,

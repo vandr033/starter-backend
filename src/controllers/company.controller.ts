@@ -8,6 +8,13 @@ import { prisma } from '../prisma/client';
 import sanitizeHtml from 'sanitize-html';
 let mensaje: MensajeApi;
 
+function normalizeCurrencyInput(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim();
+    if (normalized.length === 0 || normalized.length > 3) return null;
+    return normalized;
+}
+
 export const getAllCompanies = async (req: Request, res: Response) => {
     try {
         mensaje = await CompanyService.getAllCompanies();
@@ -72,6 +79,22 @@ export const getCompanyByPhone = async (req: Request, res: Response) => {
 
 export const createCompany = async (req: Request, res: Response) => {
     try {
+        if ((req.body as any).currency === undefined || (req.body as any).currency === null || String((req.body as any).currency).trim() === '') {
+            return res.status(400).json({
+                code: 400,
+                message: 'currency is required',
+                error: true,
+            });
+        }
+        const normalizedCurrency = normalizeCurrencyInput((req.body as any).currency);
+        if (!normalizedCurrency) {
+            return res.status(400).json({
+                code: 400,
+                message: 'currency must be a non-empty string up to 3 characters',
+                error: true,
+            });
+        }
+        (req.body as any).currency = normalizedCurrency;
         mensaje = await CompanyService.createCompany(req.body);
         res.status(201).json(mensaje);
     } catch (error) {
@@ -85,6 +108,17 @@ export const createCompany = async (req: Request, res: Response) => {
 export const updateCompany = async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
+        if ((req.body as any).currency !== undefined) {
+            const normalizedCurrency = normalizeCurrencyInput((req.body as any).currency);
+            if (!normalizedCurrency) {
+                return res.status(400).json({
+                    code: 400,
+                    message: 'currency must be a non-empty string up to 3 characters',
+                    error: true,
+                });
+            }
+            (req.body as any).currency = normalizedCurrency;
+        }
         mensaje = await CompanyService.updateCompany(id, req.body);
         res.status(200).json(mensaje);
     } catch (error) {

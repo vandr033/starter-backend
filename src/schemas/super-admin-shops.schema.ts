@@ -23,6 +23,12 @@ const availableUntilSchema = z
   .min(1)
   .refine((value) => !Number.isNaN(new Date(value).getTime()), 'availableUntil must be a valid datetime');
 
+const currencySchema = z
+  .string()
+  .trim()
+  .min(1, 'currency is required')
+  .max(3, 'currency must be at most 3 characters');
+
 const ownerSchema = z
   .object({
     existingUserId: z.string().trim().min(1).optional(),
@@ -77,6 +83,7 @@ export const createSuperAdminShopSchema = z
     state: optionalTextSchema,
     country_code: optionalTextSchema,
     timezone: optionalTextSchema,
+    currency: currencySchema,
     latitude: optionalCoordinateSchema,
     longitude: optionalCoordinateSchema,
     company_type_id: z.number().int().positive(),
@@ -101,6 +108,7 @@ export const updateSuperAdminShopSchema = z
     state: optionalTextSchema,
     country_code: optionalTextSchema,
     timezone: optionalTextSchema,
+    currency: currencySchema.optional(),
     latitude: optionalCoordinateSchema,
     longitude: optionalCoordinateSchema,
     company_type_id: z.number().int().positive().optional(),

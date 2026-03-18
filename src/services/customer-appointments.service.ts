@@ -11,6 +11,7 @@ const bookingInclude = {
             slug: true,
             logo_url: true,
             timezone: true,
+            currency: true,
         },
     },
     staff: {
@@ -90,6 +91,7 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
                     name: b.company.name,
                     slug: b.company.slug,
                     logo_url: b.company.logo_url,
+                    currency: b.company.currency,
                 },
                 staff: b.staff,
                 services: b.booking_services.map((bs) => ({

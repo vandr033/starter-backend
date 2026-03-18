@@ -37,7 +37,7 @@ export async function getAllBookings(options: GetAllBookingsOptions) {
             take: limit,
             orderBy: { start_at: 'desc' },
             include: {
-                company: { select: { id: true, name: true, slug: true } },
+                company: { select: { id: true, name: true, slug: true, currency: true } },
                 staff: { select: { id: true, display_name: true } },
                 booking_services: {
                     include: {
@@ -61,6 +61,7 @@ export async function getAllBookings(options: GetAllBookingsOptions) {
             id: b.id,
             shopName: b.company.name,
             shopId: b.company.id,
+            currency: b.company.currency,
             clientName: b.customer?.user?.name || b.client_name || 'Guest',
             clientEmail: b.customer?.user?.email || b.client_email || null,
             clientPhone: b.customer?.user?.phoneNumber || b.client_phone_number || null,

@@ -26,6 +26,7 @@ export type MarketplaceCompanyCandidate = {
   id: number;
   slug: string;
   name: string;
+  currency: string;
   city: string | null;
   state: string | null;
   address: string | null;
@@ -156,6 +157,7 @@ async function queryCandidates(
       id: true,
       slug: true,
       name: true,
+      currency: true,
       city: true,
       state: true,
       address: true,

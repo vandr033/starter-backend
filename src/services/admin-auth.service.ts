@@ -16,6 +16,7 @@ export type AdminCompanyUserSummary = {
         id: number;
         name: string;
         slug: string;
+        currency: string;
         plan: ShopPlan;
         availableUntil: Date;
     };
@@ -55,6 +56,7 @@ async function getAdminCompanyUsers(userId: string) {
                     id: true,
                     name: true,
                     slug: true,
+                    currency: true,
                     plan: true,
                     availableUntil: true,
                 },
