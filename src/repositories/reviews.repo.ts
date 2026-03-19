@@ -76,6 +76,19 @@ export const findReviewByBookingId = async (bookingId: number) => {
   });
 };
 
+export const findReviewById = async (reviewId: number) => {
+  return prisma.review.findUnique({
+    where: { id: reviewId },
+    select: { id: true, company_id: true, user_id: true },
+  });
+};
+
+export const deleteReview = async (reviewId: number) => {
+  return prisma.review.delete({
+    where: { id: reviewId },
+  });
+};
+
 // ---------------------------------------------------------------------------
 // Listing
 // ---------------------------------------------------------------------------

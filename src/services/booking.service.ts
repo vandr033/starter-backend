@@ -24,6 +24,57 @@ interface GetSlotsResult extends MensajeApi {
     data?: TimeSlot[];
 }
 
+/**
+ * Validate that the chosen payment method is allowed by company settings.
+ * Returns an error message if not allowed, or null if OK.
+ */
+async function validatePaymentMethod(companyId: number, paymentMethod: string): Promise<string | null> {
+    if (paymentMethod === 'NONE') return null;
+    const settings = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { allow_cash_payment: true, allow_qr_payment: true },
+    });
+    if (!settings) return null; // No settings = allow all
+    if (paymentMethod === 'CASH' && !settings.allow_cash_payment) {
+        return 'Cash payment is not enabled for this business';
+    }
+    if (paymentMethod === 'QR' && !settings.allow_qr_payment) {
+        return 'QR payment is not enabled for this business';
+    }
+    return null;
+}
+
+/**
+ * Validate that the booking time respects advance booking limits.
+ * Returns an error message if outside allowed window, or null if OK.
+ */
+async function validateAdvanceBookingLimits(companyId: number, startAt: Date): Promise<string | null> {
+    const settings = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { max_advance_booking_days: true, min_advance_booking_hours: true },
+    });
+    if (!settings) return null;
+
+    const now = new Date();
+    const diffMs = startAt.getTime() - now.getTime();
+
+    if (settings.min_advance_booking_hours != null) {
+        const minMs = settings.min_advance_booking_hours * 60 * 60 * 1000;
+        if (diffMs < minMs) {
+            return `Bookings must be made at least ${settings.min_advance_booking_hours} hour(s) in advance`;
+        }
+    }
+
+    if (settings.max_advance_booking_days != null) {
+        const maxMs = settings.max_advance_booking_days * 24 * 60 * 60 * 1000;
+        if (diffMs > maxMs) {
+            return `Bookings cannot be made more than ${settings.max_advance_booking_days} day(s) in advance`;
+        }
+    }
+
+    return null;
+}
+
 function toAnalyticsSource(bookingSource: BookingSource | undefined): 'marketplace' | 'salon_site' | 'admin' | 'manual' {
     switch (bookingSource) {
         case BookingSource.MARKETPLACE:
@@ -431,6 +482,12 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             };
         }
 
+        // 1.5 Validate payment method is allowed
+        const paymentError = await validatePaymentMethod(company_id, payment_method);
+        if (paymentError) {
+            return { code: 400, message: paymentError, error: true };
+        }
+
         // 2. Validate staff belongs to company and is bookable
         const staffList = await BookingRepo.getBookableStaff(company_id, staff_id);
         if (staffList.length === 0) {
@@ -458,6 +515,12 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
 
         const startAt = new Date(start_at);
         const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
+
+        // 4.5 Validate advance booking limits
+        const advanceError = await validateAdvanceBookingLimits(company_id, startAt);
+        if (advanceError) {
+            return { code: 400, message: advanceError, error: true };
+        }
 
         // 5.5 Validate staff schedule/time-off/company windows
         const staffAvailability = await isStaffAvailableForInterval({
@@ -736,6 +799,12 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             };
         }
 
+        // Validate payment method is allowed
+        const paymentError = await validatePaymentMethod(params.company_id, params.payment_method);
+        if (paymentError) {
+            return { code: 400, message: paymentError, error: true };
+        }
+
         // Calculate end time and total price
         const services = await prisma.service.findMany({
             where: {
@@ -758,6 +827,12 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
         const startAt = new Date(params.start_at);
         const endAt = new Date(params.start_at);
         endAt.setMinutes(endAt.getMinutes() + totalDuration);
+
+        // Validate advance booking limits
+        const advanceError = await validateAdvanceBookingLimits(params.company_id, startAt);
+        if (advanceError) {
+            return { code: 400, message: advanceError, error: true };
+        }
 
         const staffAvailability = await isStaffAvailableForInterval({
             companyId: params.company_id,
@@ -922,6 +997,12 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             };
         }
 
+        // Validate payment method is allowed
+        const paymentError = await validatePaymentMethod(params.company_id, params.payment_method);
+        if (paymentError) {
+            return { code: 400, message: paymentError, error: true };
+        }
+
         // Calculate end time and total price
         const services = await prisma.service.findMany({
             where: {
@@ -944,6 +1025,12 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
         const startAt = new Date(params.start_at);
         const endAt = new Date(params.start_at);
         endAt.setMinutes(endAt.getMinutes() + totalDuration);
+
+        // Validate advance booking limits
+        const advanceError = await validateAdvanceBookingLimits(params.company_id, startAt);
+        if (advanceError) {
+            return { code: 400, message: advanceError, error: true };
+        }
 
         const staffAvailability = await isStaffAvailableForInterval({
             companyId: params.company_id,

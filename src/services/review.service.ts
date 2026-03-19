@@ -263,6 +263,67 @@ export const findStaffProfileByUserId = async (userId: string, companyId: number
 };
 
 // ---------------------------------------------------------------------------
+// deleteReviewAsAdmin
+// ---------------------------------------------------------------------------
+
+export const deleteReviewAsAdmin = async (
+  reviewId: number,
+  companyId: number,
+): Promise<MensajeApi> => {
+  try {
+    const review = await reviewsRepo.findReviewById(reviewId);
+    if (!review) {
+      return buildNotFoundResponse('Review');
+    }
+    if (review.company_id !== companyId) {
+      return new MensajeApi({ code: 403, error: true, message: 'Review does not belong to this company' });
+    }
+    await reviewsRepo.deleteReview(reviewId);
+    return buildSuccessResponse('Review deleted');
+  } catch (error) {
+    return buildServiceErrorResponse('review', 'delete', error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// deleteReviewAsCustomer
+// ---------------------------------------------------------------------------
+
+export const deleteReviewAsCustomer = async (
+  reviewId: number,
+  userId: string,
+): Promise<MensajeApi> => {
+  try {
+    const review = await reviewsRepo.findReviewById(reviewId);
+    if (!review) {
+      return buildNotFoundResponse('Review');
+    }
+    if (review.user_id !== userId) {
+      return new MensajeApi({ code: 403, error: true, message: 'You can only delete your own reviews' });
+    }
+    await reviewsRepo.deleteReview(reviewId);
+    return buildSuccessResponse('Review deleted');
+  } catch (error) {
+    return buildServiceErrorResponse('review', 'delete', error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// exportReviewsForCompany (CSV data)
+// ---------------------------------------------------------------------------
+
+export const exportReviewsForCompany = async (
+  companyId: number,
+): Promise<MensajeApi> => {
+  try {
+    const reviews = await reviewsRepo.listAdminReviews(companyId);
+    return buildSuccessResponse('Reviews for export', reviews);
+  } catch (error) {
+    return buildServiceErrorResponse('review', 'export', error);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // getReviewSummaryForCompany (public)
 // ---------------------------------------------------------------------------
 

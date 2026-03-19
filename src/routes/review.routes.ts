@@ -42,6 +42,19 @@ router.get('/eligible', requireAuth, async (req: Request, res: Response) => {
   return res.status(result.code).json(result);
 });
 
+// DELETE /api/review/:reviewId - Delete own review
+router.delete('/:reviewId', requireAuth, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const userId = authReq.authUser?.id;
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+  const reviewId = parseInt(req.params.reviewId as string, 10);
+  if (isNaN(reviewId)) return res.status(400).json({ error: 'Invalid review ID' });
+
+  const result = await ReviewService.deleteReviewAsCustomer(reviewId, userId);
+  return res.status(result.code).json(result);
+});
+
 // GET /api/review/company/:companyId - Public reviews for a company
 router.get('/company/:companyId', async (req: Request, res: Response) => {
   const companyId = parseInt(req.params.companyId as string, 10);

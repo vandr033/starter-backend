@@ -74,6 +74,47 @@ router.get(
   },
 );
 
+// DELETE /api/admin/reviews/:reviewId - Delete a review (admin moderation)
+router.delete(
+  '/:reviewId',
+  requireAuth,
+  requireCompanyRole([CompanyUserRole.OWNER, CompanyUserRole.ADMIN]),
+  async (req: Request, res: Response) => {
+    const companyId = (req as any).companyID as number;
+    if (!companyId) return res.status(400).json({ error: 'Company not resolved' });
+
+    const allowed = await isFeatureEnabledForCompany(companyId, 'REVIEW_MANAGEMENT');
+    if (!allowed) {
+      return res.status(403).json({ error: buildFeatureNotAvailableMessage(getFeatureRequiredPlan('REVIEW_MANAGEMENT')) });
+    }
+
+    const reviewId = parseInt(req.params.reviewId as string, 10);
+    if (isNaN(reviewId)) return res.status(400).json({ error: 'Invalid review ID' });
+
+    const result = await ReviewService.deleteReviewAsAdmin(reviewId, companyId);
+    return res.status(result.code).json(result);
+  },
+);
+
+// GET /api/admin/reviews/export - Export all reviews as JSON (for CSV generation on frontend)
+router.get(
+  '/export',
+  requireAuth,
+  requireCompanyRole([CompanyUserRole.OWNER, CompanyUserRole.ADMIN]),
+  async (req: Request, res: Response) => {
+    const companyId = (req as any).companyID as number;
+    if (!companyId) return res.status(400).json({ error: 'Company not resolved' });
+
+    const allowed = await isFeatureEnabledForCompany(companyId, 'REVIEW_MANAGEMENT');
+    if (!allowed) {
+      return res.status(403).json({ error: buildFeatureNotAvailableMessage(getFeatureRequiredPlan('REVIEW_MANAGEMENT')) });
+    }
+
+    const result = await ReviewService.exportReviewsForCompany(companyId);
+    return res.status(result.code).json(result);
+  },
+);
+
 // GET /api/admin/reviews/staff/:staffId - Reviews for a specific staff member
 router.get(
   '/staff/:staffId',
