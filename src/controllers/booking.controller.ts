@@ -3,6 +3,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import * as BookingService from '../services/booking.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { BookingSource } from '@prisma/client';
+import { prisma } from '../prisma/client';
 
 let mensaje: MensajeApi;
 
@@ -152,7 +153,7 @@ export async function getAvailableDates(req: Request, res: Response) {
     }
 
     // Parse days with default to 14
-    const numberOfDays = days ? parseInt(days as string, 10) : 14;
+    let numberOfDays = days ? parseInt(days as string, 10) : 14;
     if (isNaN(numberOfDays) || numberOfDays < 1 || numberOfDays > 365) {
         mensaje = {
             code: 400,
@@ -160,6 +161,15 @@ export async function getAvailableDates(req: Request, res: Response) {
             error: true,
         };
         return res.status(400).json(mensaje);
+    }
+
+    // Cap by max_advance_booking_days if configured
+    const companySettings = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { max_advance_booking_days: true },
+    });
+    if (companySettings?.max_advance_booking_days != null) {
+        numberOfDays = Math.min(numberOfDays, companySettings.max_advance_booking_days);
     }
 
     const result = await BookingService.getAvailableDates({

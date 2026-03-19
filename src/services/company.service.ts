@@ -162,12 +162,16 @@ export const getCompanyPublicPage = async (slug: string) => {
         qr_image_url: company_settings.qr_image_url,
         allow_cash_payment: company_settings.allow_cash_payment,
         social_links: (company_settings as any).social_links || {},
+        max_advance_booking_days: company_settings.max_advance_booking_days ?? null,
+        min_advance_booking_hours: company_settings.min_advance_booking_hours ?? null,
       }
       : {
         allow_qr_payment: true,
         qr_image_url: null,
         allow_cash_payment: true,
         social_links: {},
+        max_advance_booking_days: null,
+        min_advance_booking_hours: null,
       };
 
     // Apply theme defaults if no config exists
