@@ -104,7 +104,7 @@ model CompanySettings {
   send_whatsapp_notifications      Boolean  @default(false)
   auto_approve_staff_time_off      Boolean  @default(false)
   max_advance_booking_days         Int?
-  min_advance_booking_hours        Int?
+  min_advance_booking_minutes        Int?
   social_links                     Json     @default("{}")
   created_at                       DateTime @default(now())
   updated_at                       DateTime @updatedAt

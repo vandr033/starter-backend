@@ -402,6 +402,7 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
       serviceName: service?.name ?? null,
       servicePriceCents: service?.price_cents ?? null,
       slug: c.slug,
+      logo: c.logo_url || c.home_hero_image_url || null,
     };
   });
 

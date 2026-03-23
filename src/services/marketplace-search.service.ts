@@ -541,6 +541,8 @@ function toMapPin(item: EvaluatedCandidate, isPrimaryMatch: boolean) {
     slug: item.slug,
     matchType: item.matchType,
     isPrimaryMatch,
+    businessType: item.businessType,
+    logo: item.thumbnailImage,
     popup: {
       name: item.name,
       currency: item.currency,

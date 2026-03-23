@@ -51,17 +51,17 @@ async function validatePaymentMethod(companyId: number, paymentMethod: string): 
 async function validateAdvanceBookingLimits(companyId: number, startAt: Date): Promise<string | null> {
     const settings = await prisma.companySettings.findUnique({
         where: { company_id: companyId },
-        select: { max_advance_booking_days: true, min_advance_booking_hours: true },
+        select: { max_advance_booking_days: true, min_advance_booking_minutes: true },
     });
     if (!settings) return null;
 
     const now = new Date();
     const diffMs = startAt.getTime() - now.getTime();
 
-    if (settings.min_advance_booking_hours != null) {
-        const minMs = settings.min_advance_booking_hours * 60 * 60 * 1000;
+    if (settings.min_advance_booking_minutes != null) {
+        const minMs = settings.min_advance_booking_minutes * 60 * 1000;
         if (diffMs < minMs) {
-            return `Bookings must be made at least ${settings.min_advance_booking_hours} hour(s) in advance`;
+            return `Bookings must be made at least ${settings.min_advance_booking_minutes} minute(s) in advance`;
         }
     }
 

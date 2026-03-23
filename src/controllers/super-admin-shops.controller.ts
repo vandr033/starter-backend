@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { MensajeApi } from '../types/MensajeApi';
 import * as SuperAdminShopsService from '../services/super-admin-shops.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
+import { setActiveCompanyCookie } from '../utils/active-shop-cookie';
 
 let mensaje: MensajeApi;
 
@@ -339,17 +340,18 @@ export async function impersonateShop(req: AuthenticatedRequest, res: Response) 
             });
         }
         
+        const parsedShopId = parseInt(Array.isArray(shopId) ? shopId[0] : shopId);
         const result = await SuperAdminShopsService.impersonateShop(
-            parseInt(Array.isArray(shopId) ? shopId[0] : shopId),
+            parsedShopId,
             superAdminUser,
             req.headers
         );
-        
-        // Forward the Set-Cookie header if present
-        if (result.cookie) {
-            res.setHeader('Set-Cookie', result.cookie);
+
+        // Set the active company cookie so the dashboard loads the correct shop
+        if (!result.error) {
+            setActiveCompanyCookie(res, parsedShopId);
         }
-        
+
         return res.status(result.code).json({
             code: result.code,
             error: result.error,
