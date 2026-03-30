@@ -102,7 +102,7 @@ async function createAuth() {
         signUpOnVerification: {
           getTempEmail: (phoneNumber: string) => {
             const digits = phoneNumber.replace(/[^\d]/g, "");
-            return `${digits}@temp.bookinsite.com`;
+            return `${digits}@tmppriconpri.com`;
           },
           getTempName: (phoneNumber: string) => phoneNumber,
         },

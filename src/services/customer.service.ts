@@ -247,7 +247,7 @@ async function ensureUniqueTempEmail(basePhone: string): Promise<string> {
     let attempt = 0;
     while (attempt < 1000) {
         const suffix = attempt === 0 ? '' : `.${attempt}`;
-        const email = `${basePhone}${suffix}@temp.bookinsite.com`;
+        const email = `${basePhone}${suffix}@tmppriconpri.com`;
         const existing = await prisma.user.findFirst({
             where: { email, deleted_at: null },
             select: { id: true },
@@ -255,7 +255,7 @@ async function ensureUniqueTempEmail(basePhone: string): Promise<string> {
         if (!existing) return email;
         attempt += 1;
     }
-    return `${basePhone}.${Date.now()}@temp.bookinsite.com`;
+    return `${basePhone}.${Date.now()}@tmppriconpri.com`;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

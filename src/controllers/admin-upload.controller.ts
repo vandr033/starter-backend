@@ -24,6 +24,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const companyId = (req as any).companyID || parseInt(req.body.company_id);
     const { type, entity_id } = req.body;
+    const entityId = entity_id ? parseInt(entity_id, 10) : null;
     
     if (!companyId) {
       return res.status(400).json({
@@ -42,7 +43,19 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     }
 
     // Validate type
-    const validTypes = ['logo', 'hero_home', 'hero_about', 'about_1', 'about_2', 'about_3', 'staff'];
+    const validTypes = [
+      'logo',
+      'hero_home',
+      'hero_about',
+      'about_1',
+      'about_2',
+      'about_3',
+      'staff',
+      'group_event_cover',
+      'group_event_thumbnail',
+      'group_class_cover',
+      'group_class_thumbnail',
+    ];
     if (!validTypes.includes(type)) {
       return res.status(400).json({
         code: 400,
@@ -51,12 +64,18 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
-    // For staff type, entity_id is required
-    if (type === 'staff' && !entity_id) {
+    const typeRequiresEntityId = type === 'staff'
+      || type === 'group_event_cover'
+      || type === 'group_event_thumbnail'
+      || type === 'group_class_cover'
+      || type === 'group_class_thumbnail';
+
+    // For staff and group item image types, entity_id is required
+    if (typeRequiresEntityId && !entityId) {
       return res.status(400).json({
         code: 400,
         error: true,
-        message: 'Entity ID is required for staff uploads',
+        message: 'Entity ID is required for this upload type',
       });
     }
 
@@ -71,7 +90,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     }
 
     // Determine storage type and filename
-    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery';
+    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'group-events' | 'group-classes';
     let filename: string;
     let imageUrlField: string;
 
@@ -101,8 +120,28 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         break;
       case 'staff':
         storageType = 'staff';
-        filename = `${entity_id}.${fileExtension}`;
+        filename = `${entityId}.${fileExtension}`;
         imageUrlField = 'image_url';
+        break;
+      case 'group_event_cover':
+        storageType = 'group-events';
+        filename = `${entityId}-cover.${fileExtension}`;
+        imageUrlField = 'cover_image_url';
+        break;
+      case 'group_event_thumbnail':
+        storageType = 'group-events';
+        filename = `${entityId}-thumbnail.${fileExtension}`;
+        imageUrlField = 'thumbnail_url';
+        break;
+      case 'group_class_cover':
+        storageType = 'group-classes';
+        filename = `${entityId}-cover.${fileExtension}`;
+        imageUrlField = 'cover_image_url';
+        break;
+      case 'group_class_thumbnail':
+        storageType = 'group-classes';
+        filename = `${entityId}-thumbnail.${fileExtension}`;
+        imageUrlField = 'thumbnail_url';
         break;
       default:
         return res.status(400).json({
@@ -126,10 +165,44 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     // Update database record
     if (type === 'staff') {
       // Update staff profile
-      await prisma.staffProfile.update({
-        where: { id: parseInt(entity_id) },
+      const updated = await prisma.staffProfile.updateMany({
+        where: { id: entityId!, company_id: companyId },
         data: { image_url: url },
       });
+      if (updated.count === 0) {
+        await StorageService.deleteFile(relativePath).catch(() => undefined);
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Staff profile not found',
+        });
+      }
+    } else if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
+      const updated = await prisma.groupEvent.updateMany({
+        where: { id: entityId!, company_id: companyId },
+        data: { [imageUrlField]: url } as any,
+      });
+      if (updated.count === 0) {
+        await StorageService.deleteFile(relativePath).catch(() => undefined);
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Group event not found',
+        });
+      }
+    } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
+      const updated = await prisma.groupClass.updateMany({
+        where: { id: entityId!, company_id: companyId },
+        data: { [imageUrlField]: url } as any,
+      });
+      if (updated.count === 0) {
+        await StorageService.deleteFile(relativePath).catch(() => undefined);
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Group class not found',
+        });
+      }
     } else {
       // Update company record
       const updateData: any = {};
@@ -167,6 +240,7 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const companyId = (req as any).companyID || parseInt(req.body.company_id);
     const { type, entity_id } = req.body;
+    const entityId = entity_id ? parseInt(entity_id, 10) : null;
     
     if (!companyId) {
       return res.status(400).json({
@@ -177,7 +251,19 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
     }
 
     // Validate type
-    const validTypes = ['logo', 'hero_home', 'hero_about', 'about_1', 'about_2', 'about_3', 'staff'];
+    const validTypes = [
+      'logo',
+      'hero_home',
+      'hero_about',
+      'about_1',
+      'about_2',
+      'about_3',
+      'staff',
+      'group_event_cover',
+      'group_event_thumbnail',
+      'group_class_cover',
+      'group_class_thumbnail',
+    ];
     if (!validTypes.includes(type)) {
       return res.status(400).json({
         code: 400,
@@ -186,26 +272,31 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
-    // For staff type, entity_id is required
-    if (type === 'staff' && !entity_id) {
+    const typeRequiresEntityId = type === 'staff'
+      || type === 'group_event_cover'
+      || type === 'group_event_thumbnail'
+      || type === 'group_class_cover'
+      || type === 'group_class_thumbnail';
+
+    // For staff and group item image types, entity_id is required
+    if (typeRequiresEntityId && !entityId) {
       return res.status(400).json({
         code: 400,
         error: true,
-        message: 'Entity ID is required for staff deletions',
+        message: 'Entity ID is required for this delete type',
       });
     }
 
     // Determine storage type and get current image URL from database
-    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery';
+    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'group-events' | 'group-classes';
     let imageUrlField: string = '';
-    let filename: string;
 
     // First, get the current image URL from database
     let currentRecord: any;
     
     if (type === 'staff') {
       currentRecord = await prisma.staffProfile.findUnique({
-        where: { id: parseInt(entity_id) },
+        where: { id: entityId! },
         select: { image_url: true, company_id: true },
       });
       
@@ -214,6 +305,38 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
           code: 404,
           error: true,
           message: 'Staff profile not found',
+        });
+      }
+    } else if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
+      currentRecord = await prisma.groupEvent.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: {
+          cover_image_url: true,
+          thumbnail_url: true,
+        },
+      });
+
+      if (!currentRecord) {
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Group event not found',
+        });
+      }
+    } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
+      currentRecord = await prisma.groupClass.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: {
+          cover_image_url: true,
+          thumbnail_url: true,
+        },
+      });
+
+      if (!currentRecord) {
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Group class not found',
         });
       }
     } else {
@@ -277,6 +400,26 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
         storageType = 'staff';
         imageUrlField = 'image_url';
         break;
+      case 'group_event_cover':
+        currentImageUrl = currentRecord.cover_image_url;
+        storageType = 'group-events';
+        imageUrlField = 'cover_image_url';
+        break;
+      case 'group_event_thumbnail':
+        currentImageUrl = currentRecord.thumbnail_url;
+        storageType = 'group-events';
+        imageUrlField = 'thumbnail_url';
+        break;
+      case 'group_class_cover':
+        currentImageUrl = currentRecord.cover_image_url;
+        storageType = 'group-classes';
+        imageUrlField = 'cover_image_url';
+        break;
+      case 'group_class_thumbnail':
+        currentImageUrl = currentRecord.thumbnail_url;
+        storageType = 'group-classes';
+        imageUrlField = 'thumbnail_url';
+        break;
     }
 
     // If no image URL exists, return success (nothing to delete)
@@ -290,8 +433,9 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
 
     // Extract relative path from URL
     // URL format: /api/storage/uploads/{company_id}/{type}/{filename}
-    const urlParts = currentImageUrl.split('/');
-    const relativePath = urlParts.slice(3).join('/'); // Remove /api/storage/
+    const relativePath = currentImageUrl.includes('/api/storage/')
+      ? currentImageUrl.split('/api/storage/')[1]
+      : currentImageUrl.split('/').slice(3).join('/'); // Remove /api/storage/
 
     // Delete file from filesystem
     try {
@@ -304,8 +448,18 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
     // Update database record to set image_url = null
     if (type === 'staff') {
       await prisma.staffProfile.update({
-        where: { id: parseInt(entity_id) },
+        where: { id: entityId! },
         data: { image_url: null },
+      });
+    } else if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
+      await prisma.groupEvent.updateMany({
+        where: { id: entityId!, company_id: companyId },
+        data: { [imageUrlField]: null } as any,
+      });
+    } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
+      await prisma.groupClass.updateMany({
+        where: { id: entityId!, company_id: companyId },
+        data: { [imageUrlField]: null } as any,
       });
     } else {
       const updateData: any = {};

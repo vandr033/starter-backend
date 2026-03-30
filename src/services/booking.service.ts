@@ -194,10 +194,11 @@ async function isStaffAvailableForInterval(params: {
         return { available: false, message: 'Selected time is outside company opening hours' };
     }
 
-    const [availabilityCounts, dayAvailability, timeOff] = await Promise.all([
+    const [availabilityCounts, dayAvailability, timeOff, groupCommitments] = await Promise.all([
         BookingRepo.getStaffAvailabilityCounts(companyId, [staffId]),
         BookingRepo.getStaffAvailabilityForDay(companyId, [staffId], dayOfWeek),
         BookingRepo.getApprovedStaffTimeOffOverlaps(companyId, [staffId], startAt, endAt),
+        BookingRepo.getGroupStaffCommitmentsForDateRange(companyId, [staffId], startAt, endAt),
     ]);
 
     const hasCustomSchedule = (availabilityCounts[0]?._count?.id || 0) > 0;
@@ -213,6 +214,10 @@ async function isStaffAvailableForInterval(params: {
 
     if (timeOff.length > 0) {
         return { available: false, message: 'Staff is on time off for the selected time' };
+    }
+
+    if (groupCommitments.length > 0) {
+        return { available: false, message: 'Staff is assigned to a group event or class at that time' };
     }
 
     return { available: true };
@@ -332,10 +337,11 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
             });
         }
 
-        const [availabilityCounts, dayAvailability, timeOff] = await Promise.all([
+        const [availabilityCounts, dayAvailability, timeOff, groupCommitments] = await Promise.all([
             BookingRepo.getStaffAvailabilityCounts(company_id, staffIds),
             BookingRepo.getStaffAvailabilityForDay(company_id, staffIds, dayOfWeek),
             BookingRepo.getApprovedStaffTimeOffOverlaps(company_id, staffIds, dateStart, dateEnd),
+            BookingRepo.getGroupStaffCommitmentsForDateRange(company_id, staffIds, dateStart, dateEnd),
         ]);
 
         const hasCustomScheduleByStaff = new Map<number, boolean>();
@@ -362,6 +368,17 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
             timeOffByStaff.get(item.staff_id)!.push({
                 starts_at: item.starts_at,
                 ends_at: item.ends_at,
+            });
+        }
+
+        const groupCommitmentsByStaff = new Map<number, Array<{ start_at: Date; end_at: Date }>>();
+        for (const commitment of groupCommitments) {
+            if (!groupCommitmentsByStaff.has(commitment.staff_id)) {
+                groupCommitmentsByStaff.set(commitment.staff_id, []);
+            }
+            groupCommitmentsByStaff.get(commitment.staff_id)!.push({
+                start_at: commitment.start_at,
+                end_at: commitment.end_at,
             });
         }
 
@@ -415,6 +432,13 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
                     }
 
                     const staffBookings = bookingsByStaff.get(staff.id) || [];
+                    const staffGroupCommitments = groupCommitmentsByStaff.get(staff.id) || [];
+
+                    const isAvailableForGroups = !hasConflict(slotStart, slotEnd, staffGroupCommitments, bufferMinutes);
+                    if (!isAvailableForGroups) {
+                        continue;
+                    }
+
                     const isAvailable = !hasConflict(slotStart, slotEnd, staffBookings, bufferMinutes);
 
                     if (isAvailable) {
@@ -459,6 +483,7 @@ interface CreateBookingParams {
     notes?: string;
     user_id: string; // From authenticated session
     booking_source?: BookingSource;
+    qr_proof_image_url?: string | null;
 }
 
 interface CreateBookingResult extends MensajeApi {
@@ -469,7 +494,7 @@ interface CreateBookingResult extends MensajeApi {
  * Create a new customer booking
  */
 export async function createBooking(params: CreateBookingParams): Promise<CreateBookingResult> {
-    const { company_id, staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source } = params;
+    const { company_id, staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source, qr_proof_image_url } = params;
 
     try {
         // 1. Validate company exists and is active
@@ -486,6 +511,21 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         const paymentError = await validatePaymentMethod(company_id, payment_method);
         if (paymentError) {
             return { code: 400, message: paymentError, error: true };
+        }
+
+        // 1.6 Fetch QR/confirm settings (plan-gated)
+        const bookingSettings = await prisma.companySettings.findUnique({
+            where: { company_id },
+            select: { require_comprobante_for_qr: true, auto_confirm_bookings: true },
+        });
+        const canCustomizeFlow = await isFeatureEnabledForCompany(company_id, 'BOOKING_FLOW_CUSTOMIZATION');
+        // STARTER plan: force defaults (auto-confirm ON, comprobante required)
+        const requireComprobante = canCustomizeFlow ? (bookingSettings?.require_comprobante_for_qr ?? true) : true;
+        const autoConfirm = canCustomizeFlow ? (bookingSettings?.auto_confirm_bookings ?? true) : true;
+
+        // 1.7 Validate comprobante if required for QR
+        if (payment_method === 'QR' && requireComprobante && !qr_proof_image_url) {
+            return { code: 400, message: 'Comprobante is required for QR payment bookings', error: true };
         }
 
         // 2. Validate staff belongs to company and is bookable
@@ -563,6 +603,29 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             };
         }
 
+        const groupConflict = await BookingRepo.checkGroupSlotConflict(
+            company_id,
+            staff_id,
+            startAt,
+            endAt,
+            bufferMinutes,
+        );
+
+        if (groupConflict) {
+            return {
+                code: 409,
+                message: 'Time slot is blocked by a group reservation',
+                error: true,
+                data: {
+                    conflict_type: groupConflict.type,
+                    conflict_id: groupConflict.id,
+                    conflict_title: groupConflict.title,
+                    conflicting_start: groupConflict.start_at,
+                    conflicting_end: groupConflict.end_at,
+                },
+            };
+        }
+
         // 8. Get or create CustomerProfile
         const customerProfile = await BookingRepo.getOrCreateCustomerProfile(company_id, user_id);
 
@@ -575,7 +638,10 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             position: index,
         }));
 
-        // 10. Create booking with services in transaction
+        // 10. Determine booking status based on auto_confirm setting
+        const bookingStatus = autoConfirm ? 'CONFIRMED' as const : 'PENDING' as const;
+
+        // 11. Create booking with services in transaction
         const booking = await BookingRepo.createBookingWithServices(
             {
                 company_id,
@@ -588,16 +654,18 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
                 created_by_user_id: user_id,
                 total_price_cents: totalPrice,
                 booking_source: booking_source ?? BookingSource.SALON_SITE,
+                status: bookingStatus,
+                qr_proof_image_url: qr_proof_image_url ?? null,
             },
             serviceSnapshots
         );
 
-        // 11. Send notification (fire-and-forget) only when included in plan
+        // 12. Send notification only when auto-confirmed and plan allows
         const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
             company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (canSendTransactionalNotifications && company && booking) {
+        if (autoConfirm && canSendTransactionalNotifications && company && booking) {
             const user = await prisma.user.findUnique({ where: { id: user_id }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
             void notifyBookingCreated({
                 companyId: company_id,

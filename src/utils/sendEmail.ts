@@ -25,6 +25,12 @@ const maskEmail = (email: string) => {
     return `${local.slice(0, 2)}***@${domain}`;
 };
 
+export function isTemporaryEmailAddress(email?: string | null): boolean {
+    const normalized = (email ?? "").trim().toLowerCase();
+    if (!normalized) return false;
+    return normalized.endsWith("@tmppriconpri.com") || normalized.endsWith("@temp.bookinsite.com");
+}
+
 function escapeHtml(input: string): string {
     return input
         .replace(/&/g, "&amp;")
@@ -38,6 +44,10 @@ export async function sendEmailCode(
   email: string,
   code: string
 ) {
+  if (isTemporaryEmailAddress(email)) {
+    logger.info({ event: "email_skipped_temp_address", to: maskEmail(email) }, "Skipping email delivery for temporary address");
+    return 1;
+  }
   try {
     transporter.sendMail({
       to: email,
@@ -252,6 +262,10 @@ export async function sendAdminTempPasswordInviteEmail(params: {
 }
 
 export async function sendResetPasswordEmail(user: User, url: string){
+    if (isTemporaryEmailAddress(user.email)) {
+        logger.info({ event: "email_skipped_temp_address", to: maskEmail(user.email) }, "Skipping reset password email for temporary address");
+        return;
+    }
     try {
         transporter.sendMail({
             to: user.email,
@@ -419,6 +433,13 @@ export async function sendGenericEmail(
     subject: string,
     html: string,
 ): Promise<void> {
+    if (isTemporaryEmailAddress(to)) {
+        logger.info(
+            { event: "email_skipped_temp_address", to: maskEmail(to), subject },
+            "Skipping generic email delivery for temporary address",
+        );
+        return;
+    }
     try {
         await transporter.sendMail({
             to,
@@ -441,6 +462,13 @@ export async function sendCustomerMassMessageEmail(params: {
     message: string;
     locale?: 'es' | 'en';
 }) {
+    if (isTemporaryEmailAddress(params.email)) {
+        logger.info(
+            { event: "email_skipped_temp_address", to: maskEmail(params.email), companyName: params.companyName },
+            "Skipping customer mass message email for temporary address",
+        );
+        return 1;
+    }
     const locale = params.locale === 'en' ? 'en' : 'es';
     const subject =
         locale === 'en'

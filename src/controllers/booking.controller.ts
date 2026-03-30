@@ -197,7 +197,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         return res.status(401).json(mensaje);
     }
 
-    const { company_id, staff_id, service_ids, start_at, payment_method, notes, booking_source } = req.body;
+    const { company_id, staff_id, service_ids, start_at, payment_method, notes, booking_source, qr_proof_image_url } = req.body;
 
     // Validate required fields
     if (!company_id || typeof company_id !== 'number') {
@@ -267,6 +267,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         notes,
         user_id: user.id,
         booking_source: booking_source as BookingSource | undefined,
+        qr_proof_image_url: typeof qr_proof_image_url === 'string' ? qr_proof_image_url : undefined,
     });
 
     return res.status(result.code).json(result);

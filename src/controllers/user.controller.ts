@@ -1,21 +1,30 @@
-// import { Request, Response } from 'express';
-// import * as UserService from '../services/user.sevice';
+import type { Request, Response } from 'express';
+import * as UserService from '../services/user.sevice';
 
-// export async function getUserById(req: Request, res: Response) {
-//     const { id } = req.params;
-//     const mensaje = await UserService.getUserById(Number(id));
-//     res.status(mensaje.code).json(mensaje);
-// }
+export async function getUserById(req: Request, res: Response) {
+    const id = typeof req.params.id === 'string' ? req.params.id : '';
+    if (!id) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid id' });
+    }
 
-// export async function getUserByEmail(req: Request, res: Response) {
-//     const { email } = req.params;
-//     const mensaje = await UserService.getUserByEmail(email!);
-//     res.status(mensaje.code).json(mensaje);
-// }
+    const mensaje = await UserService.getUserById(id);
+    return res.status(mensaje.code).json(mensaje);
+}
 
+export async function getUserByEmail(req: Request, res: Response) {
+    const email = typeof req.params.email === 'string' ? req.params.email : '';
+    if (!email) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid email' });
+    }
 
-// export async function updateUser(req: Request, res: Response) {
-//     const {email, name, id} = req.body;
-//     const mensaje = await UserService.updateUser(id,email!, name!);
-//     res.status(mensaje.code).json(mensaje);
-// }
+    const mensaje = await UserService.getUserByEmail(email);
+    return res.status(mensaje.code).json(mensaje);
+}
+
+export async function updateUser(_req: Request, res: Response) {
+    return res.status(501).json({
+        code: 501,
+        error: true,
+        message: 'Not implemented',
+    });
+}

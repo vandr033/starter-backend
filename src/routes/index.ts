@@ -29,6 +29,10 @@ import staffInviteRoutes from './staff-invite.routes';
 import marketplaceRoutes from './marketplace.routes';
 import reviewRoutes from './review.routes';
 import adminReviewRoutes from './admin-review.routes';
+import adminGroupEventRoutes from './admin-group-event.routes';
+import adminGroupClassRoutes from './admin-group-class.routes';
+import adminGroupBookingRoutes from './admin-group-booking.routes';
+import publicGroupRoutes from './public-group.routes';
 
 export const router = Router();
 router.use('/v1/auth', authRoutes);
@@ -61,3 +65,7 @@ router.use('/home', homeRoutes);
 router.use('/marketplace', marketplaceRoutes);
 router.use('/review', reviewRoutes);
 router.use('/admin/reviews', adminReviewRoutes);
+router.use('/admin/group/events', adminGroupEventRoutes);
+router.use('/admin/group/classes', adminGroupClassRoutes);
+router.use('/admin/group', adminGroupBookingRoutes);
+router.use('/group', publicGroupRoutes);

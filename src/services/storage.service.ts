@@ -35,6 +35,14 @@ export class StorageService {
     return path.join(this.getCompanyPath(companyId), 'qr');
   }
 
+  static getCompanyGroupEventsPath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'group-events');
+  }
+
+  static getCompanyGroupClassesPath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'group-classes');
+  }
+
   static async ensureCompanyDirectories(companyId: number): Promise<void> {
     const companyPath = this.getCompanyPath(companyId);
     
@@ -45,11 +53,13 @@ export class StorageService {
     await fs.mkdir(this.getCompanyStaffPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGalleryPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyQRPath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyGroupEventsPath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyGroupClassesPath(companyId), { recursive: true });
   }
 
   static async saveFile(
     companyId: number,
-    type: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'qr',
+    type: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'qr' | 'group-events' | 'group-classes',
     filename: string,
     buffer: Buffer
   ): Promise<string> {
@@ -86,6 +96,12 @@ export class StorageService {
         break;
       case 'qr':
         directory = this.getCompanyQRPath(companyId);
+        break;
+      case 'group-events':
+        directory = this.getCompanyGroupEventsPath(companyId);
+        break;
+      case 'group-classes':
+        directory = this.getCompanyGroupClassesPath(companyId);
         break;
       default:
         throw new Error(`Invalid storage type: ${type}`);

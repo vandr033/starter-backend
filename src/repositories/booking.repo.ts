@@ -1,5 +1,5 @@
 import { prisma } from '../prisma/client';
-import { BookingSource, BookingStatus, StaffTimeOffStatus } from '@prisma/client';
+import { BookingSource, BookingStatus, GroupItemStatus, StaffTimeOffStatus } from '@prisma/client';
 
 /**
  * Get bookings for a date range, optionally filtered by staff IDs
@@ -292,6 +292,210 @@ export async function checkSlotConflict(
     return conflicting;
 }
 
+export type GroupStaffCommitment = {
+    staff_id: number;
+    start_at: Date;
+    end_at: Date;
+    source: 'GROUP_EVENT' | 'GROUP_CLASS_SESSION';
+    source_id: number;
+};
+
+/**
+ * Get group commitments (event windows + class sessions) for staff in a date range.
+ * Only linked staff_profile assignments block normal bookings.
+ */
+export async function getGroupStaffCommitmentsForDateRange(
+    companyId: number,
+    staffIds: number[],
+    startDate: Date,
+    endDate: Date,
+): Promise<GroupStaffCommitment[]> {
+    if (staffIds.length === 0) return [];
+
+    const eventAssignments = await prisma.groupStaffAssignment.findMany({
+        where: {
+            company_id: companyId,
+            staff_profile_id: { in: staffIds },
+            group_event_id: { not: null },
+            group_event: {
+                deleted_at: null,
+                status: { not: GroupItemStatus.ARCHIVED },
+                start_at: { lt: endDate },
+                end_at: { gt: startDate },
+            },
+        },
+        select: {
+            staff_profile_id: true,
+            group_event_id: true,
+            group_event: {
+                select: {
+                    start_at: true,
+                    end_at: true,
+                },
+            },
+        },
+    });
+
+    const classAssignments = await prisma.groupStaffAssignment.findMany({
+        where: {
+            company_id: companyId,
+            staff_profile_id: { in: staffIds },
+            group_class_id: { not: null },
+            group_class: {
+                deleted_at: null,
+                status: { not: GroupItemStatus.ARCHIVED },
+            },
+        },
+        select: {
+            staff_profile_id: true,
+            group_class_id: true,
+        },
+    });
+
+    const classIdToStaffIds = new Map<number, number[]>();
+    for (const assignment of classAssignments) {
+        if (!assignment.group_class_id || !assignment.staff_profile_id) continue;
+        const existing = classIdToStaffIds.get(assignment.group_class_id) ?? [];
+        existing.push(assignment.staff_profile_id);
+        classIdToStaffIds.set(assignment.group_class_id, existing);
+    }
+
+    const classIds = Array.from(classIdToStaffIds.keys());
+    const classSessions = classIds.length
+        ? await prisma.groupClassSession.findMany({
+            where: {
+                company_id: companyId,
+                group_class_id: { in: classIds },
+                status: { not: GroupItemStatus.ARCHIVED },
+                cancelled_at: null,
+                start_at: { lt: endDate },
+                end_at: { gt: startDate },
+            },
+            select: {
+                id: true,
+                group_class_id: true,
+                start_at: true,
+                end_at: true,
+            },
+        })
+        : [];
+
+    const commitments: GroupStaffCommitment[] = [];
+
+    for (const assignment of eventAssignments) {
+        if (!assignment.staff_profile_id || !assignment.group_event_id || !assignment.group_event) continue;
+        commitments.push({
+            staff_id: assignment.staff_profile_id,
+            start_at: assignment.group_event.start_at,
+            end_at: assignment.group_event.end_at,
+            source: 'GROUP_EVENT',
+            source_id: assignment.group_event_id,
+        });
+    }
+
+    for (const session of classSessions) {
+        const sessionStaffIds = classIdToStaffIds.get(session.group_class_id) ?? [];
+        for (const staffId of sessionStaffIds) {
+            commitments.push({
+                staff_id: staffId,
+                start_at: session.start_at,
+                end_at: session.end_at,
+                source: 'GROUP_CLASS_SESSION',
+                source_id: session.id,
+            });
+        }
+    }
+
+    return commitments;
+}
+
+/**
+ * Check whether a staff member has a blocking group commitment for a slot.
+ */
+export async function checkGroupSlotConflict(
+    companyId: number,
+    staffId: number,
+    startAt: Date,
+    endAt: Date,
+    bufferMinutes: number = 0,
+) {
+    const endWithBuffer = new Date(endAt.getTime() + bufferMinutes * 60 * 1000);
+
+    const eventAssignment = await prisma.groupStaffAssignment.findFirst({
+        where: {
+            company_id: companyId,
+            staff_profile_id: staffId,
+            group_event: {
+                deleted_at: null,
+                status: { not: GroupItemStatus.ARCHIVED },
+                start_at: { lt: endWithBuffer },
+                end_at: { gt: startAt },
+            },
+        },
+        select: {
+            group_event_id: true,
+            group_event: {
+                select: {
+                    id: true,
+                    title: true,
+                    start_at: true,
+                    end_at: true,
+                },
+            },
+        },
+    });
+
+    if (eventAssignment?.group_event_id && eventAssignment.group_event) {
+        return {
+            type: 'GROUP_EVENT' as const,
+            id: eventAssignment.group_event.id,
+            title: eventAssignment.group_event.title,
+            start_at: eventAssignment.group_event.start_at,
+            end_at: eventAssignment.group_event.end_at,
+        };
+    }
+
+    const classSession = await prisma.groupClassSession.findFirst({
+        where: {
+            company_id: companyId,
+            status: { not: GroupItemStatus.ARCHIVED },
+            cancelled_at: null,
+            start_at: { lt: endWithBuffer },
+            end_at: { gt: startAt },
+            group_class: {
+                deleted_at: null,
+                status: { not: GroupItemStatus.ARCHIVED },
+                staff_assignments: {
+                    some: {
+                        company_id: companyId,
+                        staff_profile_id: staffId,
+                    },
+                },
+            },
+        },
+        select: {
+            id: true,
+            start_at: true,
+            end_at: true,
+            group_class: {
+                select: {
+                    title: true,
+                },
+            },
+        },
+    });
+
+    if (!classSession) return null;
+
+    return {
+        type: 'GROUP_CLASS_SESSION' as const,
+        id: classSession.id,
+        title: classSession.group_class.title,
+        start_at: classSession.start_at,
+        end_at: classSession.end_at,
+    };
+}
+
 /**
  * Create a booking with its services in a transaction
  */
@@ -306,6 +510,8 @@ export interface CreateBookingData {
     created_by_user_id: string;
     total_price_cents: number;
     booking_source?: BookingSource;
+    status?: BookingStatus;
+    qr_proof_image_url?: string | null;
 }
 
 export interface ServiceSnapshot {
@@ -329,9 +535,10 @@ export async function createBookingWithServices(
                 customer_id: bookingData.customer_id,
                 start_at: bookingData.start_at,
                 end_at: bookingData.end_at,
-                status: BookingStatus.PENDING,
+                status: bookingData.status ?? BookingStatus.PENDING,
                 payment_method: bookingData.payment_method,
                 payment_status: bookingData.payment_method === 'NONE' ? 'UNPAID' : 'PENDING_CONFIRMATION',
+                qr_proof_image_url: bookingData.qr_proof_image_url ?? null,
                 notes: bookingData.notes,
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,

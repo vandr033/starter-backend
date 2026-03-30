@@ -1,7 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as UserRepo from '../repositories/user.repo';
 
-export async function getUserById(id: number): Promise<MensajeApi> {
+export async function getUserById(id: string): Promise<MensajeApi> {
     try{
         let mensaje: MensajeApi = new MensajeApi();
         // get user by id

@@ -562,7 +562,10 @@ export async function updateBooking(
                 totalPriceCents: updatedBooking.total_price_cents || 0,
             };
 
-            if (updates.status === BookingStatus.CANCELLED && !isNoShowMarked(updatedBooking.notes)) {
+            if (updates.status === BookingStatus.CONFIRMED && existingBooking.status === BookingStatus.PENDING) {
+                // Manual confirmation — send the booking confirmed notification
+                void notifyBookingCreated(notificationData);
+            } else if (updates.status === BookingStatus.CANCELLED && !isNoShowMarked(updatedBooking.notes)) {
                 void notifyBookingCancelled(notificationData);
             } else if (updates.start_at || updates.staff_id || updates.service_ids) {
                 void notifyBookingUpdated(notificationData);

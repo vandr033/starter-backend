@@ -1,5 +1,4 @@
-import { createWasender, RetryConfig, FetchImplementation, TextOnlyMessage } from "wasenderapi";
-import { getUserByPhone } from "../repositories/user.repo";
+import { createWasender, RetryConfig, TextOnlyMessage, ImageUrlMessage } from "wasenderapi";
 
 
 const apiKey = process.env.WASENDER_API_KEY!;
@@ -32,6 +31,21 @@ export const sendWhatsappText = async (phone: string, text: string) => {
     const result = await wasender.send(textPayload)
     return result
   }catch(error){
+    return -1
+  }
+}
+
+export const sendWhatsappImage = async (phone: string, imageUrl: string, caption?: string) => {
+  try {
+    const imagePayload: ImageUrlMessage = {
+      messageType: "image",
+      to: phone,
+      imageUrl,
+      text: caption,
+    }
+    const result = await wasender.send(imagePayload)
+    return result
+  } catch (error) {
     return -1
   }
 }

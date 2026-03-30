@@ -12,9 +12,13 @@ export type PlanFeatureKey =
     | 'REVIEW_REQUEST_REMINDERS'
     | 'REVIEW_REQUEST_EMAIL'
     | 'REVIEW_REQUEST_WHATSAPP'
+    | 'BOOKING_FLOW_CUSTOMIZATION'
     | 'BULK_WHATSAPP_MESSAGING'
     | 'BULK_EMAIL_CAMPAIGNS'
-    | 'OUTREACH_REACTIVATION_TOOLS';
+    | 'OUTREACH_REACTIVATION_TOOLS'
+    | 'GROUP_EVENTS'
+    | 'GROUP_CLASSES'
+    | 'GROUP_ADVANCED';
 
 export type PlanCapabilities = {
     maxStaffMembers: number | null;
@@ -30,12 +34,16 @@ const STARTER_FEATURES: Record<PlanFeatureKey, boolean> = {
     OPERATIONAL_DASHBOARD: false,
     REVIEW_MANAGEMENT: false,
     REVIEW_ANALYTICS: false,
+    BOOKING_FLOW_CUSTOMIZATION: false,
     REVIEW_REQUEST_REMINDERS: false,
     REVIEW_REQUEST_EMAIL: false,
     REVIEW_REQUEST_WHATSAPP: false,
     BULK_WHATSAPP_MESSAGING: false,
     BULK_EMAIL_CAMPAIGNS: false,
     OUTREACH_REACTIVATION_TOOLS: false,
+    GROUP_EVENTS: false,
+    GROUP_CLASSES: false,
+    GROUP_ADVANCED: false,
 };
 
 const BUSINESS_FEATURES: Record<PlanFeatureKey, boolean> = {
@@ -47,12 +55,16 @@ const BUSINESS_FEATURES: Record<PlanFeatureKey, boolean> = {
     OPERATIONAL_DASHBOARD: true,
     REVIEW_MANAGEMENT: true,
     REVIEW_ANALYTICS: true,
+    BOOKING_FLOW_CUSTOMIZATION: true,
     REVIEW_REQUEST_REMINDERS: false,
     REVIEW_REQUEST_EMAIL: false,
     REVIEW_REQUEST_WHATSAPP: false,
     BULK_WHATSAPP_MESSAGING: false,
     BULK_EMAIL_CAMPAIGNS: false,
     OUTREACH_REACTIVATION_TOOLS: false,
+    GROUP_EVENTS: true,
+    GROUP_CLASSES: false,
+    GROUP_ADVANCED: false,
 };
 
 const PRO_FEATURES: Record<PlanFeatureKey, boolean> = {
@@ -64,12 +76,16 @@ const PRO_FEATURES: Record<PlanFeatureKey, boolean> = {
     OPERATIONAL_DASHBOARD: true,
     REVIEW_MANAGEMENT: true,
     REVIEW_ANALYTICS: true,
+    BOOKING_FLOW_CUSTOMIZATION: true,
     REVIEW_REQUEST_REMINDERS: true,
     REVIEW_REQUEST_EMAIL: true,
     REVIEW_REQUEST_WHATSAPP: true,
     BULK_WHATSAPP_MESSAGING: true,
     BULK_EMAIL_CAMPAIGNS: true,
     OUTREACH_REACTIVATION_TOOLS: true,
+    GROUP_EVENTS: true,
+    GROUP_CLASSES: true,
+    GROUP_ADVANCED: true,
 };
 
 export const PLAN_CAPABILITIES: Record<ShopPlan, PlanCapabilities> = {
@@ -96,12 +112,16 @@ export const FEATURE_REQUIRED_PLAN: Record<PlanFeatureKey, ShopPlan> = {
     OPERATIONAL_DASHBOARD: ShopPlan.BUSINESS,
     REVIEW_MANAGEMENT: ShopPlan.BUSINESS,
     REVIEW_ANALYTICS: ShopPlan.BUSINESS,
+    BOOKING_FLOW_CUSTOMIZATION: ShopPlan.BUSINESS,
     REVIEW_REQUEST_REMINDERS: ShopPlan.PRO,
     REVIEW_REQUEST_EMAIL: ShopPlan.PRO,
     REVIEW_REQUEST_WHATSAPP: ShopPlan.PRO,
     BULK_WHATSAPP_MESSAGING: ShopPlan.PRO,
     BULK_EMAIL_CAMPAIGNS: ShopPlan.PRO,
     OUTREACH_REACTIVATION_TOOLS: ShopPlan.PRO,
+    GROUP_EVENTS: ShopPlan.BUSINESS,
+    GROUP_CLASSES: ShopPlan.PRO,
+    GROUP_ADVANCED: ShopPlan.PRO,
 };
 
 export function getPlanCapabilities(plan: ShopPlan): PlanCapabilities {

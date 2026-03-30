@@ -1,7 +1,6 @@
 import { Router } from 'express';
-import { validate } from '../middlewares/validate';
 import * as UserController from '../controllers/user.controller';
-import { requireAuth } from '../middlewares/auth';
+import { requireAuth } from '../middlewares/requireAuth';
 const router = Router();
 
 router.get('/get-user-by-id/:id', requireAuth, UserController.getUserById);

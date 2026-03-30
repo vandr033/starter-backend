@@ -4,6 +4,7 @@ import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
 import { getCompanySubscriptionHistoryPayload } from '../services/company-subscription-history.service';
+import { isFeatureEnabledForCompany } from '../services/plan-enforcement.service';
 
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
@@ -58,6 +59,8 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
                 allow_qr_payment: true,
                 qr_image_url: null,
                 allow_cash_payment: true,
+                require_comprobante_for_qr: true,
+                auto_confirm_bookings: true,
                 send_email_notifications: true,
                 send_whatsapp_notifications: false,
             };
@@ -174,6 +177,8 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             allow_qr_payment,
             qr_image_url,
             allow_cash_payment,
+            require_comprobante_for_qr,
+            auto_confirm_bookings,
             send_email_notifications,
             send_whatsapp_notifications,
             social_links,
@@ -324,6 +329,11 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             }
         }
 
+        // Plan-gate booking flow customization: ignore values if plan doesn't support
+        const canCustomizeFlow = await isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
+        const effectiveRequireComprobante = canCustomizeFlow ? require_comprobante_for_qr : undefined;
+        const effectiveAutoConfirm = canCustomizeFlow ? auto_confirm_bookings : undefined;
+
         // Upsert settings
         const settings = await prisma.companySettings.upsert({
             where: { company_id: companyId },
@@ -338,6 +348,8 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 allow_qr_payment,
                 qr_image_url,
                 allow_cash_payment,
+                require_comprobante_for_qr: effectiveRequireComprobante,
+                auto_confirm_bookings: effectiveAutoConfirm,
                 send_email_notifications,
                 send_whatsapp_notifications,
                 ...(normalizedSocialLinks !== undefined && { social_links: normalizedSocialLinks }),
@@ -354,6 +366,8 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 allow_qr_payment: allow_qr_payment !== undefined ? allow_qr_payment : true,
                 qr_image_url: qr_image_url || null,
                 allow_cash_payment: allow_cash_payment !== undefined ? allow_cash_payment : true,
+                require_comprobante_for_qr: canCustomizeFlow && effectiveRequireComprobante !== undefined ? effectiveRequireComprobante : true,
+                auto_confirm_bookings: canCustomizeFlow && effectiveAutoConfirm !== undefined ? effectiveAutoConfirm : true,
                 send_email_notifications: send_email_notifications !== undefined ? send_email_notifications : true,
                 send_whatsapp_notifications: send_whatsapp_notifications !== undefined ? send_whatsapp_notifications : false,
                 social_links: normalizedSocialLinks || {},
