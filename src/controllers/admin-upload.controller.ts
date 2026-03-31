@@ -20,13 +20,54 @@ const upload = multer({
   },
 });
 
+const STORAGE_API_PREFIX = '/api/storage/';
+
+function toStorageRelativePath(rawUrl: string): string | null {
+  if (!rawUrl) return null;
+
+  let normalized = rawUrl.trim();
+  if (!normalized) return null;
+
+  if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+    try {
+      normalized = new URL(normalized).pathname;
+    } catch {
+      return null;
+    }
+  }
+
+  const pathWithoutQuery = normalized.split(/[?#]/, 1)[0];
+  if (!pathWithoutQuery) return null;
+
+  if (pathWithoutQuery.startsWith(STORAGE_API_PREFIX)) {
+    return pathWithoutQuery.slice(STORAGE_API_PREFIX.length);
+  }
+
+  const uploadsIndex = pathWithoutQuery.indexOf('/uploads/');
+  if (uploadsIndex >= 0) {
+    return pathWithoutQuery.slice(uploadsIndex + 1);
+  }
+
+  return null;
+}
+
+function buildVersionedEntityImageFilename(
+  entityId: number,
+  kind: 'cover' | 'thumbnail',
+  extension: string,
+): string {
+  const version = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${entityId}-${kind}-${version}.${extension}`;
+}
+
 export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const companyId = (req as any).companyID || parseInt(req.body.company_id);
+    const rawCompanyId = (req as any).companyID ?? req.body.company_id;
+    const companyId = Number.parseInt(String(rawCompanyId), 10);
     const { type, entity_id } = req.body;
     const entityId = entity_id ? parseInt(entity_id, 10) : null;
     
-    if (!companyId) {
+    if (!Number.isInteger(companyId) || companyId <= 0) {
       return res.status(400).json({
         code: 400,
         error: true,
@@ -89,6 +130,35 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
+    let previousImageUrl: string | null = null;
+    if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
+      const currentRecord = await prisma.groupEvent.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: { cover_image_url: true, thumbnail_url: true },
+      });
+      if (!currentRecord) {
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Group event not found',
+        });
+      }
+      previousImageUrl = type === 'group_event_cover' ? currentRecord.cover_image_url : currentRecord.thumbnail_url;
+    } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
+      const currentRecord = await prisma.groupClass.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: { cover_image_url: true, thumbnail_url: true },
+      });
+      if (!currentRecord) {
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Group class not found',
+        });
+      }
+      previousImageUrl = type === 'group_class_cover' ? currentRecord.cover_image_url : currentRecord.thumbnail_url;
+    }
+
     // Determine storage type and filename
     let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'group-events' | 'group-classes';
     let filename: string;
@@ -125,22 +195,22 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         break;
       case 'group_event_cover':
         storageType = 'group-events';
-        filename = `${entityId}-cover.${fileExtension}`;
+        filename = buildVersionedEntityImageFilename(entityId!, 'cover', fileExtension);
         imageUrlField = 'cover_image_url';
         break;
       case 'group_event_thumbnail':
         storageType = 'group-events';
-        filename = `${entityId}-thumbnail.${fileExtension}`;
+        filename = buildVersionedEntityImageFilename(entityId!, 'thumbnail', fileExtension);
         imageUrlField = 'thumbnail_url';
         break;
       case 'group_class_cover':
         storageType = 'group-classes';
-        filename = `${entityId}-cover.${fileExtension}`;
+        filename = buildVersionedEntityImageFilename(entityId!, 'cover', fileExtension);
         imageUrlField = 'cover_image_url';
         break;
       case 'group_class_thumbnail':
         storageType = 'group-classes';
-        filename = `${entityId}-thumbnail.${fileExtension}`;
+        filename = buildVersionedEntityImageFilename(entityId!, 'thumbnail', fileExtension);
         imageUrlField = 'thumbnail_url';
         break;
       default:
@@ -214,6 +284,17 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
+    if (previousImageUrl && previousImageUrl !== url) {
+      const previousRelativePath = toStorageRelativePath(previousImageUrl);
+      if (
+        previousRelativePath
+        && previousRelativePath !== relativePath
+        && previousRelativePath.startsWith(`uploads/${companyId}/`)
+      ) {
+        await StorageService.deleteFile(previousRelativePath).catch(() => undefined);
+      }
+    }
+
     res.json({
       code: 200,
       error: false,
@@ -238,11 +319,12 @@ export const uploadMiddleware = upload.single('file');
 
 export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const companyId = (req as any).companyID || parseInt(req.body.company_id);
+    const rawCompanyId = (req as any).companyID ?? req.body.company_id;
+    const companyId = Number.parseInt(String(rawCompanyId), 10);
     const { type, entity_id } = req.body;
     const entityId = entity_id ? parseInt(entity_id, 10) : null;
     
-    if (!companyId) {
+    if (!Number.isInteger(companyId) || companyId <= 0) {
       return res.status(400).json({
         code: 400,
         error: true,
@@ -431,18 +513,15 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
-    // Extract relative path from URL
-    // URL format: /api/storage/uploads/{company_id}/{type}/{filename}
-    const relativePath = currentImageUrl.includes('/api/storage/')
-      ? currentImageUrl.split('/api/storage/')[1]
-      : currentImageUrl.split('/').slice(3).join('/'); // Remove /api/storage/
-
     // Delete file from filesystem
-    try {
-      await StorageService.deleteFile(relativePath);
-    } catch (error) {
-      console.error('Error deleting file:', error);
-      // Continue with database update even if file deletion fails
+    const relativePath = toStorageRelativePath(currentImageUrl);
+    if (relativePath && relativePath.startsWith(`uploads/${companyId}/`)) {
+      try {
+        await StorageService.deleteFile(relativePath);
+      } catch (error) {
+        console.error('Error deleting file:', error);
+        // Continue with database update even if file deletion fails
+      }
     }
 
     // Update database record to set image_url = null
