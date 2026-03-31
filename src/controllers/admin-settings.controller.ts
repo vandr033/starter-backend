@@ -183,6 +183,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             send_whatsapp_notifications,
             social_links,
             default_language,
+            custom_tos,
         } = req.body;
 
         // Validate numeric fields
@@ -250,6 +251,16 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             mensaje = {
                 code: 400,
                 message: 'default_language must be one of: es, en',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+
+        // Validate custom_tos if provided
+        if (custom_tos !== undefined && custom_tos !== null && typeof custom_tos !== 'string') {
+            mensaje = {
+                code: 400,
+                message: 'custom_tos must be a string or null',
                 error: true,
             };
             return res.status(400).json(mensaje);
@@ -353,6 +364,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 send_email_notifications,
                 send_whatsapp_notifications,
                 ...(normalizedSocialLinks !== undefined && { social_links: normalizedSocialLinks }),
+                ...(custom_tos !== undefined && { custom_tos: custom_tos?.trim() || null }),
             },
             create: {
                 company_id: companyId,
@@ -371,6 +383,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 send_email_notifications: send_email_notifications !== undefined ? send_email_notifications : true,
                 send_whatsapp_notifications: send_whatsapp_notifications !== undefined ? send_whatsapp_notifications : false,
                 social_links: normalizedSocialLinks || {},
+                custom_tos: custom_tos?.trim() || null,
             },
         });
 
