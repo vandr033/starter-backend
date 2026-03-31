@@ -8,7 +8,14 @@ import {
     checkInByTicketSchema,
     checkInClassSessionSchema,
     checkInEventSchema,
+    checkInFreeEventByCodeSchema,
 } from '../schemas/group.schema';
+import {
+    adminListInterestedHandler,
+    adminExportInterestedHandler,
+    freeEventCheckInByCodeHandler,
+    freeEventLookupByCodeHandler,
+} from '../controllers/free-event-registration.controller';
 
 const router = Router();
 
@@ -91,6 +98,21 @@ router.post(
     validate(checkInByTicketSchema),
     AdminGroupBookingController.checkInByTicket,
 );
+router.post(
+    '/attendance/events/:eventId/free-check-in/code',
+    requireAuth,
+    requireCompanyRole(staffRoles),
+    requirePlanFeature('GROUP_EVENTS'),
+    validate(checkInFreeEventByCodeSchema),
+    freeEventCheckInByCodeHandler,
+);
+router.get(
+    '/attendance/events/:eventId/free-check-in/code/:reservationCode',
+    requireAuth,
+    requireCompanyRole(staffRoles),
+    requirePlanFeature('GROUP_EVENTS'),
+    freeEventLookupByCodeHandler,
+);
 router.get(
     '/attendance/summary',
     requireAuth,
@@ -127,5 +149,8 @@ router.post(
     requirePlanFeature('GROUP_ADVANCED'),
     AdminGroupBookingController.cancelTicket,
 );
+
+router.get('/events/free-registrations/interested', requireAuth, requireCompanyRole(adminRoles), adminListInterestedHandler);
+router.get('/events/free-registrations/interested/export', requireAuth, requireCompanyRole(adminRoles), adminExportInterestedHandler);
 
 export default router;

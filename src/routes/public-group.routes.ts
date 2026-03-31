@@ -9,6 +9,11 @@ import {
     createClassEnrollmentSchema,
     createEventBookingSchema,
 } from '../schemas/group.schema';
+import { optionalAuth } from '../middlewares/optionalAuth';
+import {
+    getFreeRegistrationStateHandler,
+    submitFreeRegistrationHandler,
+} from '../controllers/free-event-registration.controller';
 
 const router = Router();
 
@@ -88,5 +93,9 @@ router.post(
 
 router.get('/my/bookings', requireAuth, PublicGroupController.getMyEventBookings);
 router.get('/my/enrollments', requireAuth, PublicGroupController.getMyClassEnrollments);
+
+// Free event registration (optional auth)
+router.get('/events/:eventId/free-registration-state', optionalAuth, getFreeRegistrationStateHandler);
+router.post('/events/:eventId/free-register', optionalAuth, submitFreeRegistrationHandler);
 
 export default router;

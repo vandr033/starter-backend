@@ -131,6 +131,11 @@ export const checkInByTicketSchema = z.object({
     path: ['ticket_code'],
 });
 
+export const checkInFreeEventByCodeSchema = z.object({
+    reservation_code: z.string().trim().min(1).max(64),
+    method: z.enum(['QR_SCAN', 'MANUAL']).optional(),
+});
+
 export type CreateGroupEventDTO = z.infer<typeof createGroupEventSchema>;
 export type UpdateGroupEventDTO = z.infer<typeof updateGroupEventSchema>;
 export type CreateGroupClassDTO = z.infer<typeof createGroupClassSchema>;

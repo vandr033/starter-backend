@@ -387,19 +387,41 @@ async function getEventBookingSpots(companyId: number, eventIds: number[]): Prom
     const result = new Map<number, EventBookingSpots>();
     if (eventIds.length === 0) return result;
 
-    const rows = await prisma.groupEventBooking.groupBy({
-        by: ['group_event_id', 'status'],
-        where: {
-            company_id: companyId,
-            group_event_id: { in: eventIds },
-            status: { in: ['CONFIRMED', 'PENDING'] },
-        },
-        _sum: { booked_spots: true },
-    });
+    const [bookingRows, freeRegistrationRows] = await Promise.all([
+        prisma.groupEventBooking.groupBy({
+            by: ['group_event_id', 'status'],
+            where: {
+                company_id: companyId,
+                group_event_id: { in: eventIds },
+                status: { in: ['CONFIRMED', 'PENDING'] },
+            },
+            _sum: { booked_spots: true },
+        }),
+        prisma.freeEventRegistration.groupBy({
+            by: ['group_event_id', 'status'],
+            where: {
+                company_id: companyId,
+                group_event_id: { in: eventIds },
+                status: { in: ['CONFIRMED', 'PENDING'] },
+            },
+            _count: { _all: true },
+        }),
+    ]);
 
-    for (const row of rows) {
+    for (const row of bookingRows) {
         const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0 };
         const spots = row._sum.booked_spots ?? 0;
+        if (row.status === 'CONFIRMED') {
+            current.confirmed += spots;
+        } else if (row.status === 'PENDING') {
+            current.pending += spots;
+        }
+        result.set(row.group_event_id, current);
+    }
+
+    for (const row of freeRegistrationRows) {
+        const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0 };
+        const spots = row._count._all ?? 0;
         if (row.status === 'CONFIRMED') {
             current.confirmed += spots;
         } else if (row.status === 'PENDING') {

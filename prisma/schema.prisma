@@ -70,6 +70,7 @@ model Company {
   group_session_attendances GroupSessionAttendance[]
   group_tickets             GroupTicket[]
   group_event_interests     GroupEventInterest[]
+  free_event_registrations     FreeEventRegistration[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -141,6 +142,8 @@ model User {
   updatedAt                    DateTime                     @updatedAt
   phoneNumber                  String?                      @unique @db.VarChar(32)
   phoneNumberVerified          Boolean?                     @default(false)
+  gender                       String?                      @db.VarChar(30)
+  age                          Int?
   accounts                     Account[]
   created_bookings             Booking[]                    @relation("BookingCreatedBy")
   updated_bookings             Booking[]                    @relation("BookingUpdatedBy")
@@ -158,6 +161,7 @@ model User {
   group_class_enrollments      GroupClassEnrollment[]
   group_session_attendances    GroupSessionAttendance[]
   group_event_interests        GroupEventInterest[]
+  free_event_registrations     FreeEventRegistration[]
 
   @@map("user")
 }
@@ -802,6 +806,25 @@ enum CheckInMethod {
   MANUAL
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum FreeEventRegistrationStatus {
+  CONFIRMED
+  PENDING
+  INTERESTED
+}
+
+enum AccountVerificationStatus {
+  NOT_REQUESTED
+  PENDING_VERIFICATION
+  VERIFIED
+}
+
 // ─── Group Event (one-time) ─────────────────────────────────────────────────
 
 model GroupEvent {
@@ -830,6 +853,7 @@ model GroupEvent {
   bookings           GroupEventBooking[]
   attendances        GroupSessionAttendance[]
   interests          GroupEventInterest[]
+  free_registrations   FreeEventRegistration[]
 
   @@unique([company_id, slug])
   @@index([company_id, status])
@@ -1084,4 +1108,40 @@ model GroupEventInterest {
   @@unique([group_event_id, user_id])
   @@index([company_id, group_event_id])
   @@map("group_event_interest")
+}
+
+model FreeEventRegistration {
+  id                           Int                            @id @default(autoincrement())
+  group_event_id               Int
+  company_id                   Int
+  user_id                      String?
+  reservation_code             String?                        @unique @db.VarChar(6)
+  first_name                   String                         @db.VarChar(100)
+  last_name                    String                         @db.VarChar(100)
+  gender                       Gender
+  age                          Int
+  email                        String                         @db.VarChar(254)
+  phone_prefix                 String                         @db.VarChar(8)
+  phone_number                 String                         @db.VarChar(32)
+  tos_accepted                 Boolean                        @default(false)
+  source                       String                         @default("free_event_form") @db.VarChar(50)
+  status                       FreeEventRegistrationStatus    @default(CONFIRMED)
+  create_account_requested     Boolean                        @default(false)
+  account_created              Boolean                        @default(false)
+  account_verification_status  AccountVerificationStatus      @default(NOT_REQUESTED)
+  checked_in_at                DateTime?
+  checked_in_method            CheckInMethod?
+  created_at                   DateTime                       @default(now())
+  updated_at                   DateTime                       @updatedAt
+
+  group_event  GroupEvent  @relation(fields: [group_event_id], references: [id], onDelete: Cascade)
+  company      Company     @relation(fields: [company_id], references: [id])
+  user         User?       @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@unique([group_event_id, email])
+  @@index([group_event_id, status])
+  @@index([group_event_id, reservation_code])
+  @@index([company_id, group_event_id])
+  @@index([user_id])
+  @@map("free_event_registration")
 }

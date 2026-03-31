@@ -12,21 +12,37 @@ type ServiceResult = MensajeApi & { data?: unknown };
 
 const MAX_TICKET_CODE_ATTEMPTS = 40;
 
-function generateSixDigitTicketCode(): string {
+export function generateSixDigitTicketCode(): string {
     return randomInt(0, 1_000_000).toString().padStart(6, '0');
 }
 
-async function generateUniqueTicketCode(): Promise<string> {
-    for (let attempt = 0; attempt < MAX_TICKET_CODE_ATTEMPTS; attempt += 1) {
-        const candidate = generateSixDigitTicketCode();
-        const existing = await prisma.groupTicket.findUnique({
-            where: { ticket_code: candidate },
-            select: { id: true },
-        });
-        if (!existing) return candidate;
+export async function generateUniqueSixDigitCode(params: {
+    exists: (candidate: string) => Promise<boolean>;
+    maxAttempts?: number;
+    candidateFactory?: () => string;
+}): Promise<string> {
+    const attempts = params.maxAttempts ?? MAX_TICKET_CODE_ATTEMPTS;
+    const candidateFactory = params.candidateFactory ?? generateSixDigitTicketCode;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const candidate = candidateFactory();
+        if (candidate.length !== 6) continue;
+        if (!await params.exists(candidate)) return candidate;
     }
 
     throw new Error('Unable to generate a unique ticket code');
+}
+
+async function generateUniqueTicketCode(): Promise<string> {
+    return generateUniqueSixDigitCode({
+        exists: async (candidate) => {
+            const existing = await prisma.groupTicket.findUnique({
+                where: { ticket_code: candidate },
+                select: { id: true },
+            });
+            return Boolean(existing);
+        },
+    });
 }
 
 async function canUseTickets(companyId: number): Promise<boolean> {

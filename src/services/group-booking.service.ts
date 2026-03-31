@@ -30,6 +30,72 @@ function buildFullPhone(prefix?: string | null, phone?: string | null): string |
     return `${cleanPrefix}${cleanPhone}`;
 }
 
+function normalizePhoneDigits(value?: string | null): string {
+    return (value ?? '').replace(/\D/g, '');
+}
+
+function buildPhoneMatchVariants(phone?: string | null, prefix?: string | null): Array<{ number: string; prefix?: string }> {
+    const phoneDigits = normalizePhoneDigits(phone);
+    if (!phoneDigits) return [];
+
+    const prefixDigits = normalizePhoneDigits(prefix);
+    const variants = new Map<string, { number: string; prefix?: string }>();
+
+    const addVariant = (numberValue: string, prefixValue?: string) => {
+        const cleanNumber = normalizePhoneDigits(numberValue);
+        if (!cleanNumber) return;
+        const cleanPrefix = normalizePhoneDigits(prefixValue ?? '');
+        const key = `${cleanPrefix}:${cleanNumber}`;
+        if (!variants.has(key)) {
+            variants.set(key, cleanPrefix ? { number: cleanNumber, prefix: cleanPrefix } : { number: cleanNumber });
+        }
+    };
+
+    addVariant(phoneDigits, prefixDigits || undefined);
+    addVariant(phoneDigits);
+
+    if (prefixDigits && phoneDigits.startsWith(prefixDigits) && phoneDigits.length > prefixDigits.length) {
+        const local = phoneDigits.slice(prefixDigits.length);
+        addVariant(local, prefixDigits);
+        addVariant(local);
+    }
+
+    // Common fallback for NANP numbers stored as +1XXXXXXXXXX.
+    if (!prefixDigits && phoneDigits.length === 11 && phoneDigits.startsWith('1')) {
+        addVariant(phoneDigits.slice(1), '1');
+        addVariant(phoneDigits.slice(1));
+    }
+
+    return Array.from(variants.values());
+}
+
+export function canSafelyMatchOrphanFreeRegistration(params: {
+    registrationEmail: string;
+    registrationPhonePrefix: string;
+    registrationPhoneNumber: string;
+    identityEmails: Set<string>;
+    identityPhoneVariants: Array<{ number: string; prefix?: string }>;
+}): boolean {
+    const normalizedEmail = params.registrationEmail.trim().toLowerCase();
+    const emailMatch = params.identityEmails.has(normalizedEmail);
+
+    const registrationNumber = normalizePhoneDigits(params.registrationPhoneNumber);
+    const registrationPrefix = normalizePhoneDigits(params.registrationPhonePrefix);
+    const phoneMatch = params.identityPhoneVariants.some((variant) => {
+        if (normalizePhoneDigits(variant.number) !== registrationNumber) return false;
+        if (!variant.prefix) return true;
+        return normalizePhoneDigits(variant.prefix) === registrationPrefix;
+    });
+
+    const hasEmailIdentity = params.identityEmails.size > 0;
+    const hasPhoneIdentity = params.identityPhoneVariants.length > 0;
+
+    if (hasEmailIdentity && hasPhoneIdentity) return emailMatch && phoneMatch;
+    if (hasEmailIdentity) return emailMatch;
+    if (hasPhoneIdentity) return phoneMatch;
+    return false;
+}
+
 function getFrontendBaseUrl(): string {
     return (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
@@ -279,15 +345,94 @@ export async function createEventBooking(
  * Admin: list bookings for an event.
  */
 export async function listEventBookings(companyId: number, eventId: number): Promise<ServiceResult> {
-    const bookings = await prisma.groupEventBooking.findMany({
-        where: { company_id: companyId, group_event_id: eventId },
-        include: {
-            user: { select: { id: true, name: true, email: true, phoneNumber: true } },
-            customer_profile: { select: { id: true, notes: true } },
-        },
-        orderBy: { created_at: 'desc' },
-    });
-    return { code: 200, error: false, message: 'Bookings retrieved', data: bookings };
+    const [bookings, freeRegistrations] = await Promise.all([
+        prisma.groupEventBooking.findMany({
+            where: { company_id: companyId, group_event_id: eventId },
+            include: {
+                user: { select: { id: true, name: true, email: true, phoneNumber: true } },
+                customer_profile: { select: { id: true, notes: true } },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.freeEventRegistration.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+                status: { in: ['CONFIRMED', 'PENDING'] },
+            },
+            include: {
+                user: { select: { id: true, name: true, email: true, phoneNumber: true } },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+    ]);
+
+    const bookingUserKeys = new Set(
+        bookings
+            .map((booking) => booking.user_id)
+            .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            .map((value) => `${eventId}:uid:${value}`),
+    );
+    const bookingEmailKeys = new Set(
+        bookings
+            .map((booking) => booking.user?.email?.trim().toLowerCase())
+            .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            .map((value) => `${eventId}:email:${value}`),
+    );
+    const bookingPhoneKeys = new Set(
+        bookings
+            .flatMap((booking) => buildPhoneMatchVariants(booking.user?.phoneNumber))
+            .map((variant) => `${eventId}:phone:${variant.number}`),
+    );
+
+    const mappedFreeRegistrations = freeRegistrations
+        .filter((registration) => {
+            const byUser = registration.user_id ? bookingUserKeys.has(`${eventId}:uid:${registration.user_id}`) : false;
+            const byEmail = bookingEmailKeys.has(`${eventId}:email:${registration.email.trim().toLowerCase()}`);
+            const byPhone = buildPhoneMatchVariants(registration.phone_number, registration.phone_prefix)
+                .some((variant) => bookingPhoneKeys.has(`${eventId}:phone:${variant.number}`));
+            return !(byUser || byEmail || byPhone);
+        })
+        .map((registration) => {
+        const fallbackUserId = `free-reg-${registration.id}`;
+        const fallbackName = [registration.first_name, registration.last_name]
+            .map((value) => value?.trim() ?? '')
+            .filter((value) => value.length > 0)
+            .join(' ');
+
+            return {
+                id: -registration.id,
+                source: 'FREE_REGISTRATION',
+                company_id: registration.company_id,
+                group_event_id: registration.group_event_id,
+                customer_profile_id: null,
+                user_id: registration.user_id ?? fallbackUserId,
+                status: registration.status === 'CONFIRMED' ? GroupBookingStatus.CONFIRMED : GroupBookingStatus.PENDING,
+                booked_spots: 1,
+                payment_method: PaymentMethod.NONE,
+                payment_status: PaymentStatus.PAID,
+                qr_proof_image_url: null,
+                total_price_cents: 0,
+                extra_attendees_json: null,
+                notes: null,
+                created_at: registration.created_at,
+                updated_at: registration.updated_at,
+                cancelled_at: null,
+                user: registration.user ?? {
+                    id: registration.user_id ?? fallbackUserId,
+                    name: fallbackName || null,
+                    email: registration.email,
+                    phoneNumber: registration.phone_number,
+                },
+                customer_profile: null,
+            };
+        });
+
+    const allBookings = [...bookings, ...mappedFreeRegistrations].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+
+    return { code: 200, error: false, message: 'Bookings retrieved', data: allBookings };
 }
 
 export async function listEventInterests(companyId: number, eventId: number): Promise<ServiceResult> {
@@ -299,29 +444,87 @@ export async function listEventInterests(companyId: number, eventId: number): Pr
         return { code: 404, error: true, message: 'Event not found' };
     }
 
-    const interests = await prisma.groupEventInterest.findMany({
-        where: {
-            company_id: companyId,
-            group_event_id: eventId,
-        },
-        include: {
-            user: {
-                select: {
-                    id: true,
-                    name: true,
-                    email: true,
-                    phoneNumber: true,
-                    phone_prefix: true,
+    const [legacyInterests, freeRegistrationInterests] = await Promise.all([
+        prisma.groupEventInterest.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+            },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+                customer_profile: {
+                    select: {
+                        id: true,
+                    },
                 },
             },
-            customer_profile: {
-                select: {
-                    id: true,
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.freeEventRegistration.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+                status: 'INTERESTED',
+            },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
                 },
             },
-        },
-        orderBy: { created_at: 'desc' },
+            orderBy: { created_at: 'desc' },
+        }),
+    ]);
+
+    const mappedFreeRegistrationInterests = freeRegistrationInterests.map((registration) => {
+        const fallbackUserId = `free-interest-${registration.id}`;
+        const fallbackName = [registration.first_name, registration.last_name]
+            .map((value) => value?.trim() ?? '')
+            .filter((value) => value.length > 0)
+            .join(' ');
+
+        return {
+            id: -registration.id,
+            company_id: registration.company_id,
+            group_event_id: registration.group_event_id,
+            user_id: registration.user_id ?? fallbackUserId,
+            customer_profile_id: null,
+            created_at: registration.created_at,
+            user: registration.user ?? {
+                id: registration.user_id ?? fallbackUserId,
+                name: fallbackName || null,
+                email: registration.email,
+                phoneNumber: registration.phone_number,
+                phone_prefix: registration.phone_prefix,
+            },
+        };
     });
+
+    const deduped = new Map<string, (typeof legacyInterests)[number] | (typeof mappedFreeRegistrationInterests)[number]>();
+    [...legacyInterests, ...mappedFreeRegistrationInterests]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .forEach((row) => {
+            const email = row.user?.email?.trim().toLowerCase();
+            const key = row.user_id ? `uid:${row.user_id}` : (email ? `email:${email}` : `row:${row.id}`);
+            if (!deduped.has(key)) {
+                deduped.set(key, row);
+            }
+        });
+
+    const interests = Array.from(deduped.values());
 
     return {
         code: 200,
@@ -1041,8 +1244,57 @@ export async function cancelClassEnrollment(companyId: number, enrollmentId: num
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function getMyEventBookings(userId: string): Promise<ServiceResult> {
-    const bookings = await prisma.groupEventBooking.findMany({
-        where: { user_id: userId },
+    const [bookings, user] = await Promise.all([
+        prisma.groupEventBooking.findMany({
+            where: { user_id: userId },
+            include: {
+                group_event: {
+                    select: {
+                        id: true, title: true, slug: true, start_at: true, end_at: true,
+                        cover_image_url: true, thumbnail_url: true, is_free: true, location_text: true,
+                        company: { select: { id: true, name: true, slug: true } },
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.user.findUnique({
+            where: { id: userId },
+            select: { email: true, phone_prefix: true, phoneNumber: true },
+        }),
+    ]);
+
+    const normalizedEmail = user?.email?.trim().toLowerCase() || null;
+    const phoneNumber = user?.phoneNumber?.trim();
+    const phonePrefix = user?.phone_prefix?.trim();
+    const phoneVariants = buildPhoneMatchVariants(phoneNumber, phonePrefix);
+    const identityEmails = new Set<string>(normalizedEmail ? [normalizedEmail] : []);
+
+    const orphanIdentityOr: Prisma.FreeEventRegistrationWhereInput[] = [];
+    if (identityEmails.size > 0) {
+        orphanIdentityOr.push({ email: { in: Array.from(identityEmails) } });
+    }
+    for (const variant of phoneVariants) {
+        orphanIdentityOr.push({
+            phone_number: variant.number,
+            ...(variant.prefix ? { phone_prefix: variant.prefix } : {}),
+        });
+    }
+
+    const freeRegistrations = await prisma.freeEventRegistration.findMany({
+        where: {
+            status: { in: ['CONFIRMED', 'PENDING'] },
+            OR: [
+                { user_id: userId },
+                ...(orphanIdentityOr.length > 0
+                    ? [{
+                        user_id: null,
+                        create_account_requested: true,
+                        OR: orphanIdentityOr,
+                    }]
+                    : []),
+            ],
+        },
         include: {
             group_event: {
                 select: {
@@ -1054,7 +1306,53 @@ export async function getMyEventBookings(userId: string): Promise<ServiceResult>
         },
         orderBy: { created_at: 'desc' },
     });
-    return { code: 200, error: false, message: 'Bookings retrieved', data: bookings };
+
+    const bookedEventIds = new Set(
+        bookings
+            .filter((booking) => booking.status === GroupBookingStatus.CONFIRMED || booking.status === GroupBookingStatus.PENDING)
+            .map((booking) => booking.group_event_id),
+    );
+    const mappedFreeRegistrations = freeRegistrations
+        .filter((registration) => {
+            if (registration.user_id === userId) return true;
+            if (registration.user_id) return false;
+            if (!registration.create_account_requested) return false;
+            return canSafelyMatchOrphanFreeRegistration({
+                registrationEmail: registration.email,
+                registrationPhonePrefix: registration.phone_prefix,
+                registrationPhoneNumber: registration.phone_number,
+                identityEmails,
+                identityPhoneVariants: phoneVariants,
+            });
+        })
+        .filter((registration) => !bookedEventIds.has(registration.group_event_id))
+        .map((registration) => ({
+            id: -registration.id,
+            source: 'FREE_REGISTRATION',
+            reservation_code: registration.reservation_code,
+            company_id: registration.company_id,
+            group_event_id: registration.group_event_id,
+            customer_profile_id: null,
+            user_id: registration.user_id ?? userId,
+            status: registration.status === 'CONFIRMED' ? GroupBookingStatus.CONFIRMED : GroupBookingStatus.PENDING,
+            booked_spots: 1,
+            payment_method: PaymentMethod.NONE,
+            payment_status: PaymentStatus.PAID,
+            qr_proof_image_url: null,
+            total_price_cents: 0,
+            extra_attendees_json: null,
+            notes: null,
+            created_at: registration.created_at,
+            updated_at: registration.updated_at,
+            cancelled_at: null,
+            group_event: registration.group_event,
+        }));
+
+    const allBookings = [...bookings, ...mappedFreeRegistrations].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+
+    return { code: 200, error: false, message: 'Bookings retrieved', data: allBookings };
 }
 
 export async function getMyClassEnrollments(userId: string): Promise<ServiceResult> {
