@@ -833,6 +833,7 @@ model GroupEvent {
   title              String           @db.VarChar(255)
   slug               String           @db.VarChar(255)
   description        String?          @db.Text
+  no_availability_message String?     @db.Text
   cover_image_url    String?          @db.VarChar(512)
   thumbnail_url      String?          @db.VarChar(512)
   status             GroupItemStatus  @default(DRAFT)

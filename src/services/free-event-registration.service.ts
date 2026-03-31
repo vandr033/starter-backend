@@ -29,6 +29,7 @@ export interface FreeEventRegistrationInput {
     phoneNumber: string;
     tosAccepted: boolean;
     createAccount?: boolean;
+    otpChannelPreference?: 'email' | 'phone';
 }
 
 export interface FreeRegistrationResult {
@@ -301,6 +302,74 @@ async function dispatchPhoneOtp(phoneNumber: string): Promise<boolean> {
     return !result.error && result.code < 400;
 }
 
+async function dispatchPreferredOtp(params: {
+    preferredChannel?: OtpChannel;
+    email?: string | null;
+    phone?: string | null;
+}): Promise<{
+    sent: boolean;
+    channel: OtpChannel | null;
+    availableChannels: OtpChannel[];
+    maskedDestination: string | null;
+}> {
+    const email = params.email?.trim() || null;
+    const phone = params.phone?.trim() || null;
+
+    const availableChannels: OtpChannel[] = [
+        ...(email ? ['email' as const] : []),
+        ...(phone ? ['phone' as const] : []),
+    ];
+
+    if (availableChannels.length === 0) {
+        return {
+            sent: false,
+            channel: null,
+            availableChannels: [],
+            maskedDestination: null,
+        };
+    }
+
+    const preferred = params.preferredChannel;
+    const orderedChannels = preferred && availableChannels.includes(preferred)
+        ? [preferred, ...availableChannels.filter((channel) => channel !== preferred)]
+        : availableChannels;
+
+    for (const channel of orderedChannels) {
+        if (channel === 'email' && email) {
+            const sent = await dispatchEmailOtp(email);
+            if (sent) {
+                return {
+                    sent: true,
+                    channel: 'email',
+                    availableChannels,
+                    maskedDestination: maskEmail(email),
+                };
+            }
+            continue;
+        }
+
+        if (channel === 'phone' && phone) {
+            const sent = await dispatchPhoneOtp(phone);
+            if (sent) {
+                return {
+                    sent: true,
+                    channel: 'phone',
+                    availableChannels,
+                    maskedDestination: maskPhone(phone),
+                };
+            }
+        }
+    }
+
+    const fallbackChannel = orderedChannels[0] ?? null;
+    return {
+        sent: false,
+        channel: fallbackChannel,
+        availableChannels,
+        maskedDestination: fallbackChannel === 'phone' ? maskPhone(phone) : maskEmail(email),
+    };
+}
+
 async function createAccountForFreeRegistration(input: {
     email: string;
     firstName: string;
@@ -351,6 +420,7 @@ async function resolveAccountForFreeRegistration(input: {
     email: string;
     phonePrefix: string;
     phoneNumber: string;
+    otpChannelPreference?: OtpChannel;
     firstName: string;
     lastName: string;
     gender: string;
@@ -438,9 +508,18 @@ async function resolveAccountForFreeRegistration(input: {
                 phoneNumber: input.phoneNumber,
             });
 
-            const otpSent = await dispatchEmailOtp(input.email);
-            if (!otpSent) {
-                logger.warn({ email: input.email }, 'Free event: account created but email OTP dispatch failed');
+            const preferredChannel = input.otpChannelPreference;
+            const otpTargetPhone = buildE164Phone(input.phonePrefix, input.phoneNumber);
+            const otpDispatch = await dispatchPreferredOtp({
+                preferredChannel,
+                email: input.email,
+                phone: otpTargetPhone,
+            });
+            if (!otpDispatch.sent) {
+                logger.warn(
+                    { email: input.email, phone: otpTargetPhone, preferredChannel },
+                    'Free event: account created but OTP dispatch failed',
+                );
             }
 
             return {
@@ -450,9 +529,9 @@ async function resolveAccountForFreeRegistration(input: {
                 otpSection: {
                     show: true,
                     mode: 'SIGN_UP_VERIFY',
-                    primaryChannel: 'email',
-                    availableChannels: ['email'],
-                    maskedDestination: maskEmail(input.email),
+                    primaryChannel: otpDispatch.channel ?? preferredChannel ?? 'email',
+                    availableChannels: otpDispatch.availableChannels,
+                    maskedDestination: otpDispatch.maskedDestination,
                 },
                 nextActions: {},
                 accountCreated: true,
@@ -474,8 +553,11 @@ async function resolveAccountForFreeRegistration(input: {
 
     // CASE 2: account found by email only.
     if (accountMatchCase === 'EMAIL_ONLY' && emailMatch) {
-        const otpSent = await dispatchEmailOtp(emailMatch.email);
-        if (!otpSent) {
+        const otpDispatch = await dispatchPreferredOtp({
+            preferredChannel: 'email',
+            email: emailMatch.email,
+        });
+        if (!otpDispatch.sent) {
             logger.warn({ email: emailMatch.email, userId: emailMatch.id }, 'Free event: failed to dispatch OTP for existing email account');
         }
 
@@ -486,9 +568,9 @@ async function resolveAccountForFreeRegistration(input: {
             otpSection: {
                 show: true,
                 mode: 'SIGN_IN_OTP',
-                primaryChannel: 'email',
-                availableChannels: ['email'],
-                maskedDestination: maskEmail(emailMatch.email),
+                primaryChannel: otpDispatch.channel ?? 'email',
+                availableChannels: otpDispatch.availableChannels.length > 0 ? otpDispatch.availableChannels : ['email'],
+                maskedDestination: otpDispatch.maskedDestination ?? maskEmail(emailMatch.email),
             },
             nextActions: {
                 canCompleteMissingPhoneLater: !emailMatch.phoneNumber,
@@ -502,8 +584,11 @@ async function resolveAccountForFreeRegistration(input: {
     if (accountMatchCase === 'PHONE_ONLY' && phoneMatch) {
         const fallbackPhone = buildE164Phone(input.phonePrefix, input.phoneNumber);
         const otpTarget = phoneMatch.phoneNumber ?? fallbackPhone;
-        const otpSent = otpTarget ? await dispatchPhoneOtp(otpTarget) : false;
-        if (!otpSent) {
+        const otpDispatch = await dispatchPreferredOtp({
+            preferredChannel: 'phone',
+            phone: otpTarget,
+        });
+        if (!otpDispatch.sent) {
             logger.warn({ userId: phoneMatch.id, phoneNumber: otpTarget }, 'Free event: failed to dispatch OTP for existing phone account');
         }
 
@@ -516,9 +601,9 @@ async function resolveAccountForFreeRegistration(input: {
             otpSection: {
                 show: true,
                 mode: 'SIGN_IN_OTP',
-                primaryChannel: 'phone',
-                availableChannels: ['phone'],
-                maskedDestination: maskPhone(otpTarget),
+                primaryChannel: otpDispatch.channel ?? 'phone',
+                availableChannels: otpDispatch.availableChannels.length > 0 ? otpDispatch.availableChannels : ['phone'],
+                maskedDestination: otpDispatch.maskedDestination ?? maskPhone(otpTarget),
             },
             nextActions: {
                 canCompleteMissingEmailLater: hasMissingEmail,
@@ -531,15 +616,24 @@ async function resolveAccountForFreeRegistration(input: {
     // CASE 4: both channels belong to same user.
     const unifiedUser = (emailMatch ?? phoneMatch) as AccountCandidateUser;
     const hasPhone = Boolean(unifiedUser.phoneNumber);
-    const primaryChannel: OtpChannel = 'email';
     const fallbackPhone = unifiedUser.phoneNumber ?? buildE164Phone(input.phonePrefix, input.phoneNumber);
 
-    let otpSent = await dispatchEmailOtp(unifiedUser.email);
-    if (!otpSent && fallbackPhone) {
-        otpSent = await dispatchPhoneOtp(fallbackPhone);
-    }
-    if (!otpSent) {
-        logger.warn({ userId: unifiedUser.id, email: unifiedUser.email, phone: fallbackPhone }, 'Free event: failed to dispatch OTP for existing account');
+    const otpDispatch = await dispatchPreferredOtp({
+        preferredChannel: input.otpChannelPreference,
+        email: unifiedUser.email,
+        phone: fallbackPhone,
+    });
+
+    if (!otpDispatch.sent) {
+        logger.warn(
+            {
+                userId: unifiedUser.id,
+                email: unifiedUser.email,
+                phone: fallbackPhone,
+                preferredChannel: input.otpChannelPreference,
+            },
+            'Free event: failed to dispatch OTP for existing account',
+        );
     }
 
     return {
@@ -549,9 +643,14 @@ async function resolveAccountForFreeRegistration(input: {
         otpSection: {
             show: true,
             mode: 'SIGN_IN_OTP',
-            primaryChannel,
-            availableChannels: hasPhone ? ['email', 'phone'] : ['email'],
-            maskedDestination: maskEmail(unifiedUser.email),
+            primaryChannel: otpDispatch.channel ?? (hasPhone ? (input.otpChannelPreference ?? 'email') : 'email'),
+            availableChannels: otpDispatch.availableChannels.length > 0
+                ? otpDispatch.availableChannels
+                : (hasPhone ? ['email', 'phone'] : ['email']),
+            maskedDestination: otpDispatch.maskedDestination
+                ?? (hasPhone && input.otpChannelPreference === 'phone'
+                    ? maskPhone(fallbackPhone)
+                    : maskEmail(unifiedUser.email)),
         },
         nextActions: {},
         accountCreated: false,
@@ -790,6 +889,14 @@ export async function submitFreeRegistration(
     input: FreeEventRegistrationInput,
     userId: string | undefined,
 ): Promise<FreeRegistrationResult> {
+    const otpChannelPreference = input.otpChannelPreference === 'email' || input.otpChannelPreference === 'phone'
+        ? input.otpChannelPreference
+        : undefined;
+
+    if (input.otpChannelPreference && !otpChannelPreference) {
+        return { code: 400, error: true, message: 'Invalid otpChannelPreference value' };
+    }
+
     // Validate required fields
     const trimmed = {
         firstName: input.firstName?.trim() ?? '',
@@ -848,6 +955,7 @@ export async function submitFreeRegistration(
             email: trimmed.email,
             phonePrefix: trimmed.phonePrefix,
             phoneNumber: trimmed.phoneNumber,
+            otpChannelPreference,
             firstName: trimmed.firstName,
             lastName: trimmed.lastName,
             gender: trimmed.gender,

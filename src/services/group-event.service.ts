@@ -11,6 +11,7 @@ export interface CreateGroupEventInput {
     title: string;
     slug?: string;
     description?: string | null;
+    no_availability_message?: string | null;
     cover_image_url?: string | null;
     thumbnail_url?: string | null;
     is_free: boolean;
@@ -26,6 +27,7 @@ export interface UpdateGroupEventInput {
     title?: string;
     slug?: string;
     description?: string | null;
+    no_availability_message?: string | null;
     cover_image_url?: string | null;
     thumbnail_url?: string | null;
     is_free?: boolean;
@@ -137,6 +139,9 @@ export async function createGroupEvent(companyId: number, userId: string, input:
     const locationText = requestedLocation.length > 0
         ? requestedLocation
         : await getDefaultCompanyLocationText(companyId);
+    const noAvailabilityMessage = input.is_free
+        ? (input.no_availability_message?.trim() || null)
+        : null;
 
     const event = await prisma.groupEvent.create({
         data: {
@@ -144,6 +149,7 @@ export async function createGroupEvent(companyId: number, userId: string, input:
             title: input.title,
             slug,
             description: sanitizeRichText(input.description) ?? null,
+            no_availability_message: noAvailabilityMessage,
             cover_image_url: input.cover_image_url ?? null,
             thumbnail_url: input.thumbnail_url ?? null,
             is_free: input.is_free,
@@ -196,6 +202,9 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
         updateData.slug = await resolveUniqueEventSlug(companyId, slugSource, eventId);
     }
     if (input.description !== undefined) updateData.description = sanitizeRichText(input.description) ?? null;
+    if (input.no_availability_message !== undefined) {
+        updateData.no_availability_message = input.no_availability_message?.trim() || null;
+    }
     if (input.cover_image_url !== undefined) updateData.cover_image_url = input.cover_image_url;
     if (input.thumbnail_url !== undefined) updateData.thumbnail_url = input.thumbnail_url;
     if (input.is_free !== undefined) updateData.is_free = input.is_free;
@@ -223,6 +232,8 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
     }
     if (finalIsFree) {
         updateData.price_cents = 0;
+    } else {
+        updateData.no_availability_message = null;
     }
 
     await prisma.groupEvent.update({

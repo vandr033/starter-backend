@@ -56,6 +56,9 @@ export async function submitFreeRegistrationHandler(req: AuthenticatedRequest, r
         phoneNumber: req.body.phoneNumber,
         tosAccepted: Boolean(req.body.tosAccepted),
         createAccount: Boolean(req.body.createAccount),
+        otpChannelPreference: typeof req.body.otpChannelPreference === 'string'
+            ? req.body.otpChannelPreference
+            : undefined,
     }, userId);
 
     return res.status(result.code).json(result);
