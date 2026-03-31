@@ -43,10 +43,10 @@ export const serveFile = async (req: Request, res: Response) => {
       return res.status(304).send();
     }
 
-    // Set cache headers (1 day)
+    // Revalidate on every request so replaced images with the same URL are shown immediately.
     res.set({
       'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=86400',
+      'Cache-Control': 'public, max-age=0, must-revalidate',
       'ETag': etag,
     });
 
