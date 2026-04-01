@@ -91,8 +91,7 @@ function resolveActiveCompanyUser(
     return companyUsers[0] ?? null;
 }
 
-async function hasAdminAccess(userId: string, isSuperAdmin: boolean): Promise<boolean> {
-    if (isSuperAdmin) return true;
+async function hasAdminDashboardAccess(userId: string): Promise<boolean> {
     const companyUser = await prisma.companyUser.findFirst({
         where: {
             user_id: userId,
@@ -366,6 +365,15 @@ export async function changeAdminPassword(
     newPassword: string
 ): Promise<ChangePasswordResult> {
     try {
+        const canUseAdminDashboardAuth = await hasAdminDashboardAccess(userId);
+        if (!canUseAdminDashboardAuth) {
+            return {
+                code: 403,
+                message: 'User does not have admin dashboard access',
+                error: true,
+            };
+        }
+
         const credentialAccount = await prisma.account.findFirst({
             where: {
                 userId,
@@ -454,7 +462,6 @@ export async function startAdminPasswordReset(email: string): Promise<AdminPassw
             where: { email: normalizedEmail },
             select: {
                 id: true,
-                is_super_admin: true,
             },
         });
 
@@ -462,8 +469,8 @@ export async function startAdminPasswordReset(email: string): Promise<AdminPassw
             return successMessage;
         }
 
-        const isAdminUser = await hasAdminAccess(user.id, user.is_super_admin);
-        if (!isAdminUser) {
+        const hasDashboardAccess = await hasAdminDashboardAccess(user.id);
+        if (!hasDashboardAccess) {
             return successMessage;
         }
 
@@ -526,7 +533,6 @@ export async function completeAdminPasswordReset(
             where: { email: normalizedEmail },
             select: {
                 id: true,
-                is_super_admin: true,
             },
         });
 
@@ -538,11 +544,11 @@ export async function completeAdminPasswordReset(
             };
         }
 
-        const isAdminUser = await hasAdminAccess(user.id, user.is_super_admin);
-        if (!isAdminUser) {
+        const hasDashboardAccess = await hasAdminDashboardAccess(user.id);
+        if (!hasDashboardAccess) {
             return {
                 code: 403,
-                message: 'User does not have admin access',
+                message: 'User does not have admin dashboard access',
                 error: true,
             };
         }
