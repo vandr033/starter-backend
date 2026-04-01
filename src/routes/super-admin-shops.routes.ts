@@ -5,6 +5,7 @@ import * as SuperAdminShopsController from '../controllers/super-admin-shops.con
 import * as SuperAdminDashboardController from '../controllers/super-admin-dashboard.controller';
 import * as SuperAdminDataController from '../controllers/super-admin-data.controller';
 import * as SuperAdminCompanyTypesController from '../controllers/super-admin-company-types.controller';
+import * as SuperAdminNotificationsController from '../controllers/super-admin-notifications.controller';
 import {
   createSuperAdminShopSchema,
   updateSuperAdminShopSchema,
@@ -28,6 +29,13 @@ router.get('/customers', SuperAdminDataController.getAllCustomers);
 
 // Staff (cross-shop)
 router.get('/staff', SuperAdminDataController.getAllStaff);
+
+// Users (platform-wide)
+router.get('/users', SuperAdminDataController.getAllUsers);
+
+// Super admin test notifications
+router.post('/notifications/test/email', SuperAdminNotificationsController.sendTestEmailNotification);
+router.post('/notifications/test/whatsapp', SuperAdminNotificationsController.sendTestWhatsappNotification);
 
 // Users search (owner assignment)
 router.get('/users/search', SuperAdminShopsController.searchUsersForOwner);

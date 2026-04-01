@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import * as BookingsService from '../services/super-admin-bookings.service';
 import * as CustomersService from '../services/super-admin-customers.service';
 import * as StaffService from '../services/super-admin-staff.service';
+import * as UsersService from '../services/super-admin-users.service';
 
 function parseQueryString(val: unknown): string | undefined {
     if (typeof val === 'string') return val;
@@ -84,6 +85,24 @@ export async function getAllStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(result.code).json(result);
     } catch (error) {
         console.error('Error in getAllStaff:', error);
+        return res.status(500).json({ code: 500, error: true, message: 'Internal server error' });
+    }
+}
+
+/**
+ * GET /api/super-admin/users
+ */
+export async function getAllUsers(req: AuthenticatedRequest, res: Response) {
+    try {
+        const result = await UsersService.getAllUsers({
+            search: parseQueryString(req.query.search),
+            source: parseQueryString(req.query.source),
+            page: parseQueryInt(req.query.page, 1),
+            limit: parseQueryInt(req.query.limit, 20),
+        });
+        return res.status(result.code).json(result);
+    } catch (error) {
+        console.error('Error in getAllUsers:', error);
         return res.status(500).json({ code: 500, error: true, message: 'Internal server error' });
     }
 }
