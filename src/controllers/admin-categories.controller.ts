@@ -206,22 +206,35 @@ export const updateCategory = async (req: AuthenticatedRequest, res: Response) =
         .replace(/(^-|-$)/g, '');
     }
 
-    // If updating slug, check if it's already taken by another category
+    // If updating slug, check if it's already taken by another category.
+    // Must include soft-deleted rows because the DB unique constraint on
+    // (company_id, slug) ignores deleted_at.
     if (newSlug && newSlug !== existingCategory.slug) {
-      const slugTaken = await prisma.category.findFirst({
+      const slugConflict = await prisma.category.findFirst({
         where: {
           company_id: companyId,
           slug: newSlug,
-          deleted_at: null,
           id: { not: categoryId },
         },
       });
 
-      if (slugTaken) {
-        return res.status(400).json({
-          success: false,
-          message: 'Category with this slug already exists',
-        });
+      if (slugConflict) {
+        if (!slugConflict.deleted_at) {
+          return res.status(400).json({
+            success: false,
+            message: 'Category with this slug already exists',
+          });
+        }
+        // Conflict is only with a deleted category — find a unique variant.
+        let suffix = 1;
+        while (true) {
+          const candidate = `${newSlug}-${suffix}`;
+          const taken = await prisma.category.findFirst({
+            where: { company_id: companyId, slug: candidate, id: { not: categoryId } },
+          });
+          if (!taken) { newSlug = candidate; break; }
+          suffix++;
+        }
       }
     }
 
@@ -252,6 +265,12 @@ export const updateCategory = async (req: AuthenticatedRequest, res: Response) =
     });
   } catch (error) {
     console.error('Error updating category:', error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(400).json({
+        success: false,
+        message: 'Category with this name already exists',
+      });
+    }
     res.status(500).json({
       success: false,
       message: 'Failed to update category',
