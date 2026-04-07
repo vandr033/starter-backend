@@ -1,6 +1,6 @@
 import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
-import { generateSessionDates, combineDateAndTime, RecurrenceConfig } from '../utils/recurrence';
+import { generateSessionDates, combineDateAndTimeInTimezone, RecurrenceConfig } from '../utils/recurrence';
 
 type ServiceResult = MensajeApi & { data?: any };
 
@@ -10,10 +10,18 @@ type ServiceResult = MensajeApi & { data?: any };
  * Returns the number of newly created sessions.
  */
 export async function generateSessions(companyId: number, classId: number): Promise<number> {
-    const gc = await prisma.groupClass.findFirst({
-        where: { id: classId, company_id: companyId, deleted_at: null },
-    });
+    const [gc, company] = await Promise.all([
+        prisma.groupClass.findFirst({
+            where: { id: classId, company_id: companyId, deleted_at: null },
+        }),
+        prisma.company.findUnique({
+            where: { id: companyId },
+            select: { timezone: true },
+        }),
+    ]);
     if (!gc) return 0;
+
+    const timezone = company?.timezone || 'UTC';
 
     const dates = generateSessionDates(
         gc.recurrence_type,
@@ -41,7 +49,7 @@ export async function generateSessions(companyId: number, classId: number): Prom
     }> = [];
 
     for (const date of dates) {
-        const startAt = combineDateAndTime(date, gc.start_time);
+        const startAt = combineDateAndTimeInTimezone(date, gc.start_time, timezone);
         if (existingSet.has(startAt.toISOString())) continue;
 
         const endAt = new Date(startAt.getTime() + gc.session_duration_minutes * 60 * 1000);

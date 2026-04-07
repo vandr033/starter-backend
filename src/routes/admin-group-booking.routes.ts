@@ -69,6 +69,13 @@ router.post(
     requirePlanFeature('GROUP_CLASSES'),
     AdminGroupBookingController.cancelClassEnrollment,
 );
+router.post(
+    '/classes/enrollments/:enrollmentId/confirm-payment',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.confirmClassEnrollmentPayment,
+);
 
 router.get(
     '/metrics',

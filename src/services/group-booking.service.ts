@@ -1262,6 +1262,26 @@ export async function cancelClassEnrollment(companyId: number, enrollmentId: num
     return { code: 200, error: false, message: 'Enrollment cancelled' };
 }
 
+/**
+ * Admin: mark an enrollment's payment as PAID (approve QR proof or manual cash).
+ */
+export async function confirmClassEnrollmentPayment(companyId: number, enrollmentId: number): Promise<ServiceResult> {
+    const enrollment = await prisma.groupClassEnrollment.findFirst({
+        where: { id: enrollmentId, company_id: companyId },
+    });
+    if (!enrollment) return { code: 404, error: true, message: 'Enrollment not found' };
+    if (enrollment.payment_status === 'PAID') {
+        return { code: 400, error: true, message: 'Enrollment payment is already marked as paid' };
+    }
+
+    await prisma.groupClassEnrollment.update({
+        where: { id: enrollmentId },
+        data: { payment_status: 'PAID' },
+    });
+
+    return { code: 200, error: false, message: 'Enrollment payment confirmed' };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CUSTOMER-FACING: My bookings / enrollments
 // ═══════════════════════════════════════════════════════════════════════════

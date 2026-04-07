@@ -89,12 +89,51 @@ export function parseTime(time: string): { hours: number; minutes: number } {
 /**
  * Build a UTC datetime from a date and a time string.
  * The date provides year/month/day and the time provides hours:minutes.
+ * NOTE: treats the time as UTC. Use combineDateAndTimeInTimezone for local times.
  */
 export function combineDateAndTime(date: Date, time: string): Date {
     const { hours, minutes } = parseTime(time);
     const result = new Date(date);
     result.setUTCHours(hours, minutes, 0, 0);
     return result;
+}
+
+/**
+ * Build a UTC datetime by interpreting the given time string as local time
+ * in the specified IANA timezone (e.g. "America/La_Paz").
+ *
+ * For example, time="14:52" with timezone="America/La_Paz" (UTC-4) returns
+ * a Date representing 18:52 UTC so that it displays as 14:52 in Bolivia.
+ */
+export function combineDateAndTimeInTimezone(date: Date, time: string, timezone: string): Date {
+    const { hours, minutes } = parseTime(time);
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+    const day = date.getUTCDate();
+
+    // Guess: treat the desired local time as UTC
+    const guess = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0));
+
+    // Find what local time this UTC instant corresponds to in the target timezone
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    });
+    const parts: Record<string, string> = {};
+    for (const part of formatter.formatToParts(guess)) {
+        parts[part.type] = part.value;
+    }
+    const localHours = Number.parseInt(parts.hour ?? '0', 10) % 24; // "24:xx" → 0
+    const localMinutes = Number.parseInt(parts.minute ?? '0', 10);
+
+    // Adjust: if local time is off from desired, shift UTC accordingly
+    const diffMinutes = (hours * 60 + minutes) - (localHours * 60 + localMinutes);
+    return new Date(guess.getTime() + diffMinutes * 60 * 1000);
 }
 
 function addDays(date: Date, days: number): Date {

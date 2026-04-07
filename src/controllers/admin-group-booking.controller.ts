@@ -139,6 +139,19 @@ export async function cancelClassEnrollment(req: AuthenticatedRequest, res: Resp
     return res.status(result.code).json(result);
 }
 
+export async function confirmClassEnrollmentPayment(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const enrollmentId = parseId(req.params.enrollmentId);
+    if (!enrollmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid enrollmentId' });
+    }
+
+    const result = await GroupBookingService.confirmClassEnrollmentPayment(companyId, enrollmentId);
+    return res.status(result.code).json(result);
+}
+
 export async function checkInEvent(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;
