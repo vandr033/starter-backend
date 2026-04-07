@@ -7,6 +7,10 @@ import {
     exportInterestedUsersXlsx,
     getFreeRegistrationByReservationCode,
     checkInFreeEventByReservationCode,
+    listFreeEventRegistrations,
+    cancelFreeEventRegistration,
+    listEventInterestedUsers,
+    inviteInterestedRegistration,
 } from '../services/free-event-registration.service';
 import { CheckInMethod } from '@prisma/client';
 
@@ -138,6 +142,60 @@ export async function adminExportInterestedHandler(req: AuthenticatedRequest, re
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(buffer);
+}
+
+// ── Admin: GET /api/admin/group/events/:eventId/free-registrations ──
+
+export async function adminListFreeRegistrationsHandler(req: AuthenticatedRequest, res: Response) {
+    const companyId = getCompanyId(req);
+    const eventId = parseId(req.params.eventId);
+    if (!companyId || !eventId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id or eventId' });
+    }
+    const result = await listFreeEventRegistrations(companyId, eventId);
+    return res.status(result.code).json(result);
+}
+
+// ── Admin: DELETE /api/admin/group/events/:eventId/free-registrations/:registrationId ──
+
+export async function adminCancelFreeRegistrationHandler(req: AuthenticatedRequest, res: Response) {
+    const companyId = getCompanyId(req);
+    const eventId = parseId(req.params.eventId);
+    const registrationId = parseId(req.params.registrationId);
+    if (!companyId || !eventId || !registrationId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid parameters' });
+    }
+    const result = await cancelFreeEventRegistration(companyId, eventId, registrationId);
+    return res.status(result.code).json(result);
+}
+
+// ── Admin: GET /api/admin/group/events/:eventId/free-registrations/interested ──
+
+export async function adminListEventInterestedHandler(req: AuthenticatedRequest, res: Response) {
+    const companyId = getCompanyId(req);
+    const eventId = parseId(req.params.eventId);
+    if (!companyId || !eventId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id or eventId' });
+    }
+    const result = await listEventInterestedUsers(companyId, eventId);
+    return res.status(result.code).json(result);
+}
+
+// ── Admin: POST /api/admin/group/events/:eventId/free-registrations/:registrationId/invite ──
+
+export async function adminInviteInterestedHandler(req: AuthenticatedRequest, res: Response) {
+    const companyId = getCompanyId(req);
+    const eventId = parseId(req.params.eventId);
+    const registrationId = parseId(req.params.registrationId);
+    if (!companyId || !eventId || !registrationId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid parameters' });
+    }
+    const channels = {
+        email: Boolean(req.body.email),
+        whatsapp: Boolean(req.body.whatsapp),
+    };
+    const result = await inviteInterestedRegistration(companyId, eventId, registrationId, channels);
+    return res.status(result.code).json(result);
 }
 
 // ── Super Admin: GET /api/super-admin/group/events/free-registrations/interested ──

@@ -1430,6 +1430,237 @@ export async function listInterestedUsers(filters: InterestedUsersFilter) {
     };
 }
 
+// ─────────────────────────────────────────────
+// Admin: list free registrations for an event
+// ─────────────────────────────────────────────
+
+export async function listFreeEventRegistrations(companyId: number, eventId: number) {
+    const event = await prisma.groupEvent.findFirst({
+        where: { id: eventId, company_id: companyId, deleted_at: null },
+        select: { id: true, is_free: true },
+    });
+    if (!event || !event.is_free) {
+        return { code: 404, error: true, message: 'Free event not found' };
+    }
+
+    const rows = await prisma.freeEventRegistration.findMany({
+        where: {
+            group_event_id: eventId,
+            company_id: companyId,
+            status: { in: [FreeEventRegistrationStatus.CONFIRMED, FreeEventRegistrationStatus.PENDING] },
+        },
+        orderBy: { created_at: 'asc' },
+        select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            email: true,
+            phone_prefix: true,
+            phone_number: true,
+            gender: true,
+            age: true,
+            status: true,
+            reservation_code: true,
+            checked_in_at: true,
+            created_at: true,
+        },
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'OK',
+        data: rows.map((r) => ({
+            id: r.id,
+            firstName: r.first_name,
+            lastName: r.last_name,
+            email: r.email,
+            phonePrefix: r.phone_prefix,
+            phoneNumber: r.phone_number,
+            gender: r.gender,
+            age: r.age,
+            status: r.status,
+            reservationCode: r.reservation_code,
+            checkedInAt: r.checked_in_at,
+            createdAt: r.created_at,
+        })),
+    };
+}
+
+// ─────────────────────────────────────────────
+// Admin: cancel (remove) a free event registration
+// ─────────────────────────────────────────────
+
+export async function cancelFreeEventRegistration(companyId: number, eventId: number, registrationId: number) {
+    const registration = await prisma.freeEventRegistration.findFirst({
+        where: { id: registrationId, group_event_id: eventId, company_id: companyId },
+    });
+
+    if (!registration) {
+        return { code: 404, error: true, message: 'Registration not found' };
+    }
+
+    if (registration.status === FreeEventRegistrationStatus.INTERESTED) {
+        return { code: 400, error: true, message: 'Cannot cancel an interested record' };
+    }
+
+    await prisma.freeEventRegistration.delete({ where: { id: registrationId } });
+
+    return { code: 200, error: false, message: 'Registration removed' };
+}
+
+// ─────────────────────────────────────────────
+// Admin: list interested users for a specific event
+// ─────────────────────────────────────────────
+
+export async function listEventInterestedUsers(companyId: number, eventId: number) {
+    const event = await prisma.groupEvent.findFirst({
+        where: { id: eventId, company_id: companyId, deleted_at: null },
+        select: { id: true, is_free: true },
+    });
+    if (!event || !event.is_free) {
+        return { code: 404, error: true, message: 'Free event not found' };
+    }
+
+    const rows = await prisma.freeEventRegistration.findMany({
+        where: {
+            group_event_id: eventId,
+            company_id: companyId,
+            status: FreeEventRegistrationStatus.INTERESTED,
+        },
+        orderBy: { created_at: 'asc' },
+        select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            email: true,
+            phone_prefix: true,
+            phone_number: true,
+            gender: true,
+            age: true,
+            created_at: true,
+        },
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'OK',
+        data: rows.map((r) => ({
+            id: r.id,
+            firstName: r.first_name,
+            lastName: r.last_name,
+            email: r.email,
+            phonePrefix: r.phone_prefix,
+            phoneNumber: r.phone_number,
+            gender: r.gender,
+            age: r.age,
+            createdAt: r.created_at,
+        })),
+    };
+}
+
+// ─────────────────────────────────────────────
+// Admin: invite interested user (INTERESTED → CONFIRMED + notify)
+// ─────────────────────────────────────────────
+
+export async function inviteInterestedRegistration(
+    companyId: number,
+    eventId: number,
+    registrationId: number,
+    channels: { email: boolean; whatsapp: boolean },
+) {
+    const event = await prisma.groupEvent.findFirst({
+        where: { id: eventId, company_id: companyId, deleted_at: null },
+        select: { id: true, is_free: true, title: true, max_capacity: true },
+    });
+    if (!event || !event.is_free) {
+        return { code: 404, error: true, message: 'Free event not found' };
+    }
+
+    const registration = await prisma.freeEventRegistration.findFirst({
+        where: { id: registrationId, group_event_id: eventId, company_id: companyId },
+    });
+    if (!registration) {
+        return { code: 404, error: true, message: 'Registration not found' };
+    }
+    if (registration.status !== FreeEventRegistrationStatus.INTERESTED) {
+        return { code: 400, error: true, message: 'Registration is not in INTERESTED status' };
+    }
+
+    // Generate a unique reservation code
+    let reservationCode: string | null = null;
+    let updated = null;
+
+    for (let attempt = 0; attempt < MAX_FREE_RESERVATION_CODE_INSERT_ATTEMPTS; attempt += 1) {
+        reservationCode = await generateUniqueFreeEventReservationCode(prisma as unknown as Prisma.TransactionClient);
+        try {
+            updated = await prisma.freeEventRegistration.update({
+                where: { id: registrationId },
+                data: {
+                    status: FreeEventRegistrationStatus.CONFIRMED,
+                    reservation_code: reservationCode,
+                },
+            });
+            break;
+        } catch (err) {
+            if (isReservationCodeUniqueConstraint(err) && attempt < MAX_FREE_RESERVATION_CODE_INSERT_ATTEMPTS - 1) {
+                logger.warn({ eventId, registrationId, reservationCode, attempt }, 'Invite: reservation code collision, retrying');
+                continue;
+            }
+            throw err;
+        }
+    }
+
+    if (!updated || !reservationCode) {
+        return { code: 500, error: true, message: 'Could not generate reservation code' };
+    }
+
+    // Get company language setting
+    const [languageConfig] = await Promise.all([
+        prisma.configMessage.findUnique({
+            where: { company_id_key: { company_id: companyId, key: DEFAULT_LANGUAGE_KEY } },
+            select: { value: true },
+        }),
+    ]);
+    const locale: 'es' | 'en' = (languageConfig?.value ?? '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+    const content = buildFreeEventConfirmationContent({
+        locale,
+        eventTitle: event.title,
+        firstName: registration.first_name,
+        reservationCode,
+    });
+
+    // Send notifications according to admin-selected channels
+    if (channels.email && !isTemporaryEmailAddress(registration.email)) {
+        try {
+            await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml);
+        } catch (err) {
+            logger.warn({ err, eventId, registrationId }, 'Invite: email send failed');
+        }
+    }
+
+    if (channels.whatsapp) {
+        try {
+            const fullPhone = `${registration.phone_prefix}${registration.phone_number}`;
+            await sendWhatsappText(fullPhone, content.whatsappMessage);
+        } catch (err) {
+            logger.warn({ err, eventId, registrationId }, 'Invite: WhatsApp send failed');
+        }
+    }
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Invited successfully',
+        data: {
+            id: updated.id,
+            status: updated.status,
+            reservationCode,
+        },
+    };
+}
+
 export async function exportInterestedUsersXlsx(filters: InterestedUsersFilter): Promise<Buffer> {
     // Fetch all (no pagination for export)
     const exportFilters = { ...filters, page: 1, pageSize: 10000 };

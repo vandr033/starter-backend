@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 
@@ -82,27 +83,42 @@ export const createCategory = async (req: AuthenticatedRequest, res: Response) =
       }
     }
 
-    // Check if slug already exists for this company
-    const existingCategory = await prisma.category.findFirst({
+    // Check if slug already exists for this company (including soft-deleted),
+    // because the DB has a unique constraint on (company_id, slug).
+    const slugConflict = await prisma.category.findFirst({
       where: {
         company_id: companyId,
         slug,
-        deleted_at: null,
       },
     });
 
-    if (existingCategory) {
-      return res.status(400).json({
-        success: false,
-        message: 'Category with this slug already exists',
-      });
+    // If only a deleted category holds this slug, generate a unique variant.
+    // If an active category holds it, reject the request.
+    let finalSlug = slug;
+    if (slugConflict) {
+      if (!slugConflict.deleted_at) {
+        return res.status(400).json({
+          success: false,
+          message: 'Category with this slug already exists',
+        });
+      }
+      // Slug is taken by a deleted category — append a suffix to stay unique.
+      let suffix = 1;
+      while (true) {
+        const candidate = `${slug}-${suffix}`;
+        const taken = await prisma.category.findFirst({
+          where: { company_id: companyId, slug: candidate },
+        });
+        if (!taken) { finalSlug = candidate; break; }
+        suffix++;
+      }
     }
 
     const category = await prisma.category.create({
       data: {
         company_id: companyId,
         name,
-        slug,
+        slug: finalSlug,
         description,
         global_service_type_id,
         position,
@@ -124,6 +140,12 @@ export const createCategory = async (req: AuthenticatedRequest, res: Response) =
     });
   } catch (error) {
     console.error('Error creating category:', error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(400).json({
+        success: false,
+        message: 'Category with this name already exists',
+      });
+    }
     res.status(500).json({
       success: false,
       message: 'Failed to create category',

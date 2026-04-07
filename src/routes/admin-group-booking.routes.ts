@@ -15,6 +15,10 @@ import {
     adminExportInterestedHandler,
     freeEventCheckInByCodeHandler,
     freeEventLookupByCodeHandler,
+    adminListFreeRegistrationsHandler,
+    adminCancelFreeRegistrationHandler,
+    adminListEventInterestedHandler,
+    adminInviteInterestedHandler,
 } from '../controllers/free-event-registration.controller';
 
 const router = Router();
@@ -152,5 +156,11 @@ router.post(
 
 router.get('/events/free-registrations/interested', requireAuth, requireCompanyRole(adminRoles), adminListInterestedHandler);
 router.get('/events/free-registrations/interested/export', requireAuth, requireCompanyRole(adminRoles), adminExportInterestedHandler);
+
+// Per-event free registration management
+router.get('/events/:eventId/free-registrations', requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('GROUP_EVENTS'), adminListFreeRegistrationsHandler);
+router.delete('/events/:eventId/free-registrations/:registrationId', requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('GROUP_EVENTS'), adminCancelFreeRegistrationHandler);
+router.get('/events/:eventId/free-registrations/interested', requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('GROUP_EVENTS'), adminListEventInterestedHandler);
+router.post('/events/:eventId/free-registrations/:registrationId/invite', requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('GROUP_EVENTS'), adminInviteInterestedHandler);
 
 export default router;
