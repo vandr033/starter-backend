@@ -118,6 +118,29 @@ async function getDefaultCompanyLocationText(companyId: number): Promise<string 
     return location.length > 0 ? location : null;
 }
 
+function parseDateOnlyToUtc(value: string): Date | null {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return null;
+
+    const year = Number.parseInt(match[1], 10);
+    const month = Number.parseInt(match[2], 10);
+    const day = Number.parseInt(match[3], 10);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+        return null;
+    }
+
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (
+        parsed.getUTCFullYear() !== year
+        || parsed.getUTCMonth() !== month - 1
+        || parsed.getUTCDate() !== day
+    ) {
+        return null;
+    }
+
+    return parsed;
+}
+
 // ─── Service ────────────────────────────────────────────────────────────────
 
 export async function createGroupClass(companyId: number, userId: string, input: CreateGroupClassInput): Promise<ServiceResult> {
@@ -145,6 +168,19 @@ export async function createGroupClass(companyId: number, userId: string, input:
         return { code: 400, error: true, message: 'price_cents must be non-negative' };
     }
 
+    const recurrenceStartDate = parseDateOnlyToUtc(input.recurrence_start_date);
+    if (!recurrenceStartDate) {
+        return { code: 400, error: true, message: 'recurrence_start_date must be a valid YYYY-MM-DD date' };
+    }
+
+    const recurrenceEndDate = input.recurrence_end_date ? parseDateOnlyToUtc(input.recurrence_end_date) : null;
+    if (input.recurrence_end_date && !recurrenceEndDate) {
+        return { code: 400, error: true, message: 'recurrence_end_date must be a valid YYYY-MM-DD date' };
+    }
+    if (recurrenceEndDate && recurrenceEndDate.getTime() < recurrenceStartDate.getTime()) {
+        return { code: 400, error: true, message: 'recurrence_end_date must be on or after recurrence_start_date' };
+    }
+
     const requestedLocation = input.location_text?.trim() ?? '';
     const locationText = requestedLocation.length > 0
         ? requestedLocation
@@ -164,8 +200,8 @@ export async function createGroupClass(companyId: number, userId: string, input:
             session_duration_minutes: input.session_duration_minutes,
             recurrence_type: input.recurrence_type,
             recurrence_config: input.recurrence_config as any,
-            recurrence_start_date: new Date(input.recurrence_start_date),
-            recurrence_end_date: input.recurrence_end_date ? new Date(input.recurrence_end_date) : null,
+            recurrence_start_date: recurrenceStartDate,
+            recurrence_end_date: recurrenceEndDate,
             start_time: input.start_time,
             location_text: locationText,
             created_by_user_id: userId,
@@ -255,11 +291,23 @@ export async function updateGroupClass(companyId: number, classId: number, input
         recurrenceChanged = true;
     }
     if (input.recurrence_start_date !== undefined) {
-        updateData.recurrence_start_date = new Date(input.recurrence_start_date);
+        const parsedStartDate = parseDateOnlyToUtc(input.recurrence_start_date);
+        if (!parsedStartDate) {
+            return { code: 400, error: true, message: 'recurrence_start_date must be a valid YYYY-MM-DD date' };
+        }
+        updateData.recurrence_start_date = parsedStartDate;
         recurrenceChanged = true;
     }
     if (input.recurrence_end_date !== undefined) {
-        updateData.recurrence_end_date = input.recurrence_end_date ? new Date(input.recurrence_end_date) : null;
+        if (input.recurrence_end_date) {
+            const parsedEndDate = parseDateOnlyToUtc(input.recurrence_end_date);
+            if (!parsedEndDate) {
+                return { code: 400, error: true, message: 'recurrence_end_date must be a valid YYYY-MM-DD date' };
+            }
+            updateData.recurrence_end_date = parsedEndDate;
+        } else {
+            updateData.recurrence_end_date = null;
+        }
         recurrenceChanged = true;
     }
 
@@ -269,6 +317,14 @@ export async function updateGroupClass(companyId: number, classId: number, input
         const configError = validateRecurrenceConfig(finalRecurrenceType, finalRecurrenceConfig);
         if (configError) {
             return { code: 400, error: true, message: configError };
+        }
+
+        const finalStartDate = (updateData.recurrence_start_date as Date | undefined) ?? existing.recurrence_start_date;
+        const finalEndDate = Object.prototype.hasOwnProperty.call(updateData, 'recurrence_end_date')
+            ? (updateData.recurrence_end_date as Date | null)
+            : existing.recurrence_end_date;
+        if (finalEndDate && finalEndDate.getTime() < finalStartDate.getTime()) {
+            return { code: 400, error: true, message: 'recurrence_end_date must be on or after recurrence_start_date' };
         }
     }
 
