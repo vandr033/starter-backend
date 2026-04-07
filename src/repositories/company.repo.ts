@@ -444,6 +444,7 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
           id: true,
           display_name: true,
           image_url: true,
+          resource_type: true,
           staff_services: {
             select: {
               service_id: true,

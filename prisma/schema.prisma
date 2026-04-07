@@ -119,6 +119,7 @@ model CompanySettings {
   auto_confirm_bookings            Boolean  @default(true)
   social_links                     Json     @default("{}")
   custom_tos                       String?  @db.Text
+  staff_label                      String   @default("Staff") @db.VarChar(50)
   created_at                       DateTime @default(now())
   updated_at                       DateTime @updatedAt
   company                          Company  @relation(fields: [company_id], references: [id])
@@ -219,6 +220,7 @@ model StaffProfile {
   image_url           String?             @db.VarChar(512)
   is_bookable         Boolean             @default(true)
   status              StaffProfileStatus  @default(ACTIVE)
+  resource_type       ResourceType        @default(PERSON)
   invite_token        String?             @unique @db.VarChar(255)
   start_date          DateTime?
   end_date            DateTime?
@@ -743,6 +745,12 @@ enum StaffProfileStatus {
   PENDING
   ACTIVE
   INACTIVE
+}
+
+enum ResourceType {
+  PERSON
+  ROOM
+  EQUIPMENT
 }
 
 enum StaffTimeOffStatus {

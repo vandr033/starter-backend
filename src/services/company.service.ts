@@ -167,6 +167,7 @@ export const getCompanyPublicPage = async (slug: string) => {
         max_advance_booking_days: company_settings.max_advance_booking_days ?? null,
         min_advance_booking_minutes: company_settings.min_advance_booking_minutes ?? null,
         custom_tos: (company_settings as any).custom_tos ?? null,
+        staff_label: (company_settings as any).staff_label ?? 'Staff',
       }
       : {
         allow_qr_payment: true,
@@ -178,6 +179,7 @@ export const getCompanyPublicPage = async (slug: string) => {
         max_advance_booking_days: null,
         min_advance_booking_minutes: null,
         custom_tos: null,
+        staff_label: 'Staff',
       };
 
     // Apply theme defaults if no config exists

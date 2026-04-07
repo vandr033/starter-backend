@@ -41,6 +41,7 @@ export async function listStaff(companyId: number): Promise<StaffResult> {
             bio: s.bio ?? '',
             image_url: s.image_url,
             is_bookable: s.is_bookable,
+            resource_type: (s as any).resource_type ?? 'PERSON',
             status: s.status,
             start_date: s.start_date,
             end_date: s.end_date,
@@ -604,6 +605,7 @@ export interface UpdateStaffInput {
     bio?: string;
     image_url?: string;
     is_bookable?: boolean;
+    resource_type?: 'PERSON' | 'ROOM' | 'EQUIPMENT';
     service_ids?: number[];
 }
 
