@@ -5,6 +5,7 @@ import * as GroupBookingService from '../services/group-booking.service';
 import * as GroupAttendanceService from '../services/group-attendance.service';
 import * as GroupTicketService from '../services/group-ticket.service';
 import * as GroupMetricsService from '../services/group-metrics.service';
+import * as InstallmentService from '../services/enrollment-installment.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -258,6 +259,58 @@ export async function cancelTicket(req: AuthenticatedRequest, res: Response) {
     }
 
     const result = await GroupTicketService.cancelTicketByCode(companyId, ticketCode);
+    return res.status(result.code).json(result);
+}
+
+export async function listEnrollmentInstallments(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const enrollmentId = parseId(req.params.enrollmentId);
+    if (!enrollmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid enrollmentId' });
+    }
+
+    const result = await InstallmentService.listInstallments(companyId, enrollmentId);
+    return res.status(result.code).json(result);
+}
+
+export async function markInstallmentPaid(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const installmentId = parseId(req.params.installmentId);
+    if (!installmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid installmentId' });
+    }
+
+    const adminUserId = req.authUser?.id;
+    if (!adminUserId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const rawMethod = req.body?.payment_method;
+    const paymentMethod = rawMethod === 'QR' ? 'QR' : 'CASH';
+
+    const result = await InstallmentService.markInstallmentPaid(companyId, installmentId, adminUserId, paymentMethod);
+    return res.status(result.code).json(result);
+}
+
+export async function confirmInstallmentQrPayment(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const installmentId = parseId(req.params.installmentId);
+    if (!installmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid installmentId' });
+    }
+
+    const adminUserId = req.authUser?.id;
+    if (!adminUserId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const result = await InstallmentService.confirmInstallmentQrPayment(companyId, installmentId, adminUserId);
     return res.status(result.code).json(result);
 }
 

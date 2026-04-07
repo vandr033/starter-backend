@@ -154,6 +154,29 @@ router.post(
     AdminGroupBookingController.cancelTicket,
 );
 
+// ── Enrollment installments (FULL_COURSE) ───────────────────────────────────
+router.get(
+    '/classes/enrollments/:enrollmentId/installments',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.listEnrollmentInstallments,
+);
+router.post(
+    '/classes/enrollments/:enrollmentId/installments/:installmentId/mark-paid',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.markInstallmentPaid,
+);
+router.post(
+    '/classes/enrollments/:enrollmentId/installments/:installmentId/confirm-qr',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.confirmInstallmentQrPayment,
+);
+
 router.get('/events/free-registrations/interested', requireAuth, requireCompanyRole(adminRoles), adminListInterestedHandler);
 router.get('/events/free-registrations/interested/export', requireAuth, requireCompanyRole(adminRoles), adminExportInterestedHandler);
 

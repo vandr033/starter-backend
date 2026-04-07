@@ -16,8 +16,10 @@ export interface CreateGroupClassInput {
     description?: string | null;
     cover_image_url?: string | null;
     thumbnail_url?: string | null;
-    pricing_mode: 'PER_SESSION' | 'WEEKLY_PASS' | 'MONTHLY_PASS';
+    pricing_mode: 'PER_SESSION' | 'WEEKLY_PASS' | 'MONTHLY_PASS' | 'FULL_COURSE';
     price_cents: number;
+    monthly_price_cents?: number | null;
+    billing_day?: number | null;
     max_capacity_per_session: number;
     session_duration_minutes: number;
     recurrence_type: RecurrenceType;
@@ -35,8 +37,10 @@ export interface UpdateGroupClassInput {
     description?: string | null;
     cover_image_url?: string | null;
     thumbnail_url?: string | null;
-    pricing_mode?: 'PER_SESSION' | 'WEEKLY_PASS' | 'MONTHLY_PASS';
+    pricing_mode?: 'PER_SESSION' | 'WEEKLY_PASS' | 'MONTHLY_PASS' | 'FULL_COURSE';
     price_cents?: number;
+    monthly_price_cents?: number | null;
+    billing_day?: number | null;
     max_capacity_per_session?: number;
     session_duration_minutes?: number;
     recurrence_type?: RecurrenceType;
@@ -167,6 +171,17 @@ export async function createGroupClass(companyId: number, userId: string, input:
     if (input.price_cents < 0) {
         return { code: 400, error: true, message: 'price_cents must be non-negative' };
     }
+    if (input.pricing_mode === 'FULL_COURSE') {
+        if (!input.monthly_price_cents || input.monthly_price_cents <= 0) {
+            return { code: 400, error: true, message: 'monthly_price_cents is required and must be positive for FULL_COURSE classes' };
+        }
+        if (!input.billing_day || input.billing_day < 1 || input.billing_day > 28) {
+            return { code: 400, error: true, message: 'billing_day is required and must be between 1 and 28 for FULL_COURSE classes' };
+        }
+        if (!input.recurrence_end_date) {
+            return { code: 400, error: true, message: 'recurrence_end_date is required for FULL_COURSE classes' };
+        }
+    }
 
     const recurrenceStartDate = parseDateOnlyToUtc(input.recurrence_start_date);
     if (!recurrenceStartDate) {
@@ -196,6 +211,8 @@ export async function createGroupClass(companyId: number, userId: string, input:
             thumbnail_url: input.thumbnail_url ?? null,
             pricing_mode: input.pricing_mode,
             price_cents: input.price_cents,
+            monthly_price_cents: input.monthly_price_cents ?? null,
+            billing_day: input.billing_day ?? null,
             max_capacity_per_session: input.max_capacity_per_session,
             session_duration_minutes: input.session_duration_minutes,
             recurrence_type: input.recurrence_type,
@@ -260,6 +277,8 @@ export async function updateGroupClass(companyId: number, classId: number, input
         }
         updateData.price_cents = input.price_cents;
     }
+    if (input.monthly_price_cents !== undefined) updateData.monthly_price_cents = input.monthly_price_cents;
+    if (input.billing_day !== undefined) updateData.billing_day = input.billing_day;
     if (input.max_capacity_per_session !== undefined) {
         if (input.max_capacity_per_session < 1) {
             return { code: 400, error: true, message: 'max_capacity_per_session must be at least 1' };

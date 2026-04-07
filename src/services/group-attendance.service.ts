@@ -4,6 +4,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { markEventTicketUsed } from './group-ticket.service';
 import { resolveTicketCodeFromScanInput } from './group-ticket-qr.service';
+import { getCurrentMonthInstallment } from './enrollment-installment.service';
 
 type ServiceResult = MensajeApi & { data?: unknown };
 type ScanStatus = 'VALID' | 'ALREADY_USED' | 'INVALID';
@@ -410,6 +411,23 @@ export async function checkInByTicketCode(
                 reason: 'ENROLLMENT_NOT_CONFIRMED',
                 ticket_code: ticket.ticket_code,
             });
+        }
+
+        // For FULL_COURSE enrollments, check the current month's installment is paid
+        const enrollmentWithPricing = await prisma.groupClassEnrollment.findUnique({
+            where: { id: ticket.class_enrollment.id },
+            select: { pricing_mode: true },
+        });
+        if (enrollmentWithPricing?.pricing_mode === 'FULL_COURSE') {
+            const installment = await getCurrentMonthInstallment(ticket.class_enrollment.id);
+            if (!installment || installment.payment_status !== 'PAID') {
+                return buildScanResponse('INVALID', 'Monthly payment is required to access this class. Please contact the front desk.', {
+                    reason: 'INSTALLMENT_UNPAID',
+                    ticket_code: ticket.ticket_code,
+                    due_date: installment?.due_date ?? null,
+                    amount_cents: installment?.amount_cents ?? null,
+                });
+            }
         }
 
         if (ticket.class_enrollment.group_class_id !== targetSession.group_class_id) {

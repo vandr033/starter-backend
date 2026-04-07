@@ -15,6 +15,7 @@ import {
     issueClassTicketForEnrollment,
     issueEventTicketForBooking,
 } from './group-ticket.service';
+import { generateInstallmentsForEnrollment } from './enrollment-installment.service';
 import { buildWaitlistSpotOpenedTemplate } from '../utils/groupNotifications';
 import { isTemporaryEmailAddress, sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
@@ -1029,6 +1030,11 @@ export async function createClassEnrollment(
             validUntil = session.end_at;
         } else if (gc.pricing_mode === 'WEEKLY_PASS') {
             validUntil = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        } else if (gc.pricing_mode === 'FULL_COURSE') {
+            if (!gc.recurrence_end_date) {
+                return { code: 400, error: true, message: 'This class does not have an end date configured' } as ServiceResult;
+            }
+            validUntil = new Date(gc.recurrence_end_date);
         } else {
             validUntil = new Date(now);
             validUntil.setMonth(validUntil.getMonth() + 1);
@@ -1041,21 +1047,28 @@ export async function createClassEnrollment(
         const autoConfirm = canCustomize ? (settings?.auto_confirm_bookings ?? true) : true;
         const requireComprobante = canCustomize ? (settings?.require_comprobante_for_qr ?? true) : true;
 
-        if (gc.price_cents > 0 && input.payment_method === 'NONE') {
-            return { code: 400, error: true, message: 'Paid classes require a payment method' } as ServiceResult;
-        }
-        if (input.payment_method === 'QR' && requireComprobante && !input.qr_proof_image_url) {
-            return { code: 400, error: true, message: 'QR payment proof is required' } as ServiceResult;
+        const isFullCourse = gc.pricing_mode === 'FULL_COURSE';
+
+        // For FULL_COURSE, payment is tracked per installment — no upfront payment required.
+        if (!isFullCourse) {
+            if (gc.price_cents > 0 && input.payment_method === 'NONE') {
+                return { code: 400, error: true, message: 'Paid classes require a payment method' } as ServiceResult;
+            }
+            if (input.payment_method === 'QR' && requireComprobante && !input.qr_proof_image_url) {
+                return { code: 400, error: true, message: 'QR payment proof is required' } as ServiceResult;
+            }
         }
 
         let paymentStatus: PaymentStatus = PaymentStatus.UNPAID;
-        if (gc.price_cents === 0) {
+        if (isFullCourse) {
+            paymentStatus = PaymentStatus.UNPAID; // installments govern actual payment
+        } else if (gc.price_cents === 0) {
             paymentStatus = PaymentStatus.PAID;
         } else if (input.payment_method === 'QR') {
             paymentStatus = PaymentStatus.PENDING_CONFIRMATION;
         }
 
-        const status: GroupBookingStatus = gc.price_cents === 0 || autoConfirm
+        const status: GroupBookingStatus = (isFullCourse || gc.price_cents === 0 || autoConfirm)
             ? GroupBookingStatus.CONFIRMED
             : GroupBookingStatus.PENDING;
 
@@ -1072,15 +1085,25 @@ export async function createClassEnrollment(
                 customer_profile_id: customerProfile.id,
                 user_id: userId,
                 pricing_mode: gc.pricing_mode,
-                price_cents_snapshot: gc.price_cents,
+                price_cents_snapshot: isFullCourse ? (gc.monthly_price_cents ?? 0) : gc.price_cents,
                 status,
-                payment_method: gc.price_cents === 0 ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
+                payment_method: (isFullCourse || gc.price_cents === 0) ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                 payment_status: paymentStatus,
-                qr_proof_image_url: input.qr_proof_image_url ?? null,
+                qr_proof_image_url: isFullCourse ? null : (input.qr_proof_image_url ?? null),
                 valid_from: validFrom,
                 valid_until: validUntil,
             },
         });
+
+        if (isFullCourse && gc.recurrence_end_date && gc.monthly_price_cents && gc.billing_day) {
+            await generateInstallmentsForEnrollment(tx, {
+                enrollmentId: enrollment.id,
+                enrollmentDate: now,
+                classEndDate: new Date(gc.recurrence_end_date),
+                billingDay: gc.billing_day,
+                amountCents: gc.monthly_price_cents,
+            });
+        }
 
         return {
             code: 201,
@@ -1366,8 +1389,42 @@ export async function getMyClassEnrollments(userId: string): Promise<ServiceResu
                     company: { select: { id: true, name: true, slug: true } },
                 },
             },
+            tickets: {
+                where: { status: { in: ['ACTIVE', 'USED'] } },
+                orderBy: { created_at: 'desc' },
+                take: 1,
+                select: {
+                    id: true,
+                    ticket_code: true,
+                    status: true,
+                    valid_from: true,
+                    valid_until: true,
+                    issued_at: true,
+                    company_id: true,
+                },
+            },
         },
         orderBy: { created_at: 'desc' },
     });
-    return { code: 200, error: false, message: 'Enrollments retrieved', data: enrollments };
+
+    const { buildGroupTicketQrToken, buildGroupTicketQrImageUrl } = await import('./group-ticket-qr.service');
+
+    const data = enrollments.map((enrollment) => {
+        const ticket = enrollment.tickets[0] ?? null;
+        return {
+            ...enrollment,
+            tickets: undefined,
+            ticket: ticket
+                ? {
+                    ...ticket,
+                    qr_token: buildGroupTicketQrToken(ticket.company_id, ticket.ticket_code, ticket.issued_at),
+                    qr_image_url: buildGroupTicketQrImageUrl(
+                        buildGroupTicketQrToken(ticket.company_id, ticket.ticket_code, ticket.issued_at),
+                    ),
+                }
+                : null,
+        };
+    });
+
+    return { code: 200, error: false, message: 'Enrollments retrieved', data };
 }

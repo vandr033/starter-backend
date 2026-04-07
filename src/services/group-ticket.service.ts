@@ -142,42 +142,104 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
     const company = isEventTicket ? ticket.event_booking!.group_event.company : ticket.class_enrollment!.group_class.company;
     const user = isEventTicket ? ticket.event_booking!.user : ticket.class_enrollment!.user;
     const itemTitle = isEventTicket ? ticket.event_booking!.group_event.title : ticket.class_enrollment!.group_class.title;
-    const validLabel = `${ticket.valid_from.toISOString()} → ${ticket.valid_until.toISOString()}`;
     const qrToken = buildGroupTicketQrToken(ticket.company_id, ticket.ticket_code, ticket.issued_at);
     const qrImageUrl = buildGroupTicketQrImageUrl(qrToken);
     const portalUrl = getCustomerPortalUrl(company.slug);
+
+    const formatDate = (d: Date) => d.toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+    });
 
     const emailSubject = isEventTicket
         ? `${options?.isResend ? 'Your ticket was re-sent' : 'Your ticket'}: ${itemTitle}`
         : `${options?.isResend ? 'Your class pass ticket was re-sent' : 'Your class pass ticket'}: ${itemTitle}`;
 
-    const whatsappCaption = [
-        `${company.name}`,
-        isEventTicket
-            ? `Your event ticket ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`
-            : `Your class pass ticket ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`,
-        `Ticket code: ${ticket.ticket_code}`,
-        `Validity: ${validLabel}`,
-        `Manage reservations: ${portalUrl}`,
-    ].join('\n');
+    let emailHtml: string;
+    let whatsappCaption: string;
+
+    if (isEventTicket) {
+        const validLabel = `${formatDate(ticket.valid_from)} → ${formatDate(ticket.valid_until)}`;
+
+        whatsappCaption = [
+            company.name,
+            `Your event ticket ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`,
+            `Ticket code: ${ticket.ticket_code}`,
+            `Validity: ${validLabel}`,
+            `Show this QR code at the event entrance to check in.`,
+            `Manage reservations: ${portalUrl}`,
+        ].join('\n');
+
+        emailHtml = `
+            <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a; max-width: 640px; margin: 0 auto; padding: 20px;">
+                <h2 style="margin-top: 0;">Event ticket</h2>
+                <p>${options?.isResend ? 'We have re-sent your ticket details.' : 'Your ticket is ready.'}</p>
+                <p><strong>Business:</strong> ${company.name}</p>
+                <p><strong>Event:</strong> ${itemTitle}</p>
+                <p><strong>Ticket code:</strong> ${ticket.ticket_code}</p>
+                <p><strong>Validity:</strong> ${validLabel}</p>
+                <p><strong>Your QR code:</strong></p>
+                <p style="margin: 10px 0 16px;">
+                    <img src="${qrImageUrl}" alt="Ticket QR code" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
+                </p>
+                <p style="background:#f1f5f9; border-left:4px solid #3b82f6; padding:10px 14px; border-radius:4px; margin: 16px 0;">
+                    📋 <strong>How to check in:</strong> Show this QR code at the event entrance. Staff will scan it to confirm your entry.
+                </p>
+                <p><a href="${portalUrl}" target="_blank" rel="noopener noreferrer">View my reservations</a></p>
+            </div>
+        `;
+    } else {
+        const groupClass = ticket.class_enrollment!.group_class;
+        const validFrom = formatDate(ticket.valid_from);
+        const validUntil = formatDate(ticket.valid_until);
+        const sessionTime = groupClass.start_time ?? null;
+        const location = groupClass.location_text ?? null;
+
+        const scheduleLines: string[] = [];
+        if (sessionTime) scheduleLines.push(`Session time: ${sessionTime}`);
+        if (location) scheduleLines.push(`Location: ${location}`);
+        scheduleLines.push(`Pass valid: ${validFrom} – ${validUntil}`);
+
+        whatsappCaption = [
+            company.name,
+            `Your class pass ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`,
+            `Ticket code: ${ticket.ticket_code}`,
+            ...scheduleLines,
+            `✅ Check-in: Show this QR code to staff at the start of each class session. It will be scanned to confirm your attendance.`,
+            `Manage reservations: ${portalUrl}`,
+        ].join('\n');
+
+        const scheduleHtml = [
+            sessionTime ? `<p><strong>Session time:</strong> ${sessionTime}</p>` : '',
+            location ? `<p><strong>Location:</strong> ${location}</p>` : '',
+        ].join('');
+
+        emailHtml = `
+            <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a; max-width: 640px; margin: 0 auto; padding: 20px;">
+                <h2 style="margin-top: 0;">Class pass ticket</h2>
+                <p>${options?.isResend ? 'We have re-sent your ticket details.' : 'Your class pass is ready. Save this QR code — you will need it at every session.'}</p>
+                <p><strong>Business:</strong> ${company.name}</p>
+                <p><strong>Class:</strong> ${itemTitle}</p>
+                ${scheduleHtml}
+                <p><strong>Pass valid:</strong> ${validFrom} – ${validUntil}</p>
+                <p><strong>Ticket code:</strong> <span style="font-family: monospace; font-size: 1.1em; letter-spacing: 0.1em;">${ticket.ticket_code}</span></p>
+                <p><strong>Your QR code:</strong></p>
+                <p style="margin: 10px 0 16px;">
+                    <img src="${qrImageUrl}" alt="Class QR code" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
+                </p>
+                <div style="background:#f0fdf4; border-left:4px solid #22c55e; padding:12px 16px; border-radius:4px; margin: 16px 0;">
+                    <p style="margin:0 0 6px 0;"><strong>✅ How to check in at each session:</strong></p>
+                    <ol style="margin:0; padding-left:20px;">
+                        <li>Open this email (or your reservations portal) and show this QR code to the staff.</li>
+                        <li>Staff will scan your code to confirm your attendance.</li>
+                        <li>Repeat at every class session — your QR code stays the same for the entire pass period.</li>
+                    </ol>
+                </div>
+                <p><a href="${portalUrl}" target="_blank" rel="noopener noreferrer">View my class reservations</a></p>
+            </div>
+        `;
+    }
 
     const whatsappFallbackText = `${whatsappCaption}\nQR image: ${qrImageUrl}`;
-
-    const emailHtml = `
-        <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a; max-width: 640px; margin: 0 auto; padding: 20px;">
-            <h2 style="margin-top: 0;">${isEventTicket ? 'Event ticket' : 'Class pass ticket'}</h2>
-            <p>${options?.isResend ? 'We have re-sent your ticket details.' : 'Your ticket is ready.'}</p>
-            <p><strong>Business:</strong> ${company.name}</p>
-            <p><strong>Item:</strong> ${itemTitle}</p>
-            <p><strong>Ticket code:</strong> ${ticket.ticket_code}</p>
-            <p><strong>QR ticket:</strong></p>
-            <p style="margin: 10px 0 16px;">
-                <img src="${qrImageUrl}" alt="Ticket QR code" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
-            </p>
-            <p><strong>Validity:</strong> ${validLabel}</p>
-            <p><a href="${portalUrl}" target="_blank" rel="noopener noreferrer">View my group reservations</a></p>
-        </div>
-    `;
 
     const successfulChannels: string[] = [];
 

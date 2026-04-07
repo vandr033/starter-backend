@@ -163,6 +163,7 @@ model User {
   group_session_attendances    GroupSessionAttendance[]
   group_event_interests        GroupEventInterest[]
   free_event_registrations     FreeEventRegistration[]
+  marked_paid_installments     EnrollmentInstallment[]  @relation("InstallmentMarkedPaidBy")
 
   @@map("user")
 }
@@ -775,6 +776,7 @@ enum ClassPricingMode {
   PER_SESSION
   WEEKLY_PASS
   MONTHLY_PASS
+  FULL_COURSE
 }
 
 enum RecurrenceType {
@@ -877,6 +879,8 @@ model GroupClass {
   status                    GroupItemStatus  @default(DRAFT)
   pricing_mode              ClassPricingMode @default(PER_SESSION)
   price_cents               Int              @default(0)
+  monthly_price_cents       Int?
+  billing_day               Int?
   max_capacity_per_session  Int
   session_duration_minutes  Int
   recurrence_type           RecurrenceType   @default(WEEKLY)
@@ -1013,6 +1017,7 @@ model GroupClassEnrollment {
   user             User             @relation(fields: [user_id], references: [id])
   attendances      GroupSessionAttendance[]
   tickets          GroupTicket[]
+  installments     EnrollmentInstallment[]
 
   @@index([company_id, group_class_id, status])
   @@index([company_id, group_class_id, user_id, status, valid_until], map: "gce_cmp_cls_usr_sts_vu_idx")
@@ -1020,6 +1025,31 @@ model GroupClassEnrollment {
   @@index([user_id, group_class_id])
   @@index([customer_profile_id])
   @@map("group_class_enrollment")
+}
+
+// ─── Enrollment Installment (monthly payment for FULL_COURSE) ───────────────
+
+model EnrollmentInstallment {
+  id                    Int           @id @default(autoincrement())
+  enrollment_id         Int
+  installment_number    Int
+  due_date              DateTime      @db.Date
+  amount_cents          Int
+  payment_status        PaymentStatus @default(UNPAID)
+  payment_method        PaymentMethod @default(NONE)
+  qr_proof_image_url    String?       @db.VarChar(512)
+  paid_at               DateTime?
+  marked_paid_by_admin_id String?
+  created_at            DateTime      @default(now())
+  updated_at            DateTime      @updatedAt
+
+  enrollment           GroupClassEnrollment @relation(fields: [enrollment_id], references: [id], onDelete: Cascade)
+  marked_paid_by_admin User?                @relation("InstallmentMarkedPaidBy", fields: [marked_paid_by_admin_id], references: [id], onDelete: SetNull)
+
+  @@unique([enrollment_id, installment_number])
+  @@index([enrollment_id])
+  @@index([marked_paid_by_admin_id])
+  @@map("enrollment_installment")
 }
 
 // ─── Session Attendance ─────────────────────────────────────────────────────

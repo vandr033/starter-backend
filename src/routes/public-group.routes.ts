@@ -93,6 +93,21 @@ router.post(
 
 router.get('/my/bookings', requireAuth, PublicGroupController.getMyEventBookings);
 router.get('/my/enrollments', requireAuth, PublicGroupController.getMyClassEnrollments);
+router.post('/my/enrollments/:enrollmentId/ticket/resend', requireAuth, PublicGroupController.resendMyClassTicket);
+router.get(
+    '/my/enrollments/:enrollmentId/installments',
+    requireAuth,
+    requireActiveCompany({ source: 'query', key: 'company_id' }),
+    requirePlanFeature('GROUP_CLASSES'),
+    PublicGroupController.getMyInstallments,
+);
+router.post(
+    '/my/enrollments/:enrollmentId/installments/:installmentId/qr-proof',
+    requireAuth,
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_CLASSES'),
+    PublicGroupController.submitInstallmentQrProof,
+);
 
 // Free event registration (optional auth)
 router.get('/events/:eventId/free-registration-state', optionalAuth, getFreeRegistrationStateHandler);
