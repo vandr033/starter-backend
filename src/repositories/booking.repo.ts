@@ -502,6 +502,7 @@ export async function checkGroupSlotConflict(
 export interface CreateBookingData {
     company_id: number;
     staff_id: number;
+    secondary_staff_id?: number | null;
     customer_id: number;
     start_at: Date;
     end_at: Date;
@@ -532,6 +533,7 @@ export async function createBookingWithServices(
             data: {
                 company_id: bookingData.company_id,
                 staff_id: bookingData.staff_id,
+                secondary_staff_id: bookingData.secondary_staff_id ?? null,
                 customer_id: bookingData.customer_id,
                 start_at: bookingData.start_at,
                 end_at: bookingData.end_at,

@@ -436,6 +436,9 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
           price_cents: true,
           duration_minutes: true,
           position: true,
+          required_resources: {
+            select: { staff_profile_id: true },
+          },
         },
       },
       staff_profiles: {

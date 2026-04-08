@@ -61,16 +61,17 @@ model Company {
   staff_time_off       StaffTimeOff[]
   staff_services       StaffService[]
   theme_config         ThemeConfig?
-  group_events              GroupEvent[]
-  group_classes             GroupClass[]
-  group_class_sessions      GroupClassSession[]
-  group_staff_assignments   GroupStaffAssignment[]
-  group_event_bookings      GroupEventBooking[]
-  group_class_enrollments   GroupClassEnrollment[]
-  group_session_attendances GroupSessionAttendance[]
-  group_tickets             GroupTicket[]
-  group_event_interests     GroupEventInterest[]
-  free_event_registrations     FreeEventRegistration[]
+  group_events                  GroupEvent[]
+  group_classes                 GroupClass[]
+  group_class_sessions          GroupClassSession[]
+  group_staff_assignments       GroupStaffAssignment[]
+  group_event_bookings          GroupEventBooking[]
+  group_class_enrollments       GroupClassEnrollment[]
+  group_session_attendances     GroupSessionAttendance[]
+  group_tickets                 GroupTicket[]
+  group_event_interests         GroupEventInterest[]
+  free_event_registrations      FreeEventRegistration[]
+  service_required_resources    ServiceRequiredResource[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -228,15 +229,17 @@ model StaffProfile {
   created_at          DateTime            @default(now())
   updated_at          DateTime            @updatedAt
   deleted_at          DateTime?
-  availability_slots  StaffAvailability[]
-  bookings            Booking[]
-  preferred_customers CustomerProfile[]
-  reviews             Review[]
-  company             Company             @relation(fields: [company_id], references: [id])
-  user                User                @relation(fields: [user_id], references: [id])
+  availability_slots       StaffAvailability[]
+  bookings                 Booking[]              @relation("BookingPrimaryStaff")
+  secondary_bookings       Booking[]              @relation("BookingSecondaryStaff")
+  preferred_customers      CustomerProfile[]
+  reviews                  Review[]
+  company                  Company                @relation(fields: [company_id], references: [id])
+  user                     User                   @relation(fields: [user_id], references: [id])
   time_off_requests        StaffTimeOff[]
   staff_services           StaffService[]
   group_staff_assignments  GroupStaffAssignment[]
+  required_for_services    ServiceRequiredResource[]
 
   @@unique([company_id, user_id])
   @@index([company_id, is_bookable])
@@ -304,12 +307,13 @@ model Service {
   deleted_at       DateTime?
   global_type_id   Int?
   category_id      Int
-  booking_services BookingService[]
-  service_reviews  Review[]
-  category         Category           @relation(fields: [category_id], references: [id])
-  company          Company            @relation(fields: [company_id], references: [id])
-  global_type      GlobalServiceType? @relation(fields: [global_type_id], references: [id])
-  staff_services   StaffService[]
+  booking_services    BookingService[]
+  service_reviews     Review[]
+  category            Category                  @relation(fields: [category_id], references: [id])
+  company             Company                   @relation(fields: [company_id], references: [id])
+  global_type         GlobalServiceType?        @relation(fields: [global_type_id], references: [id])
+  staff_services      StaffService[]
+  required_resources  ServiceRequiredResource[]
 
   @@index([company_id, is_active])
   @@index([company_id, global_type_id, is_active], map: "service_company_global_active_idx")
@@ -337,6 +341,7 @@ model Booking {
   id                  Int               @id @default(autoincrement())
   company_id          Int
   staff_id            Int
+  secondary_staff_id  Int?
   customer_id         Int?
   client_name         String?
   client_email        String?
@@ -361,7 +366,8 @@ model Booking {
   company             Company           @relation(fields: [company_id], references: [id])
   created_by          User?             @relation("BookingCreatedBy", fields: [created_by_user_id], references: [id])
   customer            CustomerProfile?  @relation(fields: [customer_id], references: [id])
-  staff               StaffProfile      @relation(fields: [staff_id], references: [id])
+  staff               StaffProfile      @relation("BookingPrimaryStaff", fields: [staff_id], references: [id])
+  secondary_staff     StaffProfile?     @relation("BookingSecondaryStaff", fields: [secondary_staff_id], references: [id])
   updated_by          User?             @relation("BookingUpdatedBy", fields: [updated_by_user_id], references: [id])
   booking_discounts   BookingDiscount[]
   booking_services    BookingService[]
@@ -371,6 +377,7 @@ model Booking {
   @@index([company_id, customer_id, start_at])
   @@index([booking_source, created_at], map: "booking_source_created_at_idx")
   @@index([staff_id, start_at, end_at, status])
+  @@index([secondary_staff_id, start_at, end_at, status])
   @@index([created_by_user_id], map: "booking_created_by_user_id_fkey")
   @@index([customer_id], map: "booking_customer_id_fkey")
   @@index([updated_by_user_id], map: "booking_updated_by_user_id_fkey")
@@ -627,6 +634,23 @@ model StaffService {
   @@index([staff_id, is_active])
   @@index([service_id], map: "staff_service_service_id_fkey")
   @@map("staff_service")
+}
+
+model ServiceRequiredResource {
+  id               Int          @id @default(autoincrement())
+  company_id       Int
+  service_id       Int
+  staff_profile_id Int
+  created_at       DateTime     @default(now())
+  updated_at       DateTime     @updatedAt
+  company          Company      @relation(fields: [company_id], references: [id])
+  service          Service      @relation(fields: [service_id], references: [id])
+  staff_profile    StaffProfile @relation(fields: [staff_profile_id], references: [id])
+
+  @@unique([service_id, staff_profile_id])
+  @@index([company_id, service_id])
+  @@index([staff_profile_id])
+  @@map("service_required_resource")
 }
 
 model StaffAvailability {

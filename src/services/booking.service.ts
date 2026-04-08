@@ -9,6 +9,7 @@ import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 interface GetSlotsParams {
     company_id: number;
     staff_id?: number;
+    secondary_staff_id?: number;
     service_ids: number[];
     date: string; // "YYYY-MM-DD"
 }
@@ -227,7 +228,7 @@ async function isStaffAvailableForInterval(params: {
  * Get available booking slots for a date
  */
 export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlotsResult> {
-    const { company_id, staff_id, service_ids, date } = params;
+    const { company_id, staff_id, secondary_staff_id, service_ids, date } = params;
 
     try {
         // 1. Validate company exists
@@ -318,9 +319,12 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
         const dateStart = new Date(date + 'T00:00:00');
         const dateEnd = new Date(date + 'T23:59:59.999');
 
+        // Include secondary resource ID in bookings query so we can check its conflicts too
+        const allResourceIds = secondary_staff_id ? [...staffIds, secondary_staff_id] : staffIds;
+
         const existingBookings = await BookingRepo.getBookingsForDateRange(
             company_id,
-            staffIds,
+            allResourceIds,
             dateStart,
             dateEnd
         );
@@ -440,15 +444,21 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
                     }
 
                     const isAvailable = !hasConflict(slotStart, slotEnd, staffBookings, bufferMinutes);
+                    if (!isAvailable) continue;
 
-                    if (isAvailable) {
-                        slots.push({
-                            time: slotTime,
-                            staff_id: staff.id,
-                            staff_name: staff.display_name,
-                            available: true,
-                        });
+                    // If a secondary resource (e.g. room) is required, also check it
+                    if (secondary_staff_id) {
+                        const secondaryBookings = bookingsByStaff.get(secondary_staff_id) || [];
+                        const secondaryAvailable = !hasConflict(slotStart, slotEnd, secondaryBookings, bufferMinutes);
+                        if (!secondaryAvailable) continue;
                     }
+
+                    slots.push({
+                        time: slotTime,
+                        staff_id: staff.id,
+                        staff_name: staff.display_name,
+                        available: true,
+                    });
                 }
             }
         }
@@ -477,6 +487,7 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
 interface CreateBookingParams {
     company_id: number;
     staff_id: number;
+    secondary_staff_id?: number;
     service_ids: number[];
     start_at: string; // ISO datetime string
     payment_method: 'NONE' | 'CASH' | 'QR';
@@ -494,7 +505,7 @@ interface CreateBookingResult extends MensajeApi {
  * Create a new customer booking
  */
 export async function createBooking(params: CreateBookingParams): Promise<CreateBookingResult> {
-    const { company_id, staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source, qr_proof_image_url } = params;
+    const { company_id, staff_id, secondary_staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source, qr_proof_image_url } = params;
 
     try {
         // 1. Validate company exists and is active
@@ -603,6 +614,24 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             };
         }
 
+        // 7b. Check secondary resource conflict (room/equipment)
+        if (secondary_staff_id) {
+            const secondaryConflict = await BookingRepo.checkSlotConflict(
+                company_id,
+                secondary_staff_id,
+                startAt,
+                endAt,
+                bufferMinutes
+            );
+            if (secondaryConflict) {
+                return {
+                    code: 409,
+                    message: 'The required room or equipment is no longer available at this time',
+                    error: true,
+                };
+            }
+        }
+
         const groupConflict = await BookingRepo.checkGroupSlotConflict(
             company_id,
             staff_id,
@@ -646,6 +675,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             {
                 company_id,
                 staff_id,
+                secondary_staff_id: secondary_staff_id ?? null,
                 customer_id: customerProfile.id,
                 start_at: startAt,
                 end_at: endAt,
@@ -1035,6 +1065,7 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
 interface CreatePublicBookingParams {
     company_id: number;
     staff_id: number;
+    secondary_staff_id?: number | null;
     service_ids: number[];
     start_at: string;
     payment_method: string;
@@ -1114,11 +1145,32 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             };
         }
 
+        // Check secondary resource conflict (room/equipment)
+        if (params.secondary_staff_id) {
+            const settings = await BookingRepo.getCompanySettings(params.company_id);
+            const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
+            const secondaryConflict = await BookingRepo.checkSlotConflict(
+                params.company_id,
+                params.secondary_staff_id,
+                startAt,
+                endAt,
+                bufferMinutes
+            );
+            if (secondaryConflict) {
+                return {
+                    code: 409,
+                    message: 'The required room or equipment is no longer available at this time',
+                    error: true,
+                };
+            }
+        }
+
         // Create the booking without customer profile (guest booking)
         const booking = await prisma.booking.create({
             data: {
                 company_id: params.company_id,
                 staff_id: params.staff_id,
+                secondary_staff_id: params.secondary_staff_id ?? null,
                 customer_id: null, // No customer profile for guest bookings
                 client_name: params.client_name,
                 client_email: params.client_email,

@@ -41,7 +41,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { category_id, name, description, price_cents, duration_minutes, position, global_type_id } = req.body;
+    const { category_id, name, description, price_cents, duration_minutes, position, global_type_id, required_resource_ids } = req.body;
 
     // Validate required fields
     if (!category_id || typeof category_id !== 'number') {
@@ -88,6 +88,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         duration_minutes,
         position,
         global_type_id,
+        required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
     });
 
     return res.status(result.code).json(result);
@@ -119,7 +120,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { name, description, price_cents, duration_minutes, position, is_active, category_id, global_type_id } = req.body;
+    const { name, description, price_cents, duration_minutes, position, is_active, category_id, global_type_id, required_resource_ids } = req.body;
 
     const result = await ServiceService.updateService(companyId, serviceId, {
         name,
@@ -130,6 +131,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         is_active,
         category_id,
         global_type_id,
+        required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
     });
 
     return res.status(result.code).json(result);

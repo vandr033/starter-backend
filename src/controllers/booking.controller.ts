@@ -18,7 +18,7 @@ let mensaje: MensajeApi;
  * - staff_id: number (optional)
  */
 export async function getAvailableSlots(req: Request, res: Response) {
-    const { company_id, staff_id, service_ids, date } = req.query;
+    const { company_id, staff_id, secondary_staff_id, service_ids, date } = req.query;
 
     // Validate required params
     if (!company_id) {
@@ -76,6 +76,7 @@ export async function getAvailableSlots(req: Request, res: Response) {
         service_ids: serviceIdsArray,
         date: date as string,
         staff_id: staff_id ? parseInt(staff_id as string, 10) : undefined,
+        secondary_staff_id: secondary_staff_id ? parseInt(secondary_staff_id as string, 10) : undefined,
     };
 
     // Validate parsed numbers
@@ -197,7 +198,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         return res.status(401).json(mensaje);
     }
 
-    const { company_id, staff_id, service_ids, start_at, payment_method, notes, booking_source, qr_proof_image_url } = req.body;
+    const { company_id, staff_id, secondary_staff_id, service_ids, start_at, payment_method, notes, booking_source, qr_proof_image_url } = req.body;
 
     // Validate required fields
     if (!company_id || typeof company_id !== 'number') {
@@ -261,6 +262,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
     const result = await BookingService.createBooking({
         company_id,
         staff_id,
+        secondary_staff_id: typeof secondary_staff_id === 'number' ? secondary_staff_id : undefined,
         service_ids,
         start_at,
         payment_method,

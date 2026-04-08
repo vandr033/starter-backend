@@ -15,6 +15,7 @@ export async function createPublicBooking(req: Request, res: Response) {
         const {
             company_id,
             staff_id,
+            secondary_staff_id,
             service_ids,
             start_at,
             payment_method,
@@ -144,6 +145,7 @@ export async function createPublicBooking(req: Request, res: Response) {
         const result = await BookingService.createPublicBooking({
             company_id,
             staff_id,
+            secondary_staff_id: typeof secondary_staff_id === 'number' ? secondary_staff_id : null,
             service_ids,
             start_at,
             payment_method,

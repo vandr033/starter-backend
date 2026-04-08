@@ -18,6 +18,9 @@ export async function getServicesByCompany(companyId: number) {
                     position: true,
                 },
             },
+            required_resources: {
+                select: { staff_profile_id: true },
+            },
         },
         orderBy: [
             { category: { position: 'asc' } },
@@ -43,6 +46,9 @@ export async function getServiceById(id: number, companyId: number) {
                     name: true,
                     slug: true,
                 },
+            },
+            required_resources: {
+                select: { staff_profile_id: true },
             },
         },
     });
@@ -158,8 +164,38 @@ export async function getUpdatedService(id: number, companyId: number) {
                     slug: true,
                 },
             },
+            required_resources: {
+                select: { staff_profile_id: true },
+            },
         },
     });
+}
+
+/**
+ * Replace required resources for a service (delete existing, insert new)
+ */
+export async function setServiceRequiredResources(
+    serviceId: number,
+    companyId: number,
+    staffProfileIds: number[]
+) {
+    return prisma.$transaction([
+        prisma.serviceRequiredResource.deleteMany({
+            where: { service_id: serviceId, company_id: companyId },
+        }),
+        ...(staffProfileIds.length > 0
+            ? [
+                prisma.serviceRequiredResource.createMany({
+                    data: staffProfileIds.map((id) => ({
+                        service_id: serviceId,
+                        company_id: companyId,
+                        staff_profile_id: id,
+                    })),
+                    skipDuplicates: true,
+                }),
+            ]
+            : []),
+    ]);
 }
 
 /**

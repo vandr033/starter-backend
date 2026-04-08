@@ -40,6 +40,7 @@ export interface CreateServiceInput {
     duration_minutes: number;
     position?: number;
     global_type_id?: number;
+    required_resource_ids?: number[];
 }
 
 export async function createService(
@@ -74,11 +75,17 @@ export async function createService(
             global_type_id: input.global_type_id,
         });
 
+        if (input.required_resource_ids && input.required_resource_ids.length > 0) {
+            await ServiceRepo.setServiceRequiredResources(service!.id, companyId, input.required_resource_ids);
+        }
+
+        const updated = await ServiceRepo.getUpdatedService(service!.id, companyId);
+
         return {
             code: 201,
             message: 'Service created successfully',
             error: false,
-            data: service,
+            data: updated,
         };
     } catch (error: any) {
         console.error('Error creating service:', error);
@@ -103,6 +110,7 @@ export interface UpdateServiceInput {
     is_active?: boolean;
     category_id?: number;
     global_type_id?: number;
+    required_resource_ids?: number[];
 }
 
 export async function updateService(
@@ -133,7 +141,13 @@ export async function updateService(
             }
         }
 
-        await ServiceRepo.updateService(serviceId, companyId, input);
+        const { required_resource_ids, ...coreInput } = input;
+        await ServiceRepo.updateService(serviceId, companyId, coreInput);
+
+        if (required_resource_ids !== undefined) {
+            await ServiceRepo.setServiceRequiredResources(serviceId, companyId, required_resource_ids);
+        }
+
         const updated = await ServiceRepo.getUpdatedService(serviceId, companyId);
 
         return {
