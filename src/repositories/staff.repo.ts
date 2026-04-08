@@ -246,6 +246,7 @@ export interface UpdateStaffData {
     bio?: string;
     image_url?: string;
     is_bookable?: boolean;
+    resource_type?: 'PERSON' | 'ROOM' | 'EQUIPMENT';
 }
 
 export async function updateStaffProfile(id: number, companyId: number, data: UpdateStaffData) {

@@ -379,7 +379,18 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { display_name, bio, image_url, is_bookable, service_ids } = req.body;
+    const { display_name, bio, image_url, is_bookable, service_ids, resource_type } = req.body;
+
+    // Validate resource_type if provided
+    const validResourceTypes = ['PERSON', 'ROOM', 'EQUIPMENT'];
+    if (resource_type !== undefined && !validResourceTypes.includes(resource_type)) {
+        mensaje = {
+            code: 400,
+            message: 'resource_type must be one of: PERSON, ROOM, EQUIPMENT',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
 
     // Validate fields if provided
     if (display_name !== undefined) {
@@ -466,6 +477,7 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         bio: bio === undefined ? undefined : (typeof bio === 'string' ? bio.trim() : ''),
         image_url: image_url?.trim(),
         is_bookable,
+        resource_type,
         service_ids,
     });
 

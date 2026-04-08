@@ -184,6 +184,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             social_links,
             default_language,
             custom_tos,
+            staff_label,
         } = req.body;
 
         // Validate numeric fields
@@ -251,6 +252,16 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             mensaje = {
                 code: 400,
                 message: 'default_language must be one of: es, en',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+
+        // Validate staff_label if provided
+        if (staff_label !== undefined && staff_label !== null && (typeof staff_label !== 'string' || staff_label.trim().length > 50)) {
+            mensaje = {
+                code: 400,
+                message: 'staff_label must be a string of 50 characters or fewer',
                 error: true,
             };
             return res.status(400).json(mensaje);
@@ -365,6 +376,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 send_whatsapp_notifications,
                 ...(normalizedSocialLinks !== undefined && { social_links: normalizedSocialLinks }),
                 ...(custom_tos !== undefined && { custom_tos: custom_tos?.trim() || null }),
+                ...(staff_label !== undefined && { staff_label: staff_label?.trim() || 'Staff' }),
             },
             create: {
                 company_id: companyId,
@@ -384,6 +396,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 send_whatsapp_notifications: send_whatsapp_notifications !== undefined ? send_whatsapp_notifications : false,
                 social_links: normalizedSocialLinks || {},
                 custom_tos: custom_tos?.trim() || null,
+                staff_label: staff_label?.trim() || 'Staff',
             },
         });
 
