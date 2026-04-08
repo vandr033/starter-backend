@@ -118,7 +118,7 @@ export async function generateClassSessions(req: AuthenticatedRequest, res: Resp
         return res.status(400).json({ code: 400, error: true, message: 'Invalid classId' });
     }
 
-    const count = await GroupSessionService.generateSessions(companyId, classId);
+    const count = await GroupSessionService.regenerateSessions(companyId, classId);
     return res.status(200).json({ code: 200, error: false, message: 'Sessions generated', data: { created: count } });
 }
 

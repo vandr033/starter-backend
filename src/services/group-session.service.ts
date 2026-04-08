@@ -5,6 +5,22 @@ import { generateSessionDates, combineDateAndTimeInTimezone, RecurrenceConfig } 
 type ServiceResult = MensajeApi & { data?: any };
 
 /**
+ * Delete future sessions without attendance, then regenerate from current class config.
+ * Used by the admin "Actualizar sesiones" button and Save when schedule changes.
+ * Returns the number of newly created sessions.
+ */
+export async function regenerateSessions(companyId: number, classId: number): Promise<number> {
+    await prisma.groupClassSession.deleteMany({
+        where: {
+            group_class_id: classId,
+            start_at: { gt: new Date() },
+            attendances: { none: {} },
+        },
+    });
+    return generateSessions(companyId, classId);
+}
+
+/**
  * Generate sessions for a class based on its recurrence config.
  * Only creates sessions that don't already exist (idempotent).
  * Returns the number of newly created sessions.

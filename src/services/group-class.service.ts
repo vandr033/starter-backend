@@ -5,7 +5,7 @@ import { logger } from '../config/logger';
 import { MensajeApi } from '../types/MensajeApi';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { validateRecurrenceConfig } from '../utils/recurrence';
-import { generateSessions } from './group-session.service';
+import { generateSessions, regenerateSessions } from './group-session.service';
 import { sanitizeRichText } from '../utils/richText';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -292,10 +292,15 @@ export async function updateGroupClass(companyId: number, classId: number, input
         updateData.session_duration_minutes = input.session_duration_minutes;
     }
     if (input.location_text !== undefined) updateData.location_text = input.location_text;
-    if (input.start_time !== undefined) updateData.start_time = input.start_time;
 
     // If recurrence changed, validate and regenerate sessions
     let recurrenceChanged = false;
+    if (input.start_time !== undefined && input.start_time !== existing.start_time) {
+        updateData.start_time = input.start_time;
+        recurrenceChanged = true;
+    } else if (input.start_time !== undefined) {
+        updateData.start_time = input.start_time;
+    }
     if (input.recurrence_type !== undefined) {
         updateData.recurrence_type = input.recurrence_type;
         recurrenceChanged = true;
@@ -371,18 +376,9 @@ export async function updateGroupClass(companyId: number, classId: number, input
         }
     }
 
-    // Regenerate future sessions if recurrence changed
+    // Regenerate future sessions if schedule changed
     if (recurrenceChanged) {
-        // Delete future sessions that have no attendances
-        const now = new Date();
-        await prisma.groupClassSession.deleteMany({
-            where: {
-                group_class_id: classId,
-                start_at: { gt: now },
-                attendances: { none: {} },
-            },
-        });
-        const count = await generateSessions(companyId, classId);
+        const count = await regenerateSessions(companyId, classId);
         logger.info(`Regenerated ${count} sessions for class ${classId}`);
     }
 
