@@ -10,10 +10,15 @@ type ServiceResult = MensajeApi & { data?: any };
  * Returns the number of newly created sessions.
  */
 export async function regenerateSessions(companyId: number, classId: number): Promise<number> {
+    // Delete from start of today so that sessions created earlier today at the
+    // old time are also removed (not just future ones from this moment).
+    const startOfToday = new Date();
+    startOfToday.setUTCHours(0, 0, 0, 0);
+
     await prisma.groupClassSession.deleteMany({
         where: {
             group_class_id: classId,
-            start_at: { gt: new Date() },
+            start_at: { gte: startOfToday },
             attendances: { none: {} },
         },
     });

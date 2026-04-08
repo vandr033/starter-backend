@@ -76,6 +76,13 @@ router.post(
     requirePlanFeature('GROUP_CLASSES'),
     AdminGroupBookingController.confirmClassEnrollmentPayment,
 );
+router.post(
+    '/classes/enrollments/:enrollmentId/issue-ticket',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_ADVANCED'),
+    AdminGroupBookingController.issueClassEnrollmentTicket,
+);
 
 router.get(
     '/metrics',
