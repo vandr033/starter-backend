@@ -93,6 +93,9 @@ export async function getTheme(companyId: number): Promise<ThemeResult> {
                 services_variant: theme.services_variant || 'services-grid',
                 team_variant: theme.team_variant || 'team-cards',
                 home_cta_buttons: theme.home_cta_buttons ?? null,
+                home_section_order: theme.home_section_order ?? null,
+                footer_config: theme.footer_config ?? null,
+                announcement_banners: theme.announcement_banners ?? null,
             },
         };
     } catch (error: any) {
@@ -120,6 +123,9 @@ export interface ThemeUpdateInput {
     services_variant?: string;
     team_variant?: string;
     home_cta_buttons?: unknown[] | null;
+    home_section_order?: unknown[] | null;
+    footer_config?: unknown | null;
+    announcement_banners?: unknown[] | null;
 }
 
 export async function updateTheme(
@@ -218,6 +224,27 @@ export async function updateTheme(
             }
         }
 
+        // Validate home_section_order if provided
+        const validSections = ['about', 'services', 'events', 'classes', 'team'];
+        if (input.home_section_order !== undefined && input.home_section_order !== null) {
+            if (!Array.isArray(input.home_section_order) ||
+                !input.home_section_order.every((s) => validSections.includes(s as string))) {
+                return { code: 400, message: `home_section_order must be an array of: ${validSections.join(', ')}`, error: true };
+            }
+        }
+
+        // Validate announcement_banners if provided
+        if (input.announcement_banners !== undefined && input.announcement_banners !== null) {
+            if (!Array.isArray(input.announcement_banners) || input.announcement_banners.length > 3) {
+                return { code: 400, message: 'announcement_banners must be an array of up to 3 items', error: true };
+            }
+            for (const b of input.announcement_banners as Record<string, unknown>[]) {
+                if (typeof b.id !== 'string' || b.id.trim() === '') return { code: 400, message: 'Each banner must have a non-empty id', error: true };
+                if (typeof b.message !== 'string' || b.message.trim() === '') return { code: 400, message: 'Each banner must have a non-empty message', error: true };
+                if (typeof b.enabled !== 'boolean') return { code: 400, message: 'Each banner enabled must be boolean', error: true };
+            }
+        }
+
         // Upsert theme
         await ThemeRepo.upsertTheme({
             companyId,
@@ -231,6 +258,9 @@ export async function updateTheme(
             servicesVariant,
             teamVariant,
             homeCTAButtons: input.home_cta_buttons !== undefined ? input.home_cta_buttons : undefined,
+            homeSectionOrder: input.home_section_order !== undefined ? input.home_section_order : undefined,
+            footerConfig: input.footer_config !== undefined ? input.footer_config : undefined,
+            announcementBanners: input.announcement_banners !== undefined ? input.announcement_banners : undefined,
         });
 
         // Get updated theme
@@ -251,6 +281,9 @@ export async function updateTheme(
                 services_variant: updatedTheme!.services_variant,
                 team_variant: updatedTheme!.team_variant,
                 home_cta_buttons: updatedTheme!.home_cta_buttons ?? null,
+                home_section_order: updatedTheme!.home_section_order ?? null,
+                footer_config: updatedTheme!.footer_config ?? null,
+                announcement_banners: updatedTheme!.announcement_banners ?? null,
             },
         };
     } catch (error: any) {

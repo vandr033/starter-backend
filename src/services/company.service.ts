@@ -195,6 +195,9 @@ export const getCompanyPublicPage = async (slug: string) => {
         services_variant: (theme_config as any).services_variant || 'services-grid',
         team_variant: (theme_config as any).team_variant || 'team-cards',
         home_cta_buttons: (theme_config as any).home_cta_buttons ?? null,
+        home_section_order: (theme_config as any).home_section_order ?? null,
+        footer_config: (theme_config as any).footer_config ?? null,
+        announcement_banners: (theme_config as any).announcement_banners ?? null,
       }
       : DEFAULT_THEME;
 

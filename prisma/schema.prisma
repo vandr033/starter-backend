@@ -95,6 +95,9 @@ model ThemeConfig {
   services_variant       String               @default("services-grid") @db.VarChar(30)
   team_variant           String               @default("team-cards") @db.VarChar(30)
   home_cta_buttons       Json?
+  home_section_order     Json?
+  footer_config          Json?
+  announcement_banners   Json?
   created_at             DateTime             @default(now())
   updated_at             DateTime             @updatedAt
   company                Company              @relation(fields: [company_id], references: [id])

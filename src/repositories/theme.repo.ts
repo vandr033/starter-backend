@@ -27,35 +27,29 @@ export async function upsertTheme(data: {
     servicesVariant: string;
     teamVariant: string;
     homeCTAButtons?: object | null;
+    homeSectionOrder?: object | null;
+    footerConfig?: object | null;
+    announcementBanners?: object | null;
 }) {
+    const fields = {
+        brand_color: data.brandColor,
+        page_background_color: data.pageBackgroundColor,
+        page_background_preset: data.pageBackgroundPreset,
+        cards_elevated: data.cardsElevated,
+        corner_radius: data.cornerRadius,
+        font_pairing: data.fontPairing,
+        hero_variant: data.heroVariant,
+        services_variant: data.servicesVariant,
+        team_variant: data.teamVariant,
+        ...(data.homeCTAButtons !== undefined && { home_cta_buttons: data.homeCTAButtons }),
+        ...(data.homeSectionOrder !== undefined && { home_section_order: data.homeSectionOrder }),
+        ...(data.footerConfig !== undefined && { footer_config: data.footerConfig }),
+        ...(data.announcementBanners !== undefined && { announcement_banners: data.announcementBanners }),
+    };
+
     return prisma.themeConfig.upsert({
-        where: {
-            company_id: data.companyId,
-        },
-        update: {
-            brand_color: data.brandColor,
-            page_background_color: data.pageBackgroundColor,
-            page_background_preset: data.pageBackgroundPreset,
-            cards_elevated: data.cardsElevated,
-            corner_radius: data.cornerRadius,
-            font_pairing: data.fontPairing,
-            hero_variant: data.heroVariant,
-            services_variant: data.servicesVariant,
-            team_variant: data.teamVariant,
-            home_cta_buttons: data.homeCTAButtons ?? undefined,
-        },
-        create: {
-            company_id: data.companyId,
-            brand_color: data.brandColor,
-            page_background_color: data.pageBackgroundColor,
-            page_background_preset: data.pageBackgroundPreset,
-            cards_elevated: data.cardsElevated,
-            corner_radius: data.cornerRadius,
-            font_pairing: data.fontPairing,
-            hero_variant: data.heroVariant,
-            services_variant: data.servicesVariant,
-            team_variant: data.teamVariant,
-            home_cta_buttons: data.homeCTAButtons ?? undefined,
-        },
+        where: { company_id: data.companyId },
+        update: fields,
+        create: { company_id: data.companyId, ...fields },
     });
 }
