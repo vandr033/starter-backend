@@ -16,7 +16,7 @@ import {
     issueEventTicketForBooking,
 } from './group-ticket.service';
 import { generateInstallmentsForEnrollment } from './enrollment-installment.service';
-import { buildWaitlistSpotOpenedTemplate } from '../utils/groupNotifications';
+import { buildWaitlistSpotOpenedTemplate, notifyGroupBookingCreated } from '../utils/groupNotifications';
 import { isTemporaryEmailAddress, sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 
@@ -104,6 +104,117 @@ function getFrontendBaseUrl(): string {
 function getEventBookingUrl(companySlug: string | null | undefined, eventId: number): string | null {
     if (!companySlug) return null;
     return `${getFrontendBaseUrl()}/shop/${encodeURIComponent(companySlug)}/events/${eventId}`;
+}
+
+function buildDisplayPhone(prefix?: string | null, phone?: string | null): string | null {
+    const digits = buildFullPhone(prefix, phone);
+    return digits ? `+${digits}` : null;
+}
+
+function formatDateRange(startAt?: Date | null, endAt?: Date | null): string | null {
+    if (!startAt) return null;
+    if (!endAt) return startAt.toISOString();
+    return `${startAt.toISOString()} - ${endAt.toISOString()}`;
+}
+
+async function notifyInternalEventBookingCreated(companyId: number, bookingId: number): Promise<void> {
+    const booking = await prisma.groupEventBooking.findFirst({
+        where: { id: bookingId, company_id: companyId },
+        include: {
+            company: {
+                select: {
+                    name: true,
+                    currency: true,
+                },
+            },
+            group_event: {
+                select: {
+                    id: true,
+                    title: true,
+                    start_at: true,
+                    end_at: true,
+                },
+            },
+            user: {
+                select: {
+                    name: true,
+                    email: true,
+                    phone_prefix: true,
+                    phoneNumber: true,
+                },
+            },
+        },
+    });
+
+    if (!booking) return;
+
+    await notifyGroupBookingCreated({
+        companyId,
+        companyName: booking.company.name,
+        itemType: 'EVENT',
+        itemId: booking.group_event.id,
+        itemTitle: booking.group_event.title,
+        customerName: booking.user.name,
+        customerEmail: booking.user.email,
+        customerPhone: buildDisplayPhone(booking.user.phone_prefix, booking.user.phoneNumber),
+        paymentMethod: booking.payment_method,
+        paymentStatus: booking.payment_status,
+        bookingStatus: booking.status,
+        totalPriceCents: booking.total_price_cents,
+        currency: booking.company.currency,
+        qrProofImageUrl: booking.qr_proof_image_url,
+        scheduleLabel: formatDateRange(booking.group_event.start_at, booking.group_event.end_at),
+        createdAt: booking.created_at,
+    });
+}
+
+async function notifyInternalClassEnrollmentCreated(companyId: number, enrollmentId: number): Promise<void> {
+    const enrollment = await prisma.groupClassEnrollment.findFirst({
+        where: { id: enrollmentId, company_id: companyId },
+        include: {
+            company: {
+                select: {
+                    name: true,
+                    currency: true,
+                },
+            },
+            group_class: {
+                select: {
+                    id: true,
+                    title: true,
+                },
+            },
+            user: {
+                select: {
+                    name: true,
+                    email: true,
+                    phone_prefix: true,
+                    phoneNumber: true,
+                },
+            },
+        },
+    });
+
+    if (!enrollment) return;
+
+    await notifyGroupBookingCreated({
+        companyId,
+        companyName: enrollment.company.name,
+        itemType: 'CLASS',
+        itemId: enrollment.group_class.id,
+        itemTitle: enrollment.group_class.title,
+        customerName: enrollment.user.name,
+        customerEmail: enrollment.user.email,
+        customerPhone: buildDisplayPhone(enrollment.user.phone_prefix, enrollment.user.phoneNumber),
+        paymentMethod: enrollment.payment_method,
+        paymentStatus: enrollment.payment_status,
+        bookingStatus: enrollment.status,
+        totalPriceCents: enrollment.price_cents_snapshot,
+        currency: enrollment.company.currency,
+        qrProofImageUrl: enrollment.qr_proof_image_url,
+        scheduleLabel: formatDateRange(enrollment.valid_from, enrollment.valid_until),
+        createdAt: enrollment.created_at,
+    });
 }
 
 async function lockEventRow(tx: TxClient, companyId: number, eventId: number): Promise<void> {
@@ -336,6 +447,13 @@ export async function createEventBooking(
         const bookingId = (result.data as { id: number }).id;
         void issueEventTicketForBooking(companyId, bookingId).catch((error) => {
             logger.error({ companyId, bookingId, error }, 'Failed to issue event ticket after booking creation');
+        });
+    }
+
+    if (!result.error && result.data) {
+        const bookingId = (result.data as { id: number }).id;
+        void notifyInternalEventBookingCreated(companyId, bookingId).catch((error) => {
+            logger.error({ companyId, bookingId, error }, 'Failed to notify internal event booking recipients');
         });
     }
 
@@ -584,6 +702,69 @@ export async function confirmEventBooking(companyId: number, bookingId: number):
 
     void issueEventTicketForBooking(companyId, bookingId).catch((error) => {
         logger.error({ companyId, bookingId, error }, 'Failed to issue event ticket on confirm');
+    });
+
+    return result;
+}
+
+export async function approveEventBookingQrPayment(companyId: number, bookingId: number): Promise<ServiceResult> {
+    const result = await prisma.$transaction(async (tx) => {
+        const booking = await tx.groupEventBooking.findFirst({
+            where: { id: bookingId, company_id: companyId },
+            include: { group_event: true },
+        });
+        if (!booking) return { code: 404, error: true, message: 'Booking not found' } as ServiceResult;
+        if (booking.status === 'CANCELLED') {
+            return { code: 400, error: true, message: 'Cannot approve a cancelled booking' } as ServiceResult;
+        }
+        if (booking.payment_method !== PaymentMethod.QR) {
+            return { code: 400, error: true, message: 'Booking is not a QR payment booking' } as ServiceResult;
+        }
+        if (booking.payment_status !== PaymentStatus.PENDING_CONFIRMATION) {
+            return { code: 400, error: true, message: `Cannot approve payment with status ${booking.payment_status}` } as ServiceResult;
+        }
+        if (booking.status !== GroupBookingStatus.PENDING) {
+            return { code: 400, error: true, message: `Cannot approve a ${booking.status} booking` } as ServiceResult;
+        }
+
+        await lockEventRow(tx, companyId, booking.group_event_id);
+
+        const confirmedCount = await tx.groupEventBooking.aggregate({
+            where: {
+                company_id: companyId,
+                group_event_id: booking.group_event_id,
+                status: 'CONFIRMED',
+            },
+            _sum: { booked_spots: true },
+        });
+        const usedCapacity = confirmedCount._sum.booked_spots ?? 0;
+        const remaining = booking.group_event.max_capacity - usedCapacity;
+
+        if (booking.booked_spots > remaining) {
+            return {
+                code: 409,
+                error: true,
+                message: `Cannot approve booking. Only ${Math.max(remaining, 0)} spot(s) remaining`,
+            } as ServiceResult;
+        }
+
+        await tx.groupEventBooking.update({
+            where: { id: bookingId },
+            data: {
+                payment_status: PaymentStatus.PAID,
+                status: GroupBookingStatus.CONFIRMED,
+            },
+        });
+
+        return { code: 200, error: false, message: 'QR payment approved and booking confirmed' } as ServiceResult;
+    });
+
+    if (result.error) {
+        return result;
+    }
+
+    void issueEventTicketForBooking(companyId, bookingId).catch((error) => {
+        logger.error({ companyId, bookingId, error }, 'Failed to issue event ticket after QR approval');
     });
 
     return result;
@@ -1124,6 +1305,13 @@ export async function createClassEnrollment(
                 },
                 'Failed to issue class ticket after enrollment creation',
             );
+        });
+    }
+
+    if (!result.error && result.data) {
+        const enrollmentId = (result.data as { id: number }).id;
+        void notifyInternalClassEnrollmentCreated(companyId, enrollmentId).catch((error) => {
+            logger.error({ companyId, enrollmentId, error }, 'Failed to notify internal class enrollment recipients');
         });
     }
 

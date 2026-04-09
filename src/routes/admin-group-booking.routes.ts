@@ -41,6 +41,13 @@ router.post(
     AdminGroupBookingController.unconfirmEventBooking,
 );
 router.post(
+    '/events/bookings/:bookingId/approve-qr',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_EVENTS'),
+    AdminGroupBookingController.approveEventBookingQrPayment,
+);
+router.post(
     '/events/bookings/:bookingId/cancel',
     requireAuth,
     requireCompanyRole(adminRoles),
@@ -90,6 +97,14 @@ router.get(
     requireCompanyRole(adminRoles),
     requirePlanFeature('GROUP_EVENTS'),
     AdminGroupBookingController.getGroupMetrics,
+);
+
+router.get(
+    '/payments',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_EVENTS'),
+    AdminGroupBookingController.listGroupPayments,
 );
 
 router.post(
@@ -189,6 +204,27 @@ router.post(
     requireCompanyRole(adminRoles),
     requirePlanFeature('GROUP_CLASSES'),
     AdminGroupBookingController.confirmInstallmentQrPayment,
+);
+router.get(
+    '/installments/:installmentId/reminders',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.listInstallmentReminders,
+);
+router.post(
+    '/installments/:installmentId/reminders/send',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.sendInstallmentReminder,
+);
+router.post(
+    '/installments/reminders/bulk-send',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.bulkSendInstallmentReminders,
 );
 
 router.get('/events/free-registrations/interested', requireAuth, requireCompanyRole(adminRoles), adminListInterestedHandler);

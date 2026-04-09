@@ -93,6 +93,7 @@ router.post(
 
 router.get('/my/bookings', requireAuth, PublicGroupController.getMyEventBookings);
 router.get('/my/enrollments', requireAuth, PublicGroupController.getMyClassEnrollments);
+router.get('/my/payment-plans', requireAuth, PublicGroupController.getMyPaymentPlans);
 router.post('/my/enrollments/:enrollmentId/ticket/resend', requireAuth, PublicGroupController.resendMyClassTicket);
 router.get(
     '/my/enrollments/:enrollmentId/installments',

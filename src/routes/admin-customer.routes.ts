@@ -15,6 +15,7 @@ const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
 
 router.get('/', requireAuth, requireCompanyRole(adminRoles), AdminCustomerController.listCustomers);
 router.get('/history', requireAuth, requireCompanyRole(adminRoles), AdminCustomerController.getCustomerHistory);
+router.get('/group-payments', requireAuth, requireCompanyRole(adminRoles), AdminCustomerController.getCustomerGroupPayments);
 router.get(
     '/export',
     requireAuth,

@@ -1,6 +1,7 @@
 import { PaymentMethod, PaymentStatus } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
+import { getEnrollmentInstallmentPlan } from './group-payments.service';
 
 type ServiceResult = MensajeApi & { data?: unknown };
 
@@ -116,30 +117,7 @@ export async function getCurrentMonthInstallment(enrollmentId: number): Promise<
  * Admin: list all installments for an enrollment.
  */
 export async function listInstallments(companyId: number, enrollmentId: number): Promise<ServiceResult> {
-    const enrollment = await prisma.groupClassEnrollment.findFirst({
-        where: { id: enrollmentId, company_id: companyId },
-        select: { id: true, pricing_mode: true },
-    });
-
-    if (!enrollment) {
-        return { code: 404, error: true, message: 'Enrollment not found' };
-    }
-
-    if (enrollment.pricing_mode !== 'FULL_COURSE') {
-        return { code: 400, error: true, message: 'This enrollment does not have installments' };
-    }
-
-    const installments = await prisma.enrollmentInstallment.findMany({
-        where: { enrollment_id: enrollmentId },
-        include: {
-            marked_paid_by_admin: {
-                select: { id: true, name: true, email: true },
-            },
-        },
-        orderBy: { installment_number: 'asc' },
-    });
-
-    return { code: 200, error: false, message: 'Installments retrieved', data: installments };
+    return getEnrollmentInstallmentPlan(companyId, enrollmentId);
 }
 
 /**

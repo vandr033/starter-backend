@@ -72,6 +72,7 @@ model Company {
   group_event_interests         GroupEventInterest[]
   free_event_registrations      FreeEventRegistration[]
   service_required_resources    ServiceRequiredResource[]
+  installment_reminder_logs     InstallmentReminderLog[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -170,6 +171,7 @@ model User {
   group_event_interests        GroupEventInterest[]
   free_event_registrations     FreeEventRegistration[]
   marked_paid_installments     EnrollmentInstallment[]  @relation("InstallmentMarkedPaidBy")
+  sent_installment_reminders   InstallmentReminderLog[] @relation("InstallmentReminderSentBy")
 
   @@map("user")
 }
@@ -1054,6 +1056,7 @@ model GroupClassEnrollment {
   attendances      GroupSessionAttendance[]
   tickets          GroupTicket[]
   installments     EnrollmentInstallment[]
+  installment_reminder_logs InstallmentReminderLog[]
 
   @@index([company_id, group_class_id, status])
   @@index([company_id, group_class_id, user_id, status, valid_until], map: "gce_cmp_cls_usr_sts_vu_idx")
@@ -1081,11 +1084,39 @@ model EnrollmentInstallment {
 
   enrollment           GroupClassEnrollment @relation(fields: [enrollment_id], references: [id], onDelete: Cascade)
   marked_paid_by_admin User?                @relation("InstallmentMarkedPaidBy", fields: [marked_paid_by_admin_id], references: [id], onDelete: SetNull)
+  reminder_logs        InstallmentReminderLog[]
 
   @@unique([enrollment_id, installment_number])
   @@index([enrollment_id])
+  @@index([payment_status, due_date])
   @@index([marked_paid_by_admin_id])
   @@map("enrollment_installment")
+}
+
+model InstallmentReminderLog {
+  id               Int                  @id @default(autoincrement())
+  company_id       Int
+  enrollment_id    Int
+  installment_id   Int
+  sent_by_admin_id String?
+  channel          String               @db.VarChar(16)
+  recipient_email  String?              @db.VarChar(191)
+  recipient_phone  String?              @db.VarChar(32)
+  message_subject  String?              @db.VarChar(255)
+  message_body     String?              @db.Text
+  sent_at          DateTime             @default(now())
+
+  company          Company              @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  enrollment       GroupClassEnrollment @relation(fields: [enrollment_id], references: [id], onDelete: Cascade)
+  installment      EnrollmentInstallment @relation(fields: [installment_id], references: [id], onDelete: Cascade)
+  sent_by_admin    User?                @relation("InstallmentReminderSentBy", fields: [sent_by_admin_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, sent_at])
+  @@index([enrollment_id, sent_at])
+  @@index([installment_id, sent_at])
+  @@index([sent_by_admin_id])
+  @@index([channel, sent_at])
+  @@map("installment_reminder_log")
 }
 
 // ─── Session Attendance ─────────────────────────────────────────────────────

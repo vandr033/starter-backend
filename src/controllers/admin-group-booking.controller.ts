@@ -6,6 +6,7 @@ import * as GroupAttendanceService from '../services/group-attendance.service';
 import * as GroupTicketService from '../services/group-ticket.service';
 import * as GroupMetricsService from '../services/group-metrics.service';
 import * as InstallmentService from '../services/enrollment-installment.service';
+import * as GroupPaymentsService from '../services/group-payments.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -61,6 +62,13 @@ function parseDateQuery(raw: unknown): Date | undefined {
     return date;
 }
 
+function parsePositiveInt(raw: unknown): number | undefined {
+    if (typeof raw !== 'string' || raw.trim().length === 0) return undefined;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+    return parsed;
+}
+
 export async function confirmEventBooking(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;
@@ -84,6 +92,19 @@ export async function unconfirmEventBooking(req: AuthenticatedRequest, res: Resp
     }
 
     const result = await GroupBookingService.unconfirmEventBooking(companyId, bookingId);
+    return res.status(result.code).json(result);
+}
+
+export async function approveEventBookingQrPayment(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const bookingId = parseId(req.params.bookingId);
+    if (!bookingId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid bookingId' });
+    }
+
+    const result = await GroupBookingService.approveEventBookingQrPayment(companyId, bookingId);
     return res.status(result.code).json(result);
 }
 
@@ -337,6 +358,76 @@ export async function confirmInstallmentQrPayment(req: AuthenticatedRequest, res
     }
 
     const result = await InstallmentService.confirmInstallmentQrPayment(companyId, installmentId, adminUserId);
+    return res.status(result.code).json(result);
+}
+
+export async function listGroupPayments(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const result = await GroupPaymentsService.listCompanyGroupPayments(companyId, {
+        search: typeof req.query.search === 'string' ? req.query.search : undefined,
+        customer_key: typeof req.query.customer_key === 'string' ? req.query.customer_key : undefined,
+        class_id: parsePositiveInt(req.query.class_id),
+        payment_status: req.query.payment_status as any,
+        payment_method: req.query.payment_method as any,
+        row_type: req.query.row_type as any,
+        due_window: req.query.due_window as any,
+        overdue_only: req.query.overdue_only === 'true',
+        page: parsePositiveInt(req.query.page),
+        limit: parsePositiveInt(req.query.limit),
+    });
+
+    return res.status(result.code).json(result);
+}
+
+export async function sendInstallmentReminder(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const installmentId = parseId(req.params.installmentId);
+    if (!installmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid installmentId' });
+    }
+
+    const adminUserId = req.authUser?.id;
+    if (!adminUserId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const result = await GroupPaymentsService.sendInstallmentReminder(companyId, installmentId, adminUserId);
+    return res.status(result.code).json(result);
+}
+
+export async function bulkSendInstallmentReminders(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const adminUserId = req.authUser?.id;
+    if (!adminUserId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const payload = (req as any).validated ?? req.body ?? {};
+    const result = await GroupPaymentsService.bulkSendInstallmentReminders(companyId, adminUserId, {
+        installment_ids: Array.isArray(payload.installment_ids) ? payload.installment_ids : undefined,
+        overdue_only: payload.overdue_only === true,
+        class_id: typeof payload.class_id === 'number' ? payload.class_id : parsePositiveInt(payload.class_id),
+        customer_key: typeof payload.customer_key === 'string' ? payload.customer_key : undefined,
+    });
+    return res.status(result.code).json(result);
+}
+
+export async function listInstallmentReminders(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const installmentId = parseId(req.params.installmentId);
+    if (!installmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid installmentId' });
+    }
+
+    const result = await GroupPaymentsService.listInstallmentReminderLogs(companyId, installmentId);
     return res.status(result.code).json(result);
 }
 

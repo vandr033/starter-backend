@@ -5,6 +5,7 @@ import * as GroupClassService from '../services/group-class.service';
 import * as GroupSessionService from '../services/group-session.service';
 import * as GroupBookingService from '../services/group-booking.service';
 import * as InstallmentService from '../services/enrollment-installment.service';
+import * as GroupPaymentsService from '../services/group-payments.service';
 import { resendTicketByCode } from '../services/group-ticket.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
@@ -268,7 +269,17 @@ export async function getMyInstallments(req: AuthenticatedRequest, res: Response
         return res.status(400).json({ code: 400, error: true, message: 'Invalid enrollmentId' });
     }
 
-    const result = await InstallmentService.listInstallments(companyId, enrollmentId);
+    const result = await GroupPaymentsService.getEnrollmentInstallmentPlan(companyId, enrollmentId, userId);
+    return res.status(result.code).json(result);
+}
+
+export async function getMyPaymentPlans(req: AuthenticatedRequest, res: Response) {
+    const userId = req.authUser?.id;
+    if (!userId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const result = await GroupPaymentsService.listMyPaymentPlans(userId);
     return res.status(result.code).json(result);
 }
 

@@ -9,6 +9,7 @@ import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 import { logger } from '../config/logger';
 import axios from 'axios';
+import * as GroupPaymentsService from './group-payments.service';
 
 // Runtime import to avoid compile-time type dependency in environments without installed typings.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -289,6 +290,26 @@ export async function getCustomersHistory(
         message: 'Customer booking history retrieved successfully',
         data: result,
     };
+}
+
+export async function getCustomerGroupPayments(
+    companyId: number,
+    params: { customerKey: string; page: number; limit: number }
+) {
+    if (!params.customerKey || !params.customerKey.trim()) {
+        return {
+            code: 400,
+            error: true,
+            message: 'customer_key is required',
+        };
+    }
+
+    return GroupPaymentsService.getCustomerGroupPayments(
+        companyId,
+        params.customerKey.trim(),
+        params.page,
+        params.limit,
+    );
 }
 
 export async function exportCustomers(

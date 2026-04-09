@@ -36,6 +36,26 @@ export async function getCustomerHistory(req: AuthenticatedRequest, res: Respons
     }
 }
 
+export async function getCustomerGroupPayments(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const customerKey = (req.query.customer_key as string | undefined) || '';
+        const page = Number(req.query.page || 1);
+        const limit = Number(req.query.limit || 25);
+
+        const result = await CustomerService.getCustomerGroupPayments(companyId, {
+            customerKey,
+            page,
+            limit,
+        });
+
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error getting customer group payments:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
 export async function exportCustomers(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
