@@ -26,6 +26,7 @@ export async function upsertTheme(data: {
     heroVariant: string;
     servicesVariant: string;
     teamVariant: string;
+    homeCTAButtons?: object | null;
 }) {
     return prisma.themeConfig.upsert({
         where: {
@@ -41,6 +42,7 @@ export async function upsertTheme(data: {
             hero_variant: data.heroVariant,
             services_variant: data.servicesVariant,
             team_variant: data.teamVariant,
+            home_cta_buttons: data.homeCTAButtons ?? undefined,
         },
         create: {
             company_id: data.companyId,
@@ -53,6 +55,7 @@ export async function upsertTheme(data: {
             hero_variant: data.heroVariant,
             services_variant: data.servicesVariant,
             team_variant: data.teamVariant,
+            home_cta_buttons: data.homeCTAButtons ?? undefined,
         },
     });
 }

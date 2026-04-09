@@ -17,7 +17,37 @@ const DEFAULT_THEME = {
     hero_variant: 'hero-cinematic',
     services_variant: 'services-grid',
     team_variant: 'team-cards',
+    home_cta_buttons: null,
 };
+
+const VALID_CTA_DESTINATIONS = ['booking', 'services', 'free-events', 'events', 'classes'];
+
+function validateCTAButtons(buttons: unknown): string | null {
+    if (!Array.isArray(buttons)) return 'home_cta_buttons must be an array';
+    if (buttons.length > 5) return 'home_cta_buttons cannot have more than 5 buttons';
+    for (let i = 0; i < buttons.length; i++) {
+        const btn = buttons[i] as Record<string, unknown>;
+        if (!VALID_CTA_DESTINATIONS.includes(btn.destination as string)) {
+            return `Invalid destination "${btn.destination}" at index ${i}. Must be one of: ${VALID_CTA_DESTINATIONS.join(', ')}`;
+        }
+        if (typeof btn.label !== 'string' || btn.label.trim() === '') {
+            return `Button at index ${i} must have a non-empty label`;
+        }
+        if (typeof btn.color !== 'string' || !/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(btn.color)) {
+            return `Button at index ${i} has invalid color format. Must be a hex color (e.g., #ffffff)`;
+        }
+        if (typeof btn.opacity !== 'number' || btn.opacity < 0 || btn.opacity > 100) {
+            return `Button at index ${i} opacity must be a number between 0 and 100`;
+        }
+        if (typeof btn.enabled !== 'boolean') {
+            return `Button at index ${i} enabled must be a boolean`;
+        }
+        if (typeof btn.order !== 'number') {
+            return `Button at index ${i} order must be a number`;
+        }
+    }
+    return null;
+}
 
 const VALID_HERO_VARIANTS = ['hero-cinematic', 'hero-split', 'hero-minimal'];
 const VALID_SERVICES_VARIANTS = ['services-grid', 'services-list'];
@@ -62,6 +92,7 @@ export async function getTheme(companyId: number): Promise<ThemeResult> {
                 hero_variant: theme.hero_variant || 'hero-cinematic',
                 services_variant: theme.services_variant || 'services-grid',
                 team_variant: theme.team_variant || 'team-cards',
+                home_cta_buttons: theme.home_cta_buttons ?? null,
             },
         };
     } catch (error: any) {
@@ -88,6 +119,7 @@ export interface ThemeUpdateInput {
     hero_variant?: string;
     services_variant?: string;
     team_variant?: string;
+    home_cta_buttons?: unknown[] | null;
 }
 
 export async function updateTheme(
@@ -178,6 +210,14 @@ export async function updateTheme(
             };
         }
 
+        // Validate home_cta_buttons if provided
+        if (input.home_cta_buttons !== undefined && input.home_cta_buttons !== null) {
+            const ctaError = validateCTAButtons(input.home_cta_buttons);
+            if (ctaError) {
+                return { code: 400, message: ctaError, error: true };
+            }
+        }
+
         // Upsert theme
         await ThemeRepo.upsertTheme({
             companyId,
@@ -190,6 +230,7 @@ export async function updateTheme(
             heroVariant,
             servicesVariant,
             teamVariant,
+            homeCTAButtons: input.home_cta_buttons !== undefined ? input.home_cta_buttons : undefined,
         });
 
         // Get updated theme
@@ -209,6 +250,7 @@ export async function updateTheme(
                 hero_variant: updatedTheme!.hero_variant,
                 services_variant: updatedTheme!.services_variant,
                 team_variant: updatedTheme!.team_variant,
+                home_cta_buttons: updatedTheme!.home_cta_buttons ?? null,
             },
         };
     } catch (error: any) {
