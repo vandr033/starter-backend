@@ -1,5 +1,15 @@
 import { prisma } from '../prisma/client';
-import { PageBackgroundPreset, CornerRadius } from '@prisma/client';
+import { PageBackgroundPreset, CornerRadius, Prisma } from '@prisma/client';
+
+/**
+ * Coerce a JSON field value so Prisma accepts it.
+ * Prisma requires Prisma.JsonNull (not plain null) for nullable Json columns.
+ */
+function toJsonValue(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return Prisma.JsonNull;
+    return value as Prisma.InputJsonValue;
+}
 
 /**
  * Get theme config for a company
@@ -41,10 +51,10 @@ export async function upsertTheme(data: {
         hero_variant: data.heroVariant,
         services_variant: data.servicesVariant,
         team_variant: data.teamVariant,
-        ...(data.homeCTAButtons !== undefined && { home_cta_buttons: data.homeCTAButtons }),
-        ...(data.homeSectionOrder !== undefined && { home_section_order: data.homeSectionOrder }),
-        ...(data.footerConfig !== undefined && { footer_config: data.footerConfig }),
-        ...(data.announcementBanners !== undefined && { announcement_banners: data.announcementBanners }),
+        ...(data.homeCTAButtons !== undefined && { home_cta_buttons: toJsonValue(data.homeCTAButtons) }),
+        ...(data.homeSectionOrder !== undefined && { home_section_order: toJsonValue(data.homeSectionOrder) }),
+        ...(data.footerConfig !== undefined && { footer_config: toJsonValue(data.footerConfig) }),
+        ...(data.announcementBanners !== undefined && { announcement_banners: toJsonValue(data.announcementBanners) }),
     };
 
     return prisma.themeConfig.upsert({
