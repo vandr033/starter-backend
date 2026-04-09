@@ -194,6 +194,7 @@ export const getCompanyPublicPage = async (slug: string) => {
         hero_variant: (theme_config as any).hero_variant || 'hero-cinematic',
         services_variant: (theme_config as any).services_variant || 'services-grid',
         team_variant: (theme_config as any).team_variant || 'team-cards',
+        home_cta_buttons: (theme_config as any).home_cta_buttons ?? null,
       }
       : DEFAULT_THEME;
 
