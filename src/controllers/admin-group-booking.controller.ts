@@ -121,6 +121,22 @@ export async function cancelEventBooking(req: AuthenticatedRequest, res: Respons
     return res.status(result.code).json(result);
 }
 
+export async function sendEventMassMessage(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const eventId = parseId(req.params.eventId);
+    if (!eventId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
+    }
+
+    const { message } = req.body as { message?: string };
+    const result = await GroupBookingService.sendEventMassMessage(companyId, eventId, {
+        message: message || '',
+    });
+    return res.status(result.code).json(result);
+}
+
 export async function confirmClassEnrollment(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;

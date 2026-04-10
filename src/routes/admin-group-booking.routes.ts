@@ -54,6 +54,14 @@ router.post(
     requirePlanFeature('GROUP_EVENTS'),
     AdminGroupBookingController.cancelEventBooking,
 );
+router.post(
+    '/events/:eventId/mass-message',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_EVENTS'),
+    requirePlanFeature('BULK_WHATSAPP_MESSAGING'),
+    AdminGroupBookingController.sendEventMassMessage,
+);
 
 router.post(
     '/classes/enrollments/:enrollmentId/confirm',

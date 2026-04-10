@@ -17,11 +17,13 @@ import {
 } from './group-ticket.service';
 import { generateInstallmentsForEnrollment } from './enrollment-installment.service';
 import { buildWaitlistSpotOpenedTemplate, notifyGroupBookingCreated } from '../utils/groupNotifications';
-import { isTemporaryEmailAddress, sendGenericEmail } from '../utils/sendEmail';
+import { isTemporaryEmailAddress, sendCustomerMassMessageEmail, sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const WHATSAPP_MIN_INTERVAL_MS = 350;
 
 function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
     const cleanPhone = (phone ?? '').replace(/\D/g, '');
@@ -109,6 +111,15 @@ function getEventBookingUrl(companySlug: string | null | undefined, eventId: num
 function buildDisplayPhone(prefix?: string | null, phone?: string | null): string | null {
     const digits = buildFullPhone(prefix, phone);
     return digits ? `+${digits}` : null;
+}
+
+function normalizeEmail(email?: string | null): string | null {
+    const value = (email || '').trim().toLowerCase();
+    return value || null;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatDateRange(startAt?: Date | null, endAt?: Date | null): string | null {
@@ -552,6 +563,224 @@ export async function listEventBookings(companyId: number, eventId: number): Pro
     );
 
     return { code: 200, error: false, message: 'Bookings retrieved', data: allBookings };
+}
+
+export async function sendEventMassMessage(
+    companyId: number,
+    eventId: number,
+    payload: { message: string },
+): Promise<ServiceResult> {
+    const message = (payload.message || '').trim();
+    if (!message) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Message body is required',
+        };
+    }
+
+    if (message.length > 1500) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Message body cannot exceed 1500 characters',
+        };
+    }
+
+    const [company, event, localeConfig] = await Promise.all([
+        prisma.company.findUnique({
+            where: { id: companyId, deleted_at: null },
+            select: { id: true, name: true },
+        }),
+        prisma.groupEvent.findFirst({
+            where: { id: eventId, company_id: companyId, deleted_at: null },
+            select: { id: true, title: true },
+        }),
+        prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        }),
+    ]);
+
+    if (!company) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Company not found',
+        };
+    }
+
+    if (!event) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Event not found',
+        };
+    }
+
+    const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+
+    const [bookings, freeRegistrations] = await Promise.all([
+        prisma.groupEventBooking.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+                status: { in: [GroupBookingStatus.PENDING, GroupBookingStatus.CONFIRMED, GroupBookingStatus.WAITLISTED] },
+            },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phone_prefix: true,
+                        phoneNumber: true,
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.freeEventRegistration.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+                status: { in: ['PENDING', 'CONFIRMED'] },
+            },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phone_prefix: true,
+                        phoneNumber: true,
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+    ]);
+
+    const recipients = [
+        ...bookings.map((booking) => ({
+            email: normalizeEmail(booking.user?.email),
+            phone: booking.user?.phoneNumber || null,
+            phonePrefix: booking.user?.phone_prefix || null,
+        })),
+        ...freeRegistrations.map((registration) => ({
+            email: normalizeEmail(registration.user?.email || registration.email),
+            phone: registration.user?.phoneNumber || registration.phone_number,
+            phonePrefix: registration.user?.phone_prefix || registration.phone_prefix,
+        })),
+    ];
+
+    const seenWhatsappTargets = new Set<string>();
+    const seenEmailTargets = new Set<string>();
+    let whatsappSent = 0;
+    let emailSent = 0;
+    let noContact = 0;
+    let failed = 0;
+    let duplicatesSkipped = 0;
+    let lastWhatsappAt = 0;
+
+    const whatsappText =
+        locale === 'en'
+            ? `${company.name} · ${event.title}\n\n${message}`
+            : `${company.name} · ${event.title}\n\n${message}`;
+
+    for (const recipient of recipients) {
+        const whatsappTarget = buildFullPhone(recipient.phonePrefix, recipient.phone);
+        const emailTarget = normalizeEmail(recipient.email);
+
+        if (whatsappTarget) {
+            if (seenWhatsappTargets.has(whatsappTarget)) {
+                duplicatesSkipped += 1;
+                continue;
+            }
+
+            const elapsed = Date.now() - lastWhatsappAt;
+            const waitMs = Math.max(0, WHATSAPP_MIN_INTERVAL_MS - elapsed);
+            if (waitMs > 0) {
+                await sleep(waitMs);
+            }
+
+            const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
+            if (waResult !== -1) {
+                whatsappSent += 1;
+                seenWhatsappTargets.add(whatsappTarget);
+                lastWhatsappAt = Date.now();
+                continue;
+            }
+
+            failed += 1;
+            continue;
+        }
+
+        if (emailTarget) {
+            if (seenEmailTargets.has(emailTarget)) {
+                duplicatesSkipped += 1;
+                continue;
+            }
+
+            const emailResult = await sendCustomerMassMessageEmail({
+                email: emailTarget,
+                companyName: company.name,
+                message,
+                locale,
+            });
+
+            if (emailResult === 1) {
+                emailSent += 1;
+                seenEmailTargets.add(emailTarget);
+            } else {
+                failed += 1;
+            }
+            continue;
+        }
+
+        noContact += 1;
+    }
+
+    const totalSent = whatsappSent + emailSent;
+    logger.info(
+        {
+            event: 'group_event_mass_message_completed',
+            companyId,
+            companyName: company.name,
+            groupEventId: eventId,
+            groupEventTitle: event.title,
+            locale,
+            totalRecipients: recipients.length,
+            totalSent,
+            whatsappSent,
+            emailSent,
+            noContact,
+            failed,
+            duplicatesSkipped,
+            messageLength: message.length,
+        },
+        'Group event mass message completed',
+    );
+
+    return {
+        code: 200,
+        error: false,
+        message: totalSent > 0 ? 'Mass message sent' : 'No messages sent',
+        data: {
+            total_customers: recipients.length,
+            sent_total: totalSent,
+            sent_whatsapp: whatsappSent,
+            sent_email: emailSent,
+            skipped_no_contact: noContact,
+            skipped_duplicates: duplicatesSkipped,
+            failed,
+        },
+    };
 }
 
 export async function listEventInterests(companyId: number, eventId: number): Promise<ServiceResult> {
