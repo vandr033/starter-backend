@@ -11,6 +11,7 @@ import bcrypt from "bcryptjs";
 import { sendWhatsappCode } from "../utils/whatsappSender";
 import { sendEmailCode } from "../utils/sendEmail";
 import { prisma } from "../prisma/client";
+import { canonicalizePhoneParts } from "../utils/phoneNormalization";
 
 function getOtpResendCooldownSeconds(): number {
     const safe = Number.isFinite(OTP_RESEND_COOLDOWN_SECONDS) ? OTP_RESEND_COOLDOWN_SECONDS : 60;
@@ -124,21 +125,19 @@ export async function updateProfile(
         const nextDisplayName =
             `${normalizedFirstName} ${normalizedLastName}`.trim() || existing.name || "User";
 
-        let nextPhone: string | null = existing.phoneNumber || null;
-        if (data.phoneNumber !== undefined) {
-            const clean = data.phoneNumber.replace(/\D/g, "");
-            nextPhone = clean.length > 0 ? clean : null;
-        }
+        const canonicalPhone = canonicalizePhoneParts({
+            phonePrefix: data.phone_prefix !== undefined ? data.phone_prefix : existing.phone_prefix,
+            phoneNumber: data.phoneNumber !== undefined ? data.phoneNumber : existing.phoneNumber,
+        });
+        let nextPhone: string | null =
+            data.phoneNumber !== undefined || data.phone_prefix !== undefined
+                ? canonicalPhone.phoneNumber
+                : (existing.phoneNumber || null);
 
-        let nextPhonePrefix: string | null = existing.phone_prefix || null;
-        if (data.phone_prefix !== undefined) {
-            const cleanPrefix = data.phone_prefix.replace(/\D/g, "");
-            nextPhonePrefix = cleanPrefix.length > 0 ? cleanPrefix : null;
-        }
-
-        if (nextPhone && !nextPhonePrefix) {
-            nextPhonePrefix = "591";
-        }
+        let nextPhonePrefix: string | null =
+            data.phoneNumber !== undefined || data.phone_prefix !== undefined
+                ? canonicalPhone.phonePrefix
+                : (existing.phone_prefix || null);
 
         if (nextPhone) {
             const userWithPhone = await prisma.user.findUnique({

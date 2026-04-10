@@ -1,9 +1,16 @@
 import { prisma } from '../prisma/client';
+import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 
 export const getUserByPhone = (phoneNumber: string, phonePrefix: string) =>
-  prisma.user.findUnique({
-    where: { phoneNumber, phone_prefix: phonePrefix },
-  });
+  {
+    const canonicalPhone = canonicalizePhoneParts({ phonePrefix, phoneNumber });
+    return prisma.user.findUnique({
+      where: {
+        phoneNumber: canonicalPhone.phoneNumber || '',
+        phone_prefix: canonicalPhone.phonePrefix || '',
+      },
+    });
+  };
 
 export const getUserByEmail = (email: string) =>
   prisma.user.findUnique({
@@ -31,14 +38,15 @@ export const verifyUserEmail = (id: string) => {
 }
 
 export const createUser = (name: string, email: string, first_name: string, last_name: string, phoneNumber: string, phone_prefix: string) => {
+  const canonicalPhone = canonicalizePhoneParts({ phonePrefix: phone_prefix, phoneNumber });
   return prisma.user.create({
     data: {
       name,
       email,
       first_name,
       last_name,
-      phoneNumber,
-      phone_prefix,
+      phoneNumber: canonicalPhone.phoneNumber || phoneNumber,
+      phone_prefix: canonicalPhone.phonePrefix || phone_prefix,
     },
   });
 }
@@ -82,12 +90,13 @@ export const updateUserEmail = (id: string, email: string) => {
 }
 
 export const updateUserPhone = (id: string, phoneNumber: string, phone_prefix?: string) => {
+  const canonicalPhone = canonicalizePhoneParts({ phonePrefix: phone_prefix, phoneNumber });
   return prisma.user.update({
     where: { id },
     data: {
-      phoneNumber,
+      phoneNumber: canonicalPhone.phoneNumber || phoneNumber,
       phoneNumberVerified: true,
-      ...(phone_prefix ? { phone_prefix } : {}),
+      ...(canonicalPhone.phonePrefix ? { phone_prefix: canonicalPhone.phonePrefix } : {}),
     },
   });
 }

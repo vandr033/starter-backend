@@ -12,6 +12,7 @@ import { VerificationChannel, VerificationPurpose } from "../types/verification-
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { sendWhatsappCode } from "../utils/whatsappSender";
+import { canonicalizePhoneParts } from "../utils/phoneNormalization";
 import { sendEmailCode } from "../utils/sendEmail";
 import { getAuth } from "../config/auth";
 import { logger } from "../config/logger";
@@ -240,7 +241,11 @@ export async function completeCustomerRegistrationEmail(
 // ────────────────────────────────────────────
 
 function normalizePhone(phone: string, phonePrefix: string) {
-  return phonePrefix.trim() + phone.trim();
+  const canonicalPhone = canonicalizePhoneParts({
+    phonePrefix,
+    phoneNumber: phone,
+  });
+  return canonicalPhone.fullPhone || `${phonePrefix.trim()}${phone.trim()}`;
 }
 
 export async function sendVerificationCodePhone(

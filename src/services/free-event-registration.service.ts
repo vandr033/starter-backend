@@ -14,6 +14,7 @@ import { sendLoginOtpEmail, sendLoginOtpPhone } from './auth.service';
 import { getAuth } from '../config/auth';
 import crypto from 'crypto';
 import { generateUniqueSixDigitCode } from './group-ticket.service';
+import { canonicalizePhoneParts, normalizePhoneDigits as normalizePhoneDigitsShared } from '../utils/phoneNormalization';
 
 // ─────────────────────────────────────────────
 // Types
@@ -102,26 +103,20 @@ function normalizeEmail(email: string): string {
 }
 
 function normalizePhoneDigits(value?: string | null): string {
-    return (value ?? '').replace(/\D/g, '');
+    return normalizePhoneDigitsShared(value);
 }
 
 function normalizePhonePrefix(prefix?: string | null): string {
-    return normalizePhoneDigits(prefix);
+    return canonicalizePhoneParts({ phonePrefix: prefix, phoneNumber: '1' }).phonePrefix ?? '';
 }
 
 function normalizePhoneNumber(number?: string | null): string {
-    return normalizePhoneDigits(number);
+    return canonicalizePhoneParts({ phoneNumber: number }).phoneNumber ?? '';
 }
 
 function buildE164Phone(prefix?: string | null, number?: string | null): string | null {
-    const prefixDigits = normalizePhonePrefix(prefix);
-    const numberDigits = normalizePhoneNumber(number);
-    if (!numberDigits) return null;
-    if (!prefixDigits) return `+${numberDigits}`;
-    if (numberDigits.startsWith(prefixDigits)) {
-        return `+${numberDigits}`;
-    }
-    return `+${prefixDigits}${numberDigits}`;
+    const canonical = canonicalizePhoneParts({ phonePrefix: prefix, phoneNumber: number });
+    return canonical.fullPhone ? `+${canonical.fullPhone}` : null;
 }
 
 function buildPhoneMatchVariants(phone?: string | null, prefix?: string | null): Array<{ number: string; prefix?: string }> {
@@ -397,7 +392,10 @@ async function createAccountForFreeRegistration(input: {
         throw new Error('Could not create account user');
     }
 
-    const canonicalPhone = buildE164Phone(input.phonePrefix, input.phoneNumber);
+    const canonicalPhone = canonicalizePhoneParts({
+        phonePrefix: input.phonePrefix,
+        phoneNumber: input.phoneNumber,
+    });
     await prisma.user.update({
         where: { id: createdUserId },
         data: {
@@ -405,8 +403,8 @@ async function createAccountForFreeRegistration(input: {
             last_name: input.lastName,
             gender: input.gender,
             age: input.age,
-            phone_prefix: normalizePhonePrefix(input.phonePrefix) || null,
-            phoneNumber: canonicalPhone ?? undefined,
+            phone_prefix: canonicalPhone.phonePrefix ?? null,
+            phoneNumber: canonicalPhone.phoneNumber ?? undefined,
             phoneNumberVerified: false,
         },
     });
@@ -804,8 +802,12 @@ export async function getFreeRegistrationState(
     // Check existing registration with safe identity matching (prevents cross-account leakage).
     const normalizedUserEmail = userEmail ? normalizeEmail(userEmail) : null;
     const profileEmail = user?.email ? normalizeEmail(user.email) : null;
-    const profilePhonePrefix = user?.phone_prefix?.trim();
-    const profilePhoneNumber = user?.phoneNumber?.trim();
+    const canonicalProfilePhone = canonicalizePhoneParts({
+        phonePrefix: user?.phone_prefix?.trim(),
+        phoneNumber: user?.phoneNumber?.trim(),
+    });
+    const profilePhonePrefix = canonicalProfilePhone.phonePrefix;
+    const profilePhoneNumber = canonicalProfilePhone.phoneNumber;
     const profilePhoneVariants = buildPhoneMatchVariants(profilePhoneNumber, profilePhonePrefix);
     const identityEmails = new Set<string>([
         ...(normalizedUserEmail ? [normalizedUserEmail] : []),
@@ -862,8 +864,8 @@ export async function getFreeRegistrationState(
             gender: user.gender ?? '',
             age: user.age,
             email: user.email ?? '',
-            phonePrefix: user.phone_prefix ?? '591',
-            phoneNumber: user.phoneNumber ?? '',
+            phonePrefix: canonicalProfilePhone.phonePrefix ?? '591',
+            phoneNumber: canonicalProfilePhone.phoneNumber ?? '',
         };
     }
 
@@ -898,13 +900,18 @@ export async function submitFreeRegistration(
     }
 
     // Validate required fields
+    const canonicalPhone = canonicalizePhoneParts({
+        phonePrefix: input.phonePrefix?.trim() ?? '',
+        phoneNumber: input.phoneNumber?.trim() ?? '',
+    });
+
     const trimmed = {
         firstName: input.firstName?.trim() ?? '',
         lastName: input.lastName?.trim() ?? '',
         gender: input.gender?.trim().toUpperCase() ?? '',
         email: normalizeEmail(input.email ?? ''),
-        phonePrefix: input.phonePrefix?.trim() ?? '',
-        phoneNumber: input.phoneNumber?.trim() ?? '',
+        phonePrefix: canonicalPhone.phonePrefix ?? '',
+        phoneNumber: canonicalPhone.phoneNumber ?? '',
     };
 
     if (!trimmed.firstName) return { code: 400, error: true, message: 'firstName is required' };
@@ -1127,6 +1134,10 @@ async function syncUserProfile(
     fields: { first_name: string; last_name: string; gender: string; age: number; phonePrefix: string; phoneNumber: string },
 ): Promise<void> {
     try {
+        const canonicalPhone = canonicalizePhoneParts({
+            phonePrefix: fields.phonePrefix,
+            phoneNumber: fields.phoneNumber,
+        });
         await prisma.user.update({
             where: { id: userId },
             data: {
@@ -1134,8 +1145,8 @@ async function syncUserProfile(
                 last_name: fields.last_name || undefined,
                 gender: fields.gender || undefined,
                 age: fields.age || undefined,
-                phone_prefix: fields.phonePrefix || undefined,
-                phoneNumber: fields.phoneNumber || undefined,
+                phone_prefix: canonicalPhone.phonePrefix || undefined,
+                phoneNumber: canonicalPhone.phoneNumber || undefined,
                 name: [fields.first_name, fields.last_name].filter(Boolean).join(' ') || undefined,
             },
         });

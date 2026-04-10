@@ -53,11 +53,21 @@ type EventMassMessagePayload = {
 };
 
 function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
-    const cleanPhone = (phone ?? '').replace(/\D/g, '');
+    const cleanPhone = normalizePhoneDigits(phone);
     if (!cleanPhone) return null;
 
-    const cleanPrefix = (prefix ?? '591').replace(/\D/g, '');
-    return `${cleanPrefix}${cleanPhone}`;
+    const cleanPrefix = normalizePhoneDigits(prefix);
+    const effectivePrefix = cleanPrefix || (cleanPhone.length <= 9 ? '591' : '');
+
+    if (!effectivePrefix) {
+        return cleanPhone;
+    }
+
+    if (cleanPhone.startsWith(effectivePrefix) && cleanPhone.length > effectivePrefix.length + 5) {
+        return cleanPhone;
+    }
+
+    return `${effectivePrefix}${cleanPhone}`;
 }
 
 function normalizePhoneDigits(value?: string | null): string {
@@ -796,6 +806,7 @@ async function runEventMassMessage(
         const wantsEmail = deliveryMode === 'EMAIL' || deliveryMode === 'BOTH';
         let attemptedChannel = false;
         let hasSelectedContact = false;
+        let whatsappFailedInAuto = false;
 
         if (wantsWhatsapp && whatsappTarget) {
             hasSelectedContact = true;
@@ -839,8 +850,12 @@ async function runEventMassMessage(
                         continue;
                     }
                 } else {
-                    failed += 1;
-                    markFailedTarget(recipient, 'WHATSAPP');
+                    if (deliveryMode === 'AUTO') {
+                        whatsappFailedInAuto = true;
+                    } else {
+                        failed += 1;
+                        markFailedTarget(recipient, 'WHATSAPP');
+                    }
                     logger.error(
                         {
                             event: 'group_event_mass_message_whatsapp_failed',
@@ -856,11 +871,6 @@ async function runEventMassMessage(
                         },
                         'Group event mass message failed on WhatsApp send',
                     );
-                    if (deliveryMode === 'AUTO') {
-                        processed += 1;
-                        await emitProgress();
-                        continue;
-                    }
                 }
             }
         }
@@ -926,6 +936,14 @@ async function runEventMassMessage(
                         'Group event mass message failed on email send',
                     );
                 }
+            }
+        }
+
+        if (deliveryMode === 'AUTO' && whatsappFailedInAuto) {
+            const emailSucceeded = emailTarget ? seenEmailTargets.has(emailTarget) : false;
+            if (!emailSucceeded) {
+                failed += 1;
+                markFailedTarget(recipient, 'WHATSAPP');
             }
         }
 
