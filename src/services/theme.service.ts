@@ -242,6 +242,9 @@ export async function updateTheme(
                 if (typeof b.id !== 'string' || b.id.trim() === '') return { code: 400, message: 'Each banner must have a non-empty id', error: true };
                 if (typeof b.message !== 'string' || b.message.trim() === '') return { code: 400, message: 'Each banner must have a non-empty message', error: true };
                 if (typeof b.enabled !== 'boolean') return { code: 400, message: 'Each banner enabled must be boolean', error: true };
+                if (b.sticky !== undefined && typeof b.sticky !== 'boolean') {
+                    return { code: 400, message: 'Each banner sticky must be boolean when provided', error: true };
+                }
             }
         }
 

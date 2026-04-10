@@ -24,10 +24,6 @@ function buildTrustedOrigins(): string[] {
     "http://ow0ggc084gkkk844s4s8gow8.89.167.82.92.sslip.io",
     "https://priconpri.com",
     "https://www.priconpri.com",
-    "https://bookinsite.com",
-    "https://www.bookinsite.com",
-    "https://bookinsite.com.ar",
-    "https://www.bookinsite.com.ar",
   ];
 
   const configured = [
@@ -90,7 +86,7 @@ async function createAuth() {
       },
       onPasswordReset: async () => {},
     },
-    appName: "BookInSite",
+    appName: "PriconPri",
     plugins: [
       phoneNumber({
         otpLength: 6,
