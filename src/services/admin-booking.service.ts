@@ -30,6 +30,48 @@ const reminderLastWhatsappAtByCompany = new Map<number, number>();
 type CustomerReminderChannel = ReminderChannel | 'NONE';
 export type NoShowNotificationChannel = DirectNotificationChannel;
 
+interface AdminCustomerInput {
+    customer_id?: number;
+    client_name?: string;
+    client_phone?: string;
+    client_email?: string;
+}
+
+interface AdminPaymentInput {
+    is_paid?: boolean;
+    payment_method?: PaymentMethod;
+    qr_proof_image_url?: string | null;
+}
+
+interface ResolvedAdminCustomer {
+    customerId: number | null;
+    clientName: string;
+    clientEmail: string | null;
+    clientPhonePrefix: string | null;
+    clientPhoneNumber: string | null;
+}
+
+interface ResolvedAdminPayment {
+    paymentMethod: PaymentMethod;
+    paymentStatus: PaymentStatus;
+    qrProofImageUrl: string | null;
+}
+
+interface PreparedAdminBookingSession {
+    startAt: Date;
+    endAt: Date;
+    totalPrice: number;
+    services: Awaited<ReturnType<typeof BookingRepo.getServicesByIds>>;
+    serviceSnapshots: Array<{
+        service_id: number;
+        service_name_snapshot: string;
+        price_cents_snapshot: number;
+        duration_minutes_snapshot: number;
+        position: number;
+    }>;
+    payment: ResolvedAdminPayment;
+}
+
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -135,8 +177,361 @@ function resolveChannel(contact: {
     return 'NONE';
 }
 
+function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
+    return aStart < bEnd && aEnd > bStart;
+}
+
 function isNoShowMarked(notes?: string | null): boolean {
     return (notes || '').includes(NO_SHOW_NOTE_MARKER);
+}
+
+function buildCustomerName(user?: {
+    name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+} | null, fallback?: string | null): string {
+    const first = user?.first_name?.trim();
+    const last = user?.last_name?.trim();
+    const full = [first, last].filter(Boolean).join(' ').trim();
+    return full || user?.name?.trim() || fallback?.trim() || 'Customer';
+}
+
+function parseClientPhone(clientPhone?: string | null): {
+    phonePrefix: string | null;
+    phoneNumber: string | null;
+} {
+    const raw = (clientPhone || '').trim();
+    if (!raw) {
+        return { phonePrefix: null, phoneNumber: null };
+    }
+
+    const parts = raw.split(/\s+/);
+    if (parts.length > 1 && /^\+\d+$/.test(parts[0])) {
+        return {
+            phonePrefix: parts[0],
+            phoneNumber: parts.slice(1).join(' ') || null,
+        };
+    }
+
+    return {
+        phonePrefix: null,
+        phoneNumber: raw,
+    };
+}
+
+async function resolveAdminCustomer(
+    companyId: number,
+    input: AdminCustomerInput,
+): Promise<{ customer: ResolvedAdminCustomer } | AdminBookingResult> {
+    if (input.customer_id) {
+        const customerProfile = await prisma.customerProfile.findFirst({
+            where: {
+                id: input.customer_id,
+                company_id: companyId,
+                deleted_at: null,
+            },
+            include: {
+                user: {
+                    select: {
+                        name: true,
+                        first_name: true,
+                        last_name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+            },
+        });
+
+        if (!customerProfile) {
+            return {
+                code: 404,
+                message: 'Customer not found for this company',
+                error: true,
+            };
+        }
+
+        return {
+            customer: {
+                customerId: customerProfile.id,
+                clientName: buildCustomerName(customerProfile.user),
+                clientEmail: customerProfile.user.email || null,
+                clientPhonePrefix: customerProfile.user.phone_prefix || null,
+                clientPhoneNumber: customerProfile.user.phoneNumber || null,
+            },
+        };
+    }
+
+    if (!input.client_name?.trim()) {
+        return {
+            code: 400,
+            message: 'client_name is required for walk-in bookings',
+            error: true,
+        };
+    }
+
+    const { phonePrefix, phoneNumber } = parseClientPhone(input.client_phone);
+    return {
+        customer: {
+            customerId: null,
+            clientName: input.client_name.trim(),
+            clientEmail: input.client_email?.trim() || null,
+            clientPhonePrefix: phonePrefix,
+            clientPhoneNumber: phoneNumber,
+        },
+    };
+}
+
+async function resolveAdminPayment(
+    companyId: number,
+    input: AdminPaymentInput,
+): Promise<{ payment: ResolvedAdminPayment } | AdminBookingResult> {
+    if (!input.is_paid) {
+        return {
+            payment: {
+                paymentMethod: PaymentMethod.NONE,
+                paymentStatus: PaymentStatus.UNPAID,
+                qrProofImageUrl: null,
+            },
+        };
+    }
+
+    const paymentMethod = input.payment_method ?? PaymentMethod.NONE;
+    if (paymentMethod === PaymentMethod.NONE) {
+        return {
+            code: 400,
+            message: 'payment_method is required when the booking is marked as paid',
+            error: true,
+        };
+    }
+
+    const settings = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: {
+            allow_cash_payment: true,
+            allow_qr_payment: true,
+            require_comprobante_for_qr: true,
+        },
+    });
+    const canCustomizeFlow = await isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
+    const requireComprobante = canCustomizeFlow ? (settings?.require_comprobante_for_qr ?? true) : true;
+
+    if (paymentMethod === PaymentMethod.CASH && settings && !settings.allow_cash_payment) {
+        return {
+            code: 400,
+            message: 'Cash payment is not enabled for this business',
+            error: true,
+        };
+    }
+
+    if (paymentMethod === PaymentMethod.QR && settings && !settings.allow_qr_payment) {
+        return {
+            code: 400,
+            message: 'QR payment is not enabled for this business',
+            error: true,
+        };
+    }
+
+    const qrProofImageUrl = input.qr_proof_image_url?.trim() || null;
+    if (paymentMethod === PaymentMethod.QR && requireComprobante && !qrProofImageUrl) {
+        return {
+            code: 400,
+            message: 'QR proof is required when the booking is paid with QR',
+            error: true,
+        };
+    }
+
+    return {
+        payment: {
+            paymentMethod,
+            paymentStatus: PaymentStatus.PAID,
+            qrProofImageUrl: paymentMethod === PaymentMethod.QR ? qrProofImageUrl : null,
+        },
+    };
+}
+
+async function prepareAdminBookingSession(params: {
+    companyId: number;
+    staffId: number;
+    serviceIds: number[];
+    startAtRaw: string;
+    payment: AdminPaymentInput;
+}): Promise<{ prepared: PreparedAdminBookingSession } | AdminBookingResult> {
+    if (!params.serviceIds || params.serviceIds.length === 0 || !params.startAtRaw) {
+        return {
+            code: 400,
+            message: 'service_ids and start_at are required',
+            error: true,
+        };
+    }
+
+    const startAt = new Date(params.startAtRaw);
+    if (isNaN(startAt.getTime())) {
+        return {
+            code: 400,
+            message: 'Invalid start_at format',
+            error: true,
+        };
+    }
+
+    const services = await BookingRepo.getServicesByIds(params.serviceIds, params.companyId);
+    if (services.length !== params.serviceIds.length) {
+        return {
+            code: 400,
+            message: 'No valid services found',
+            error: true,
+        };
+    }
+
+    const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0);
+    const totalPrice = services.reduce((sum, service) => sum + service.price_cents, 0);
+    const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
+
+    const conflict = await BookingRepo.checkSlotConflict(
+        params.companyId,
+        params.staffId,
+        startAt,
+        endAt,
+        0,
+    );
+
+    if (conflict) {
+        return {
+            code: 409,
+            message: 'Time slot conflicts with another booking',
+            error: true,
+        };
+    }
+
+    const paymentResult = await resolveAdminPayment(params.companyId, params.payment);
+    if ('error' in paymentResult) {
+        return paymentResult;
+    }
+
+    return {
+        prepared: {
+            startAt,
+            endAt,
+            totalPrice,
+            services,
+            serviceSnapshots: services.map((service, index) => ({
+                service_id: service.id,
+                service_name_snapshot: service.name,
+                price_cents_snapshot: service.price_cents,
+                duration_minutes_snapshot: service.duration_minutes,
+                position: index,
+            })),
+            payment: paymentResult.payment,
+        },
+    };
+}
+
+async function sendAdminBookingCreatedSideEffects(params: {
+    companyId: number;
+    staffId: number;
+    serviceIds: number[];
+    bookingId: number;
+    startAt: Date;
+    endAt: Date;
+    totalPrice: number;
+    customer: ResolvedAdminCustomer;
+    services: PreparedAdminBookingSession['services'];
+}) {
+    const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
+        params.companyId,
+        'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
+    );
+
+    if (canSendTransactionalNotifications && (params.customer.clientEmail || params.customer.clientPhoneNumber)) {
+        const company = await prisma.company.findUnique({
+            where: { id: params.companyId },
+            select: { name: true },
+        });
+        const staffProfile = await prisma.staffProfile.findFirst({
+            where: { id: params.staffId, company_id: params.companyId },
+            select: { display_name: true },
+        });
+
+        void notifyBookingCreated({
+            companyId: params.companyId,
+            bookingId: params.bookingId,
+            staffId: params.staffId,
+            customerEmail: params.customer.clientEmail,
+            customerPhone: params.customer.clientPhoneNumber,
+            customerPhonePrefix: params.customer.clientPhonePrefix,
+            customerName: params.customer.clientName,
+            companyName: company?.name || '',
+            staffName: staffProfile?.display_name || '',
+            serviceNames: params.services.map((service) => service.name),
+            startAt: params.startAt,
+            endAt: params.endAt,
+            totalPriceCents: params.totalPrice,
+        });
+    }
+
+    void MarketplaceAnalyticsService.trackBookingConfirmed({
+        source: 'admin',
+        booking_source: BookingSource.ADMIN,
+        company_id: params.companyId,
+        booking_id: params.bookingId,
+        service_ids: params.serviceIds,
+        staff_id: params.staffId,
+        start_at: params.startAt.toISOString(),
+        date: params.startAt.toISOString().slice(0, 10),
+        time: params.startAt.toISOString().slice(11, 16),
+        total_price_cents: params.totalPrice,
+    });
+}
+
+async function createAdminBookingRecord(params: {
+    companyId: number;
+    staffId: number;
+    createdByUserId: string;
+    customer: ResolvedAdminCustomer;
+    prepared: PreparedAdminBookingSession;
+    notes?: string;
+}) {
+    if (params.customer.customerId) {
+        return AdminBookingRepo.createCustomerBooking(
+            {
+                company_id: params.companyId,
+                staff_id: params.staffId,
+                customer_id: params.customer.customerId,
+                start_at: params.prepared.startAt,
+                end_at: params.prepared.endAt,
+                notes: params.notes,
+                created_by_user_id: params.createdByUserId,
+                total_price_cents: params.prepared.totalPrice,
+                payment_method: params.prepared.payment.paymentMethod,
+                payment_status: params.prepared.payment.paymentStatus,
+                qr_proof_image_url: params.prepared.payment.qrProofImageUrl,
+                booking_source: BookingSource.ADMIN,
+            },
+            params.prepared.serviceSnapshots,
+        );
+    }
+
+    return AdminBookingRepo.createWalkInBooking(
+        {
+            company_id: params.companyId,
+            staff_id: params.staffId,
+            client_name: params.customer.clientName,
+            client_phone_prefix: params.customer.clientPhonePrefix || undefined,
+            client_phone_number: params.customer.clientPhoneNumber || undefined,
+            client_email: params.customer.clientEmail || undefined,
+            start_at: params.prepared.startAt,
+            end_at: params.prepared.endAt,
+            notes: params.notes,
+            created_by_user_id: params.createdByUserId,
+            total_price_cents: params.prepared.totalPrice,
+            payment_method: params.prepared.payment.paymentMethod,
+            payment_status: params.prepared.payment.paymentStatus,
+            qr_proof_image_url: params.prepared.payment.qrProofImageUrl,
+            booking_source: BookingSource.ADMIN,
+        },
+        params.prepared.serviceSnapshots,
+    );
 }
 
 function reminderCacheKey(companyId: number, bookingId: number, channel: ReminderChannel, dateKey: string): string {
@@ -635,15 +1030,18 @@ export async function createBooking(
         staff_id: number;
         service_ids: number[];
         start_at: string;
+        customer_id?: number;
         client_name?: string;
         client_phone?: string;
         client_email?: string;
         notes?: string;
+        is_paid?: boolean;
+        payment_method?: PaymentMethod;
+        qr_proof_image_url?: string | null;
     },
     createdByUserId: string
 ): Promise<AdminBookingResult> {
     try {
-        // Validate required fields
         if (!data.staff_id || !data.service_ids || data.service_ids.length === 0 || !data.start_at) {
             return {
                 code: 400,
@@ -652,138 +1050,51 @@ export async function createBooking(
             };
         }
 
-        // Parse start time
-        const startAt = new Date(data.start_at);
-        if (isNaN(startAt.getTime())) {
-            return {
-                code: 400,
-                message: 'Invalid start_at format',
-                error: true,
-            };
+        const customerResult = await resolveAdminCustomer(data.companyId, {
+            customer_id: data.customer_id,
+            client_name: data.client_name,
+            client_phone: data.client_phone,
+            client_email: data.client_email,
+        });
+        if ('error' in customerResult) {
+            return customerResult;
         }
 
-        // Get services
-        const services = await BookingRepo.getServicesByIds(data.service_ids, data.companyId);
-        if (services.length === 0) {
-            return {
-                code: 400,
-                message: 'No valid services found',
-                error: true,
-            };
-        }
-
-        // Calculate total duration and price
-        const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
-        const totalPrice = services.reduce((sum, s) => sum + s.price_cents, 0);
-        const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
-
-        // Check staff availability
-        const conflict = await BookingRepo.checkSlotConflict(
-            data.companyId,
-            data.staff_id,
-            startAt,
-            endAt,
-            0
-        );
-
-        if (conflict) {
-            return {
-                code: 409,
-                message: 'Time slot conflicts with another booking',
-                error: true,
-            };
-        }
-
-        // Prepare service snapshots
-        const serviceSnapshots = services.map((service, index) => ({
-            service_id: service.id,
-            service_name_snapshot: service.name,
-            price_cents_snapshot: service.price_cents,
-            duration_minutes_snapshot: service.duration_minutes,
-            position: index,
-        }));
-
-        // Create walk-in booking
-        if (!data.client_name) {
-            return {
-                code: 400,
-                message: 'client_name is required for walk-in bookings',
-                error: true,
-            };
-        }
-
-        // Parse phone number
-        let phonePrefix: string | undefined;
-        let phoneNumber: string | undefined;
-        if (data.client_phone) {
-            const parts = data.client_phone.split(' ');
-            if (parts.length > 1) {
-                phonePrefix = parts[0];
-                phoneNumber = parts.slice(1).join(' ');
-            } else {
-                phoneNumber = data.client_phone;
-            }
-        }
-
-        const booking = await AdminBookingRepo.createWalkInBooking(
-            {
-                company_id: data.companyId,
-                staff_id: data.staff_id,
-                client_name: data.client_name,
-                client_phone_prefix: phonePrefix,
-                client_phone_number: phoneNumber,
-                client_email: data.client_email,
-                start_at: startAt,
-                end_at: endAt,
-                notes: data.notes,
-                created_by_user_id: createdByUserId,
-                total_price_cents: totalPrice,
-                payment_method: PaymentMethod.NONE,
-                booking_source: BookingSource.ADMIN,
+        const sessionResult = await prepareAdminBookingSession({
+            companyId: data.companyId,
+            staffId: data.staff_id,
+            serviceIds: data.service_ids,
+            startAtRaw: data.start_at,
+            payment: {
+                is_paid: data.is_paid,
+                payment_method: data.payment_method,
+                qr_proof_image_url: data.qr_proof_image_url,
             },
-            serviceSnapshots
-        );
-
-        // Send notification if contact info available (fire-and-forget) and included in plan
-        const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
-            data.companyId,
-            'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
-        );
-        if (canSendTransactionalNotifications && booking && (data.client_email || phoneNumber)) {
-            const company = await prisma.company.findUnique({ where: { id: data.companyId }, select: { name: true } });
-            const staffProfile = await prisma.staffProfile.findFirst({
-                where: { id: data.staff_id, company_id: data.companyId },
-                select: { display_name: true },
-            });
-            void notifyBookingCreated({
-                companyId: data.companyId,
-                bookingId: booking.id,
-                staffId: data.staff_id,
-                customerEmail: data.client_email,
-                customerPhone: phoneNumber,
-                customerPhonePrefix: phonePrefix,
-                customerName: data.client_name,
-                companyName: company?.name || '',
-                staffName: staffProfile?.display_name || '',
-                serviceNames: services.map(s => s.name),
-                startAt,
-                endAt,
-                totalPriceCents: totalPrice,
-            });
+        });
+        if ('error' in sessionResult) {
+            return sessionResult;
         }
+
+        const booking = await createAdminBookingRecord({
+            companyId: data.companyId,
+            staffId: data.staff_id,
+            createdByUserId,
+            customer: customerResult.customer,
+            prepared: sessionResult.prepared,
+            notes: data.notes,
+        });
 
         if (booking?.id) {
-            void MarketplaceAnalyticsService.trackBookingConfirmed({
-                source: 'admin',
-                booking_source: BookingSource.ADMIN,
-                company_id: data.companyId,
-                booking_id: booking.id,
-                service_ids: data.service_ids,
-                staff_id: data.staff_id,
-                start_at: startAt.toISOString(),
-                date: data.start_at.slice(0, 10),
-                time: data.start_at.slice(11, 16),
-                total_price_cents: totalPrice,
+            await sendAdminBookingCreatedSideEffects({
+                companyId: data.companyId,
+                staffId: data.staff_id,
+                serviceIds: data.service_ids,
+                bookingId: booking.id,
+                startAt: sessionResult.prepared.startAt,
+                endAt: sessionResult.prepared.endAt,
+                totalPrice: sessionResult.prepared.totalPrice,
+                customer: customerResult.customer,
+                services: sessionResult.prepared.services,
             });
         }
 
@@ -795,6 +1106,128 @@ export async function createBooking(
         };
     } catch (error: any) {
         console.error('Error creating booking:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+export async function createRecurringBookings(
+    data: {
+        companyId: number;
+        staff_id: number;
+        customer_id?: number;
+        client_name?: string;
+        client_phone?: string;
+        client_email?: string;
+        notes?: string;
+        sessions: Array<{
+            service_ids: number[];
+            start_at: string;
+            is_paid?: boolean;
+            payment_method?: PaymentMethod;
+            qr_proof_image_url?: string | null;
+        }>;
+    },
+    createdByUserId: string,
+): Promise<AdminBookingResult> {
+    try {
+        if (!data.staff_id || !Array.isArray(data.sessions) || data.sessions.length === 0) {
+            return {
+                code: 400,
+                message: 'staff_id and sessions are required',
+                error: true,
+            };
+        }
+
+        const customerResult = await resolveAdminCustomer(data.companyId, {
+            customer_id: data.customer_id,
+            client_name: data.client_name,
+            client_phone: data.client_phone,
+            client_email: data.client_email,
+        });
+        if ('error' in customerResult) {
+            return customerResult;
+        }
+
+        const preparedSessions: PreparedAdminBookingSession[] = [];
+        for (const session of data.sessions) {
+            const preparedResult = await prepareAdminBookingSession({
+                companyId: data.companyId,
+                staffId: data.staff_id,
+                serviceIds: session.service_ids,
+                startAtRaw: session.start_at,
+                payment: {
+                    is_paid: session.is_paid,
+                    payment_method: session.payment_method,
+                    qr_proof_image_url: session.qr_proof_image_url,
+                },
+            });
+
+            if ('error' in preparedResult) {
+                return preparedResult;
+            }
+
+            const conflictingNewSession = preparedSessions.find((prepared) =>
+                intervalsOverlap(
+                    prepared.startAt,
+                    prepared.endAt,
+                    preparedResult.prepared.startAt,
+                    preparedResult.prepared.endAt,
+                ),
+            );
+            if (conflictingNewSession) {
+                return {
+                    code: 409,
+                    message: 'One of the recurring sessions overlaps another session in the same batch',
+                    error: true,
+                };
+            }
+
+            preparedSessions.push(preparedResult.prepared);
+        }
+
+        const createdBookings: any[] = [];
+        for (let index = 0; index < preparedSessions.length; index += 1) {
+            const prepared = preparedSessions[index];
+            const sessionInput = data.sessions[index];
+
+            const booking = await createAdminBookingRecord({
+                companyId: data.companyId,
+                staffId: data.staff_id,
+                createdByUserId,
+                customer: customerResult.customer,
+                prepared,
+                notes: data.notes,
+            });
+
+            if (booking?.id) {
+                createdBookings.push(booking);
+                await sendAdminBookingCreatedSideEffects({
+                    companyId: data.companyId,
+                    staffId: data.staff_id,
+                    serviceIds: sessionInput.service_ids,
+                    bookingId: booking.id,
+                    startAt: prepared.startAt,
+                    endAt: prepared.endAt,
+                    totalPrice: prepared.totalPrice,
+                    customer: customerResult.customer,
+                    services: prepared.services,
+                });
+            }
+        }
+
+        return {
+            code: 201,
+            message: 'Recurring bookings created successfully',
+            error: false,
+            data: createdBookings,
+        };
+    } catch (error: any) {
+        console.error('Error creating recurring bookings:', error);
         return {
             code: 500,
             message: 'Internal server error',

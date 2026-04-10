@@ -345,6 +345,8 @@ export interface CreateWalkInData {
     created_by_user_id: string;
     total_price_cents: number;
     payment_method?: PaymentMethod;
+    payment_status?: PaymentStatus;
+    qr_proof_image_url?: string | null;
     booking_source?: BookingSource;
 }
 
@@ -373,7 +375,12 @@ export async function createWalkInBooking(
                 end_at: bookingData.end_at,
                 status: BookingStatus.CONFIRMED,
                 payment_method: bookingData.payment_method || PaymentMethod.NONE,
-                payment_status: bookingData.payment_method === PaymentMethod.NONE ? PaymentStatus.UNPAID : PaymentStatus.PENDING_CONFIRMATION,
+                payment_status:
+                    bookingData.payment_status
+                    || (bookingData.payment_method === PaymentMethod.NONE
+                        ? PaymentStatus.UNPAID
+                        : PaymentStatus.PENDING_CONFIRMATION),
+                qr_proof_image_url: bookingData.qr_proof_image_url ?? null,
                 notes: bookingData.notes,
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
@@ -497,6 +504,8 @@ export interface CreateCustomerBookingData {
     created_by_user_id: string;
     total_price_cents: number;
     payment_method?: PaymentMethod;
+    payment_status?: PaymentStatus;
+    qr_proof_image_url?: string | null;
     booking_source?: BookingSource;
 }
 
@@ -521,7 +530,12 @@ export async function createCustomerBooking(
                 end_at: bookingData.end_at,
                 status: BookingStatus.CONFIRMED,
                 payment_method: bookingData.payment_method || PaymentMethod.NONE,
-                payment_status: bookingData.payment_method === PaymentMethod.NONE ? PaymentStatus.UNPAID : PaymentStatus.PENDING_CONFIRMATION,
+                payment_status:
+                    bookingData.payment_status
+                    || (bookingData.payment_method === PaymentMethod.NONE
+                        ? PaymentStatus.UNPAID
+                        : PaymentStatus.PENDING_CONFIRMATION),
+                qr_proof_image_url: bookingData.qr_proof_image_url ?? null,
                 notes: bookingData.notes,
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
@@ -563,6 +577,10 @@ export async function createCustomerBooking(
                         user: {
                             select: {
                                 email: true,
+                                name: true,
+                                first_name: true,
+                                last_name: true,
+                                phoneNumber: true,
                             },
                         },
                     },
