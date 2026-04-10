@@ -20,12 +20,10 @@ interface AdminBookingResult extends MensajeApi {
 }
 
 const REMINDER_COOLDOWN_MS = 8 * 60 * 60 * 1000;
-const WASENDER_MIN_INTERVAL_MS = 350;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const NO_SHOW_NOTE_MARKER = '[NO_SHOW]';
 
 const reminderSentAtCache = new Map<string, number>();
-const reminderLastWhatsappAtByCompany = new Map<number, number>();
 
 type CustomerReminderChannel = ReminderChannel | 'NONE';
 export type NoShowNotificationChannel = DirectNotificationChannel;
@@ -70,10 +68,6 @@ interface PreparedAdminBookingSession {
         position: number;
     }>;
     payment: ResolvedAdminPayment;
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function cleanupReminderSentCache(now: number): void {
@@ -1567,15 +1561,6 @@ export async function sendTodayReminderForBooking(companyId: number, bookingId: 
             };
         }
 
-        if (channel === 'WHATSAPP') {
-            const lastWhatsappAt = reminderLastWhatsappAtByCompany.get(companyId) || 0;
-            const elapsed = Date.now() - lastWhatsappAt;
-            const waitMs = Math.max(0, WASENDER_MIN_INTERVAL_MS - elapsed);
-            if (waitMs > 0) {
-                await sleep(waitMs);
-            }
-        }
-
         const sendResult = await notifyBookingTodayReminder({
             companyId,
             bookingId: booking.id,
@@ -1610,9 +1595,6 @@ export async function sendTodayReminderForBooking(companyId: number, bookingId: 
         }
 
         reminderSentAtCache.set(cacheKey, Date.now());
-        if (sendResult.channel === 'WHATSAPP') {
-            reminderLastWhatsappAtByCompany.set(companyId, Date.now());
-        }
 
         return {
             code: 200,

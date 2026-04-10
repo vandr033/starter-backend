@@ -1,9 +1,11 @@
 import { createWasender, RetryConfig, TextOnlyMessage, ImageUrlMessage } from "wasenderapi";
+import { logger } from "../config/logger";
 
 
 const apiKey = process.env.WASENDER_API_KEY!;
 const personalAccessToken = process.env.WASENDER_PERSONAL_ACCESS_TOKEN!;
-const minIntervalMs = Math.max(0, Number(process.env.WASENDER_MIN_INTERVAL_MS || "1500"));
+const configuredMinIntervalMs = Number(process.env.WASENDER_MIN_INTERVAL_MS || "5000");
+const minIntervalMs = Math.max(5000, Number.isFinite(configuredMinIntervalMs) ? configuredMinIntervalMs : 5000);
 
 const retryOptions: RetryConfig = {
   enabled: true,
@@ -20,6 +22,7 @@ const wasender = createWasender(
 
 let lastSendAt = 0;
 let sendQueue: Promise<unknown> = Promise.resolve();
+let sendSequence = 0;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -29,16 +32,91 @@ async function waitForRateLimitWindow() {
   const elapsed = Date.now() - lastSendAt;
   const waitMs = Math.max(0, minIntervalMs - elapsed);
   if (waitMs > 0) {
+    logger.debug(
+      {
+        event: "whatsapp_send_waiting_for_rate_limit",
+        waitMs,
+        minIntervalMs,
+      },
+      "Waiting before next WhatsApp send",
+    );
     await sleep(waitMs);
   }
 }
 
-function enqueueWhatsappSend<T>(task: () => Promise<T>): Promise<T> {
+function maskPhone(phone: string): string {
+  const trimmed = phone.trim();
+  if (trimmed.length <= 4) return trimmed;
+  return `${trimmed.slice(0, 3)}***${trimmed.slice(-2)}`;
+}
+
+function buildErrorLog(error: unknown) {
+  if (error instanceof Error) {
+    const errorWithCause = error as Error & { cause?: unknown; code?: string | number; status?: number };
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      code: errorWithCause.code,
+      status: errorWithCause.status,
+      cause: errorWithCause.cause,
+    };
+  }
+
+  return {
+    message: typeof error === "string" ? error : "Unknown WhatsApp sender error",
+    raw: error,
+  };
+}
+
+function enqueueWhatsappSend<T>(
+  task: () => Promise<T>,
+  meta: { phone: string; messageType: "text" | "image" },
+): Promise<T> {
+  const sendId = ++sendSequence;
   const nextTask = sendQueue.then(async () => {
+    logger.info(
+      {
+        event: "whatsapp_send_started",
+        sendId,
+        phone: maskPhone(meta.phone),
+        messageType: meta.messageType,
+      },
+      "Starting WhatsApp send",
+    );
     await waitForRateLimitWindow();
-    const result = await task();
-    lastSendAt = Date.now();
-    return result;
+    const attemptStartedAt = Date.now();
+    try {
+      const result = await task();
+      lastSendAt = Date.now();
+      logger.info(
+        {
+          event: "whatsapp_send_succeeded",
+          sendId,
+          phone: maskPhone(meta.phone),
+          messageType: meta.messageType,
+          minIntervalMs,
+          elapsedMs: lastSendAt - attemptStartedAt,
+        },
+        "WhatsApp send succeeded",
+      );
+      return result;
+    } catch (error) {
+      lastSendAt = Date.now();
+      logger.error(
+        {
+          event: "whatsapp_send_failed",
+          sendId,
+          phone: maskPhone(meta.phone),
+          messageType: meta.messageType,
+          minIntervalMs,
+          elapsedMs: lastSendAt - attemptStartedAt,
+          error: buildErrorLog(error),
+        },
+        "WhatsApp send failed",
+      );
+      throw error;
+    }
   });
 
   sendQueue = nextTask.catch(() => undefined);
@@ -56,9 +134,20 @@ export const sendWhatsappText = async (phone: string, text: string) => {
       to: phone,
       text,
     }
-    const result = await enqueueWhatsappSend(() => wasender.send(textPayload))
+    const result = await enqueueWhatsappSend(() => wasender.send(textPayload), {
+      phone,
+      messageType: "text",
+    })
     return result
   }catch(error){
+    logger.error(
+      {
+        event: "whatsapp_text_send_failed",
+        phone: maskPhone(phone),
+        error: buildErrorLog(error),
+      },
+      "sendWhatsappText returned failure",
+    );
     return -1
   }
 }
@@ -71,9 +160,21 @@ export const sendWhatsappImage = async (phone: string, imageUrl: string, caption
       imageUrl,
       text: caption,
     }
-    const result = await enqueueWhatsappSend(() => wasender.send(imagePayload))
+    const result = await enqueueWhatsappSend(() => wasender.send(imagePayload), {
+      phone,
+      messageType: "image",
+    })
     return result
   } catch (error) {
+    logger.error(
+      {
+        event: "whatsapp_image_send_failed",
+        phone: maskPhone(phone),
+        imageUrl,
+        error: buildErrorLog(error),
+      },
+      "sendWhatsappImage returned failure",
+    );
     return -1
   }
 }

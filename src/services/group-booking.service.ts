@@ -745,6 +745,22 @@ async function runEventMassMessage(
         });
     };
 
+    logger.info(
+        {
+            event: 'group_event_mass_message_started',
+            companyId,
+            companyName: company.name,
+            groupEventId: eventId,
+            groupEventTitle: event.title,
+            locale,
+            totalRecipients: recipients.length,
+            selectedRecipients: requestedTargets.length > 0 ? requestedTargets.length : null,
+            deliveryMode,
+            messageLength: message.length,
+        },
+        'Group event mass message started',
+    );
+
     await emitProgress();
 
     for (const recipient of recipients) {
@@ -760,12 +776,37 @@ async function runEventMassMessage(
 
             if (seenWhatsappTargets.has(whatsappTarget)) {
                 duplicatesSkipped += 1;
+                logger.warn(
+                    {
+                        event: 'group_event_mass_message_duplicate_whatsapp',
+                        companyId,
+                        groupEventId: eventId,
+                        recipientSource: recipient.source,
+                        recipientId: recipient.id,
+                        whatsappTarget,
+                    },
+                    'Skipping duplicate WhatsApp recipient in group event mass message',
+                );
             } else {
                 attemptedChannel = true;
                 const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
                 if (waResult !== -1) {
                     whatsappSent += 1;
                     seenWhatsappTargets.add(whatsappTarget);
+                    logger.info(
+                        {
+                            event: 'group_event_mass_message_whatsapp_sent',
+                            companyId,
+                            groupEventId: eventId,
+                            recipientSource: recipient.source,
+                            recipientId: recipient.id,
+                            whatsappTarget,
+                            deliveryMode,
+                            processed: processed + 1,
+                            totalRecipients: recipients.length,
+                        },
+                        'Group event mass message sent by WhatsApp',
+                    );
                     if (deliveryMode === 'AUTO') {
                         processed += 1;
                         await emitProgress();
@@ -773,6 +814,21 @@ async function runEventMassMessage(
                     }
                 } else {
                     failed += 1;
+                    logger.error(
+                        {
+                            event: 'group_event_mass_message_whatsapp_failed',
+                            companyId,
+                            groupEventId: eventId,
+                            recipientSource: recipient.source,
+                            recipientId: recipient.id,
+                            whatsappTarget,
+                            emailTarget,
+                            deliveryMode,
+                            processed: processed + 1,
+                            totalRecipients: recipients.length,
+                        },
+                        'Group event mass message failed on WhatsApp send',
+                    );
                     if (deliveryMode === 'AUTO') {
                         processed += 1;
                         await emitProgress();
@@ -787,6 +843,17 @@ async function runEventMassMessage(
 
             if (seenEmailTargets.has(emailTarget)) {
                 duplicatesSkipped += 1;
+                logger.warn(
+                    {
+                        event: 'group_event_mass_message_duplicate_email',
+                        companyId,
+                        groupEventId: eventId,
+                        recipientSource: recipient.source,
+                        recipientId: recipient.id,
+                        emailTarget,
+                    },
+                    'Skipping duplicate email recipient in group event mass message',
+                );
             } else {
                 attemptedChannel = true;
                 const emailResult = await sendCustomerMassMessageEmail({
@@ -799,14 +866,54 @@ async function runEventMassMessage(
                 if (emailResult === 1) {
                     emailSent += 1;
                     seenEmailTargets.add(emailTarget);
+                    logger.info(
+                        {
+                            event: 'group_event_mass_message_email_sent',
+                            companyId,
+                            groupEventId: eventId,
+                            recipientSource: recipient.source,
+                            recipientId: recipient.id,
+                            emailTarget,
+                            deliveryMode,
+                            processed: processed + 1,
+                            totalRecipients: recipients.length,
+                        },
+                        'Group event mass message sent by email',
+                    );
                 } else {
                     failed += 1;
+                    logger.error(
+                        {
+                            event: 'group_event_mass_message_email_failed',
+                            companyId,
+                            groupEventId: eventId,
+                            recipientSource: recipient.source,
+                            recipientId: recipient.id,
+                            emailTarget,
+                            whatsappTarget,
+                            deliveryMode,
+                            processed: processed + 1,
+                            totalRecipients: recipients.length,
+                        },
+                        'Group event mass message failed on email send',
+                    );
                 }
             }
         }
 
         if (!attemptedChannel && !hasSelectedContact) {
             noContact += 1;
+            logger.warn(
+                {
+                    event: 'group_event_mass_message_no_contact',
+                    companyId,
+                    groupEventId: eventId,
+                    recipientSource: recipient.source,
+                    recipientId: recipient.id,
+                    deliveryMode,
+                },
+                'Group event mass message recipient had no contact for selected delivery mode',
+            );
         }
 
         processed += 1;
