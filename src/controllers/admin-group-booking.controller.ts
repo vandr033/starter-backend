@@ -69,6 +69,46 @@ function parsePositiveInt(raw: unknown): number | undefined {
     return parsed;
 }
 
+function parseEventMassMessagePayload(body: unknown): {
+    message: string;
+    delivery_mode?: 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
+    selected_targets?: Array<{ source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number }>;
+} {
+    const { message, delivery_mode, selected_targets } = (body ?? {}) as {
+        message?: string;
+        delivery_mode?: string;
+        selected_targets?: Array<{ source?: string; id?: number }>;
+    };
+
+    return {
+        message: message || '',
+        delivery_mode:
+            delivery_mode === 'WHATSAPP'
+            || delivery_mode === 'EMAIL'
+            || delivery_mode === 'BOTH'
+            || delivery_mode === 'AUTO'
+                ? delivery_mode
+                : undefined,
+        selected_targets: Array.isArray(selected_targets)
+            ? selected_targets
+                .filter((target) =>
+                    (target?.source === 'GROUP_EVENT_BOOKING' || target?.source === 'FREE_REGISTRATION')
+                    && Number.isInteger(target?.id)
+                    && Number(target.id) > 0,
+                )
+                .map((target) => ({
+                    source: target.source as 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION',
+                    id: Number(target.id),
+                }))
+            : undefined,
+    };
+}
+
+function writeSseEvent(res: Response, event: string, payload: unknown) {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 export async function confirmEventBooking(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;
@@ -130,26 +170,51 @@ export async function sendEventMassMessage(req: AuthenticatedRequest, res: Respo
         return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
     }
 
-    const { message, selected_targets } = req.body as {
-        message?: string;
-        selected_targets?: Array<{ source?: string; id?: number }>;
-    };
-    const result = await GroupBookingService.sendEventMassMessage(companyId, eventId, {
-        message: message || '',
-        selected_targets: Array.isArray(selected_targets)
-            ? selected_targets
-                .filter((target) =>
-                    (target?.source === 'GROUP_EVENT_BOOKING' || target?.source === 'FREE_REGISTRATION')
-                    && Number.isInteger(target?.id)
-                    && Number(target.id) > 0,
-                )
-                .map((target) => ({
-                    source: target.source as 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION',
-                    id: Number(target.id),
-                }))
-            : undefined,
-    });
+    const result = await GroupBookingService.sendEventMassMessage(companyId, eventId, parseEventMassMessagePayload(req.body));
     return res.status(result.code).json(result);
+}
+
+export async function streamEventMassMessage(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const eventId = parseId(req.params.eventId);
+    if (!eventId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    try {
+        const result = await GroupBookingService.sendEventMassMessageWithProgress(
+            companyId,
+            eventId,
+            parseEventMassMessagePayload(req.body),
+            async (progress) => {
+                writeSseEvent(res, 'progress', progress);
+            },
+        );
+
+        if (result.error) {
+            writeSseEvent(res, 'error', {
+                code: result.code,
+                message: result.message,
+            });
+        } else {
+            writeSseEvent(res, 'complete', result.data);
+        }
+    } catch (error) {
+        writeSseEvent(res, 'error', {
+            code: 500,
+            message: error instanceof Error ? error.message : 'Failed to stream event mass message',
+        });
+    } finally {
+        res.end();
+    }
 }
 
 export async function confirmClassEnrollment(req: AuthenticatedRequest, res: Response) {

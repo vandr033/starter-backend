@@ -23,6 +23,27 @@ import { sendWhatsappText } from '../utils/whatsappSender';
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
+export type EventMassMessageProgress = {
+    total_recipients: number;
+    processed: number;
+    sent_total: number;
+    sent_whatsapp: number;
+    sent_email: number;
+    skipped_no_contact: number;
+    skipped_duplicates: number;
+    failed: number;
+};
+
+type EventMassMessageDeliveryMode = 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
+
+type EventMassMessagePayload = {
+    message: string;
+    delivery_mode?: EventMassMessageDeliveryMode;
+    selected_targets?: Array<{
+        source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
+        id: number;
+    }>;
+};
 
 function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
     const cleanPhone = (phone ?? '').replace(/\D/g, '');
@@ -560,16 +581,11 @@ export async function listEventBookings(companyId: number, eventId: number): Pro
     return { code: 200, error: false, message: 'Bookings retrieved', data: allBookings };
 }
 
-export async function sendEventMassMessage(
+async function runEventMassMessage(
     companyId: number,
     eventId: number,
-    payload: {
-        message: string;
-        selected_targets?: Array<{
-            source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
-            id: number;
-        }>;
-    },
+    payload: EventMassMessagePayload,
+    onProgress?: (progress: EventMassMessageProgress) => Promise<void> | void,
 ): Promise<ServiceResult> {
     const message = (payload.message || '').trim();
     if (!message) {
@@ -625,6 +641,12 @@ export async function sendEventMassMessage(
     }
 
     const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+    const deliveryMode: EventMassMessageDeliveryMode =
+        payload.delivery_mode === 'WHATSAPP'
+        || payload.delivery_mode === 'EMAIL'
+        || payload.delivery_mode === 'BOTH'
+            ? payload.delivery_mode
+            : 'AUTO';
     const requestedTargets = Array.isArray(payload.selected_targets) ? payload.selected_targets : [];
     const selectedTargetKeys =
         requestedTargets.length > 0
@@ -702,56 +724,93 @@ export async function sendEventMassMessage(
     let noContact = 0;
     let failed = 0;
     let duplicatesSkipped = 0;
+    let processed = 0;
 
     const whatsappText =
         locale === 'en'
             ? `${company.name} · ${event.title}\n\n${message}`
             : `${company.name} · ${event.title}\n\n${message}`;
 
+    const emitProgress = async () => {
+        if (!onProgress) return;
+        await onProgress({
+            total_recipients: recipients.length,
+            processed,
+            sent_total: whatsappSent + emailSent,
+            sent_whatsapp: whatsappSent,
+            sent_email: emailSent,
+            skipped_no_contact: noContact,
+            skipped_duplicates: duplicatesSkipped,
+            failed,
+        });
+    };
+
+    await emitProgress();
+
     for (const recipient of recipients) {
         const whatsappTarget = buildFullPhone(recipient.phonePrefix, recipient.phone);
         const emailTarget = normalizeEmail(recipient.email);
+        const wantsWhatsapp = deliveryMode === 'AUTO' || deliveryMode === 'WHATSAPP' || deliveryMode === 'BOTH';
+        const wantsEmail = deliveryMode === 'EMAIL' || deliveryMode === 'BOTH';
+        let attemptedChannel = false;
+        let hasSelectedContact = false;
 
-        if (whatsappTarget) {
+        if (wantsWhatsapp && whatsappTarget) {
+            hasSelectedContact = true;
+
             if (seenWhatsappTargets.has(whatsappTarget)) {
                 duplicatesSkipped += 1;
-                continue;
+            } else {
+                attemptedChannel = true;
+                const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
+                if (waResult !== -1) {
+                    whatsappSent += 1;
+                    seenWhatsappTargets.add(whatsappTarget);
+                    if (deliveryMode === 'AUTO') {
+                        processed += 1;
+                        await emitProgress();
+                        continue;
+                    }
+                } else {
+                    failed += 1;
+                    if (deliveryMode === 'AUTO') {
+                        processed += 1;
+                        await emitProgress();
+                        continue;
+                    }
+                }
             }
-
-            const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
-            if (waResult !== -1) {
-                whatsappSent += 1;
-                seenWhatsappTargets.add(whatsappTarget);
-                continue;
-            }
-
-            failed += 1;
-            continue;
         }
 
-        if (emailTarget) {
+        if (wantsEmail && emailTarget) {
+            hasSelectedContact = true;
+
             if (seenEmailTargets.has(emailTarget)) {
                 duplicatesSkipped += 1;
-                continue;
-            }
-
-            const emailResult = await sendCustomerMassMessageEmail({
-                email: emailTarget,
-                companyName: company.name,
-                message,
-                locale,
-            });
-
-            if (emailResult === 1) {
-                emailSent += 1;
-                seenEmailTargets.add(emailTarget);
             } else {
-                failed += 1;
+                attemptedChannel = true;
+                const emailResult = await sendCustomerMassMessageEmail({
+                    email: emailTarget,
+                    companyName: company.name,
+                    message,
+                    locale,
+                });
+
+                if (emailResult === 1) {
+                    emailSent += 1;
+                    seenEmailTargets.add(emailTarget);
+                } else {
+                    failed += 1;
+                }
             }
-            continue;
         }
 
-        noContact += 1;
+        if (!attemptedChannel && !hasSelectedContact) {
+            noContact += 1;
+        }
+
+        processed += 1;
+        await emitProgress();
     }
 
     const totalSent = whatsappSent + emailSent;
@@ -771,6 +830,7 @@ export async function sendEventMassMessage(
             failed,
             duplicatesSkipped,
             messageLength: message.length,
+            deliveryMode,
         },
         'Group event mass message completed',
     );
@@ -789,6 +849,23 @@ export async function sendEventMassMessage(
             failed,
         },
     };
+}
+
+export async function sendEventMassMessage(
+    companyId: number,
+    eventId: number,
+    payload: EventMassMessagePayload,
+): Promise<ServiceResult> {
+    return runEventMassMessage(companyId, eventId, payload);
+}
+
+export async function sendEventMassMessageWithProgress(
+    companyId: number,
+    eventId: number,
+    payload: EventMassMessagePayload,
+    onProgress: (progress: EventMassMessageProgress) => Promise<void> | void,
+): Promise<ServiceResult> {
+    return runEventMassMessage(companyId, eventId, payload, onProgress);
 }
 
 export async function listEventInterests(companyId: number, eventId: number): Promise<ServiceResult> {
