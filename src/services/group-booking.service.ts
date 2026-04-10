@@ -23,7 +23,6 @@ import { sendWhatsappText } from '../utils/whatsappSender';
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
-const WHATSAPP_MIN_INTERVAL_MS = 350;
 
 function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
     const cleanPhone = (phone ?? '').replace(/\D/g, '');
@@ -116,10 +115,6 @@ function buildDisplayPhone(prefix?: string | null, phone?: string | null): strin
 function normalizeEmail(email?: string | null): string | null {
     const value = (email || '').trim().toLowerCase();
     return value || null;
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatDateRange(startAt?: Date | null, endAt?: Date | null): string | null {
@@ -568,7 +563,13 @@ export async function listEventBookings(companyId: number, eventId: number): Pro
 export async function sendEventMassMessage(
     companyId: number,
     eventId: number,
-    payload: { message: string },
+    payload: {
+        message: string;
+        selected_targets?: Array<{
+            source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
+            id: number;
+        }>;
+    },
 ): Promise<ServiceResult> {
     const message = (payload.message || '').trim();
     if (!message) {
@@ -624,6 +625,15 @@ export async function sendEventMassMessage(
     }
 
     const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+    const requestedTargets = Array.isArray(payload.selected_targets) ? payload.selected_targets : [];
+    const selectedTargetKeys =
+        requestedTargets.length > 0
+            ? new Set(
+                requestedTargets
+                    .filter((target) => Number.isInteger(target.id) && target.id > 0)
+                    .map((target) => `${target.source}:${target.id}`),
+            )
+            : null;
 
     const [bookings, freeRegistrations] = await Promise.all([
         prisma.groupEventBooking.findMany({
@@ -668,16 +678,22 @@ export async function sendEventMassMessage(
 
     const recipients = [
         ...bookings.map((booking) => ({
+            source: 'GROUP_EVENT_BOOKING' as const,
+            id: booking.id,
             email: normalizeEmail(booking.user?.email),
             phone: booking.user?.phoneNumber || null,
             phonePrefix: booking.user?.phone_prefix || null,
         })),
         ...freeRegistrations.map((registration) => ({
+            source: 'FREE_REGISTRATION' as const,
+            id: registration.id,
             email: normalizeEmail(registration.user?.email || registration.email),
             phone: registration.user?.phoneNumber || registration.phone_number,
             phonePrefix: registration.user?.phone_prefix || registration.phone_prefix,
         })),
-    ];
+    ].filter((recipient) =>
+        selectedTargetKeys ? selectedTargetKeys.has(`${recipient.source}:${recipient.id}`) : true,
+    );
 
     const seenWhatsappTargets = new Set<string>();
     const seenEmailTargets = new Set<string>();
@@ -686,7 +702,6 @@ export async function sendEventMassMessage(
     let noContact = 0;
     let failed = 0;
     let duplicatesSkipped = 0;
-    let lastWhatsappAt = 0;
 
     const whatsappText =
         locale === 'en'
@@ -703,17 +718,10 @@ export async function sendEventMassMessage(
                 continue;
             }
 
-            const elapsed = Date.now() - lastWhatsappAt;
-            const waitMs = Math.max(0, WHATSAPP_MIN_INTERVAL_MS - elapsed);
-            if (waitMs > 0) {
-                await sleep(waitMs);
-            }
-
             const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
             if (waResult !== -1) {
                 whatsappSent += 1;
                 seenWhatsappTargets.add(whatsappTarget);
-                lastWhatsappAt = Date.now();
                 continue;
             }
 

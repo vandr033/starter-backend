@@ -130,9 +130,24 @@ export async function sendEventMassMessage(req: AuthenticatedRequest, res: Respo
         return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
     }
 
-    const { message } = req.body as { message?: string };
+    const { message, selected_targets } = req.body as {
+        message?: string;
+        selected_targets?: Array<{ source?: string; id?: number }>;
+    };
     const result = await GroupBookingService.sendEventMassMessage(companyId, eventId, {
         message: message || '',
+        selected_targets: Array.isArray(selected_targets)
+            ? selected_targets
+                .filter((target) =>
+                    (target?.source === 'GROUP_EVENT_BOOKING' || target?.source === 'FREE_REGISTRATION')
+                    && Number.isInteger(target?.id)
+                    && Number(target.id) > 0,
+                )
+                .map((target) => ({
+                    source: target.source as 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION',
+                    id: Number(target.id),
+                }))
+            : undefined,
     });
     return res.status(result.code).json(result);
 }
