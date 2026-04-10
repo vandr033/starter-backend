@@ -34,6 +34,13 @@ export type EventMassMessageProgress = {
     failed: number;
 };
 
+type EventMassMessageFailedChannel = 'WHATSAPP' | 'EMAIL';
+type EventMassMessageFailedTarget = {
+    source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
+    id: number;
+    failed_channels: EventMassMessageFailedChannel[];
+};
+
 type EventMassMessageDeliveryMode = 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
 
 type EventMassMessagePayload = {
@@ -719,6 +726,7 @@ async function runEventMassMessage(
 
     const seenWhatsappTargets = new Set<string>();
     const seenEmailTargets = new Set<string>();
+    const failedTargets = new Map<string, { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number; failed_channels: Set<EventMassMessageFailedChannel> }>();
     let whatsappSent = 0;
     let emailSent = 0;
     let noContact = 0;
@@ -742,6 +750,24 @@ async function runEventMassMessage(
             skipped_no_contact: noContact,
             skipped_duplicates: duplicatesSkipped,
             failed,
+        });
+    };
+
+    const markFailedTarget = (
+        recipient: { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number },
+        channel: EventMassMessageFailedChannel,
+    ) => {
+        const key = `${recipient.source}:${recipient.id}`;
+        const existing = failedTargets.get(key);
+        if (existing) {
+            existing.failed_channels.add(channel);
+            return;
+        }
+
+        failedTargets.set(key, {
+            source: recipient.source,
+            id: recipient.id,
+            failed_channels: new Set([channel]),
         });
     };
 
@@ -814,6 +840,7 @@ async function runEventMassMessage(
                     }
                 } else {
                     failed += 1;
+                    markFailedTarget(recipient, 'WHATSAPP');
                     logger.error(
                         {
                             event: 'group_event_mass_message_whatsapp_failed',
@@ -882,6 +909,7 @@ async function runEventMassMessage(
                     );
                 } else {
                     failed += 1;
+                    markFailedTarget(recipient, 'EMAIL');
                     logger.error(
                         {
                             event: 'group_event_mass_message_email_failed',
@@ -921,6 +949,11 @@ async function runEventMassMessage(
     }
 
     const totalSent = whatsappSent + emailSent;
+    const failedTargetsList: EventMassMessageFailedTarget[] = Array.from(failedTargets.values()).map((target) => ({
+        source: target.source,
+        id: target.id,
+        failed_channels: Array.from(target.failed_channels),
+    }));
     logger.info(
         {
             event: 'group_event_mass_message_completed',
@@ -938,6 +971,7 @@ async function runEventMassMessage(
             duplicatesSkipped,
             messageLength: message.length,
             deliveryMode,
+            failedTargets: failedTargetsList.length,
         },
         'Group event mass message completed',
     );
@@ -954,6 +988,7 @@ async function runEventMassMessage(
             skipped_no_contact: noContact,
             skipped_duplicates: duplicatesSkipped,
             failed,
+            failed_targets: failedTargetsList,
         },
     };
 }
