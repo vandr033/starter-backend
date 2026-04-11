@@ -6,6 +6,18 @@ import { webcrypto as nodeWebCrypto } from "crypto";
 import bcrypt from "bcryptjs";
 
 let authPromise: Promise<any> | null = null;
+const SESSION_USER_AGENT_MAX_LENGTH = 191;
+type SessionHookInput = Record<string, unknown> & {
+  userAgent?: string | null;
+};
+
+function clampSessionUserAgent(
+  userAgent: string | null | undefined,
+): string | null | undefined {
+  if (typeof userAgent !== "string") return userAgent;
+  if (userAgent.length <= SESSION_USER_AGENT_MAX_LENGTH) return userAgent;
+  return userAgent.slice(0, SESSION_USER_AGENT_MAX_LENGTH);
+}
 
 function parseOriginList(value?: string | null): string[] {
   if (!value) return [];
@@ -56,6 +68,26 @@ async function createAuth() {
 
   return betterAuth({
     database: prismaAdapter(prisma, { provider: "mysql" }),
+    databaseHooks: {
+      session: {
+        create: {
+          before: async (session: SessionHookInput) => ({
+            data: {
+              ...session,
+              userAgent: clampSessionUserAgent(session.userAgent),
+            },
+          }),
+        },
+        update: {
+          before: async (session: SessionHookInput) => ({
+            data: {
+              ...session,
+              userAgent: clampSessionUserAgent(session.userAgent),
+            },
+          }),
+        },
+      },
+    },
     baseURL: process.env.BASE_URL || "http://localhost:3001",
     frontendURL:
       process.env.FRONTEND_URL ||
