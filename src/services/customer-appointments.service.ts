@@ -163,6 +163,14 @@ export async function cancelBooking(
             return { code: 400, message: "Cannot cancel a completed booking", error: true };
         }
 
+        if (booking.company.company_settings && booking.company.company_settings.reservations_enabled === false) {
+            return {
+                code: 403,
+                message: "Reservations module is disabled for this company",
+                error: true,
+            };
+        }
+
         const now = new Date();
         const startAt = new Date(booking.start_at);
         const minutesUntilStart = (startAt.getTime() - now.getTime()) / 60_000;
@@ -246,6 +254,14 @@ export async function modifyBooking(
 
         if (booking.status === BookingStatus.CANCELLED || booking.status === BookingStatus.COMPLETED) {
             return { code: 400, message: "Cannot modify this booking", error: true };
+        }
+
+        if (booking.company.company_settings && booking.company.company_settings.reservations_enabled === false) {
+            return {
+                code: 403,
+                message: "Reservations module is disabled for this company",
+                error: true,
+            };
         }
 
         const now = new Date();

@@ -59,6 +59,8 @@ interface CreateShopData {
     availableUntil: string;
     pricePaid?: number | null;
     isMarketplaceVisible: boolean;
+    reservations_enabled: boolean;
+    store_enabled: boolean;
     owner: {
         existingUserId?: string | null;
         email?: string | null;
@@ -93,6 +95,8 @@ interface UpdateShopData {
     availableUntil?: string;
     pricePaid?: number | null;
     isMarketplaceVisible?: boolean;
+    reservations_enabled?: boolean;
+    store_enabled?: boolean;
     note?: string;
 }
 
@@ -171,6 +175,16 @@ export async function getAllShops(options: GetAllShopsOptions): Promise<MensajeA
                 skip,
                 take: limit,
                 include: {
+                    company_settings: {
+                        select: {
+                            reservations_enabled: true,
+                        },
+                    },
+                    commerce_settings: {
+                        select: {
+                            store_enabled: true,
+                        },
+                    },
                     company_type: {
                         select: {
                             id: true,
@@ -210,6 +224,8 @@ export async function getAllShops(options: GetAllShopsOptions): Promise<MensajeA
                     pricePaid: shop.pricePaid,
                     availableUntil: shop.availableUntil,
                     isMarketplaceVisible: shop.isMarketplaceVisible,
+                    reservations_enabled: shop.company_settings?.reservations_enabled ?? true,
+                    store_enabled: shop.commerce_settings?.store_enabled ?? false,
                     created_at: shop.created_at,
                     company_type: shop.company_type,
                     user_count: shop._count.company_users
@@ -331,6 +347,16 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                 deleted_at: null
             },
             include: {
+                company_settings: {
+                    select: {
+                        reservations_enabled: true,
+                    },
+                },
+                commerce_settings: {
+                    select: {
+                        store_enabled: true,
+                    },
+                },
                 company_type: {
                     select: {
                         id: true,
@@ -375,6 +401,8 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                 pricePaid: shop.pricePaid,
                 availableUntil: shop.availableUntil,
                 isMarketplaceVisible: shop.isMarketplaceVisible,
+                reservations_enabled: shop.company_settings?.reservations_enabled ?? true,
+                store_enabled: shop.commerce_settings?.store_enabled ?? false,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
@@ -432,6 +460,8 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
         const normalizedCurrency = normalizeCurrency(data.currency);
         const normalizedAvailableUntil = parseDateTime(data.availableUntil);
         const normalizedPricePaid = normalizePricePaid(data.pricePaid);
+        const reservationsEnabled = data.reservations_enabled;
+        const storeEnabled = data.store_enabled;
 
         if (!normalizedCurrency) {
             return {
@@ -454,6 +484,14 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 code: 400,
                 error: true,
                 message: 'pricePaid must be a non-negative number',
+            };
+        }
+
+        if (!reservationsEnabled && !storeEnabled) {
+            return {
+                code: 400,
+                error: true,
+                message: 'At least one company module must be enabled',
             };
         }
 
@@ -551,6 +589,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                         create: {
                             booking_buffer_minutes: 10,
                             booking_time_granularity_minutes: 5,
+                            reservations_enabled: reservationsEnabled,
                             cancel_limit_minutes: 120,
                             reschedule_limit_minutes: 120,
                             allow_qr_payment: true,
@@ -568,9 +607,29 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                             cards_elevated: true,
                             corner_radius: 'md'
                         }
+                    },
+                    commerce_settings: {
+                        create: {
+                            store_enabled: storeEnabled,
+                            supports_pickup: true,
+                            supports_delivery: false,
+                            qr_payment_enabled: true,
+                            asap_orders_enabled: true,
+                            scheduled_orders_enabled: false,
+                        },
                     }
                 },
                 include: {
+                    company_settings: {
+                        select: {
+                            reservations_enabled: true,
+                        },
+                    },
+                    commerce_settings: {
+                        select: {
+                            store_enabled: true,
+                        },
+                    },
                     company_type: {
                         select: {
                             id: true,
@@ -947,6 +1006,8 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 pricePaid: shop.pricePaid,
                 availableUntil: shop.availableUntil,
                 isMarketplaceVisible: shop.isMarketplaceVisible,
+                reservations_enabled: shop.company_settings?.reservations_enabled ?? true,
+                store_enabled: shop.commerce_settings?.store_enabled ?? false,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
@@ -974,7 +1035,19 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             where: {
                 id,
                 deleted_at: null
-            }
+            },
+            include: {
+                company_settings: {
+                    select: {
+                        reservations_enabled: true,
+                    },
+                },
+                commerce_settings: {
+                    select: {
+                        store_enabled: true,
+                    },
+                },
+            },
         });
 
         if (!existingShop) {
@@ -1037,6 +1110,17 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             };
         }
 
+        const nextReservationsEnabled = data.reservations_enabled ?? existingShop.company_settings?.reservations_enabled ?? true;
+        const nextStoreEnabled = data.store_enabled ?? existingShop.commerce_settings?.store_enabled ?? false;
+
+        if (!nextReservationsEnabled && !nextStoreEnabled) {
+            return {
+                code: 400,
+                error: true,
+                message: 'At least one company module must be enabled',
+            };
+        }
+
         // Generate slug if name is being updated and no slug provided
         const updateData: Prisma.CompanyUncheckedUpdateInput = {};
         if (data.name !== undefined) {
@@ -1091,10 +1175,47 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             pricePaidChanged;
 
         const shop = await prisma.$transaction(async (tx) => {
+            if (data.reservations_enabled !== undefined) {
+                await tx.companySettings.upsert({
+                    where: { company_id: id },
+                    update: { reservations_enabled: data.reservations_enabled },
+                    create: {
+                        company_id: id,
+                        reservations_enabled: data.reservations_enabled,
+                    },
+                });
+            }
+
+            if (data.store_enabled !== undefined) {
+                await tx.commerceSettings.upsert({
+                    where: { company_id: id },
+                    update: { store_enabled: data.store_enabled },
+                    create: {
+                        company_id: id,
+                        store_enabled: data.store_enabled,
+                        supports_pickup: true,
+                        supports_delivery: false,
+                        qr_payment_enabled: true,
+                        asap_orders_enabled: true,
+                        scheduled_orders_enabled: false,
+                    },
+                });
+            }
+
             const updatedShop = await tx.company.update({
                 where: { id },
                 data: updateData,
                 include: {
+                    company_settings: {
+                        select: {
+                            reservations_enabled: true,
+                        },
+                    },
+                    commerce_settings: {
+                        select: {
+                            store_enabled: true,
+                        },
+                    },
                     company_type: {
                         select: {
                             id: true,
@@ -1153,6 +1274,8 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
                 pricePaid: shop.pricePaid,
                 availableUntil: shop.availableUntil,
                 isMarketplaceVisible: shop.isMarketplaceVisible,
+                reservations_enabled: shop.company_settings?.reservations_enabled ?? true,
+                store_enabled: shop.commerce_settings?.store_enabled ?? false,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,

@@ -468,6 +468,51 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
         },
       },
       company_settings: true,
+      config_messages: {
+        where: {
+          key: 'default_language',
+        },
+        select: {
+          value: true,
+        },
+      },
+      commerce_settings: true,
+      commerce_categories: {
+        where: { deleted_at: null, is_active: true },
+        orderBy: { sort_order: 'asc' },
+        include: {
+          products: {
+            where: { deleted_at: null, is_active: true },
+            orderBy: [{ is_featured: 'desc' }, { updated_at: 'desc' }],
+            include: {
+              images: {
+                orderBy: { sort_order: 'asc' },
+              },
+            },
+          },
+        },
+      },
+      commerce_products: {
+        where: { deleted_at: null, is_active: true },
+        orderBy: [{ is_featured: 'desc' }, { updated_at: 'desc' }],
+        include: {
+          images: {
+            orderBy: { sort_order: 'asc' },
+          },
+        },
+      },
+      commerce_points_of_sale: {
+        where: { is_active: true },
+        orderBy: [{ city: 'asc' }, { name: 'asc' }],
+      },
+      commerce_delivery_rules: {
+        orderBy: { weekday: 'asc' },
+        include: {
+          windows: {
+            orderBy: { sort_order: 'asc' },
+          },
+        },
+      },
       theme_config: true,
       hours: true,
       reviews: {

@@ -6,6 +6,7 @@ import { VerificationChannel, VerificationPurpose } from '../types/verification-
 import bcrypt from 'bcryptjs';
 import { generateNumericCode } from '../utils/otp';
 import { sendEmailCode } from '../utils/sendEmail';
+import { resolveCompanyModules } from './company-modules.service';
 
 export type AdminCompanyUserSummary = {
     id: number;
@@ -17,8 +18,13 @@ export type AdminCompanyUserSummary = {
         name: string;
         slug: string;
         currency: string;
+        default_language: 'es' | 'en';
         plan: ShopPlan;
         availableUntil: Date;
+        modules: {
+            reservations: boolean;
+            store: boolean;
+        };
     };
 };
 
@@ -57,6 +63,21 @@ async function getAdminCompanyUsers(userId: string) {
                     name: true,
                     slug: true,
                     currency: true,
+                    config_messages: {
+                        where: { key: 'default_language' },
+                        select: { value: true },
+                        take: 1,
+                    },
+                    company_settings: {
+                        select: {
+                            reservations_enabled: true,
+                        },
+                    },
+                    commerce_settings: {
+                        select: {
+                            store_enabled: true,
+                        },
+                    },
                     plan: true,
                     availableUntil: true,
                 },
@@ -69,13 +90,33 @@ async function getAdminCompanyUsers(userId: string) {
     });
 }
 
+function normalizeDefaultLanguage(value?: string | null): 'es' | 'en' {
+    const normalized = (value || '').trim().toLowerCase();
+    return normalized === 'en' ? 'en' : 'es';
+}
+
 function toAdminCompanyUserSummary(companyUser: Awaited<ReturnType<typeof getAdminCompanyUsers>>[number]): AdminCompanyUserSummary {
     return {
         id: companyUser.id,
         company_id: companyUser.company_id,
         role: companyUser.role,
         is_primary_contact: companyUser.is_primary_contact,
-        company: companyUser.company ?? undefined,
+        company: companyUser.company
+            ? {
+                  id: companyUser.company.id,
+                  name: companyUser.company.name,
+                  slug: companyUser.company.slug,
+                  currency: companyUser.company.currency,
+                  plan: companyUser.company.plan,
+                  availableUntil: companyUser.company.availableUntil,
+                  default_language: normalizeDefaultLanguage(companyUser.company.config_messages?.[0]?.value),
+                  modules: resolveCompanyModules({
+                      plan: companyUser.company.plan,
+                      reservations_enabled: companyUser.company.company_settings?.reservations_enabled,
+                      store_enabled: companyUser.company.commerce_settings?.store_enabled,
+                  }),
+              }
+            : undefined,
     };
 }
 

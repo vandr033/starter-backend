@@ -6,6 +6,13 @@ import {
 import * as CompanyRepo from '../repositories/company.repo';
 import { MensajeApi } from '../types/MensajeApi';
 import { Prisma } from '../prisma/client';
+import { createPublicUploadToken } from '../utils/public-upload-token';
+import { resolveCompanyModules } from './company-modules.service';
+import {
+  getEffectiveCommerceUnitPriceCents,
+  isCommercePromotionActive,
+  resolveDeliveryRulesWithHoursFallback,
+} from './commerce.service';
 let mensaje: MensajeApi;
 export const getAllCompanies = async () => {
   try {
@@ -26,6 +33,11 @@ function resolveImageUrl(url: string | null | undefined): string {
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
   if (!BACKEND_BASE_URL) return url;
   return `${BACKEND_BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+function normalizeDefaultLanguage(value?: string | null): 'es' | 'en' {
+  const normalized = (value || '').trim().toLowerCase();
+  return normalized === 'en' ? 'en' : 'es';
 }
 
 export const getFeaturedCompanies = async () => {
@@ -144,10 +156,22 @@ export const getCompanyPublicPage = async (slug: string) => {
       services,
       staff_profiles,
       company_settings,
+      config_messages,
+      commerce_settings,
+      commerce_categories,
+      commerce_products,
+      commerce_points_of_sale,
+      commerce_delivery_rules,
       theme_config,
       reviews,
       ...company
     } = companyData;
+
+    const modules = resolveCompanyModules({
+      plan: company.plan,
+      reservations_enabled: company_settings?.reservations_enabled,
+      store_enabled: commerce_settings?.store_enabled,
+    });
 
     // Calculate review stats
     const reviewCount = reviews.length;
@@ -168,6 +192,8 @@ export const getCompanyPublicPage = async (slug: string) => {
         min_advance_booking_minutes: company_settings.min_advance_booking_minutes ?? null,
         custom_tos: (company_settings as any).custom_tos ?? null,
         staff_label: (company_settings as any).staff_label ?? 'Staff',
+        default_language: normalizeDefaultLanguage(config_messages?.[0]?.value),
+        booking_proof_upload_token: createPublicUploadToken(company.id, 'BOOKING_PROOF'),
       }
       : {
         allow_qr_payment: true,
@@ -180,6 +206,8 @@ export const getCompanyPublicPage = async (slug: string) => {
         min_advance_booking_minutes: null,
         custom_tos: null,
         staff_label: 'Staff',
+        default_language: normalizeDefaultLanguage(config_messages?.[0]?.value),
+        booking_proof_upload_token: createPublicUploadToken(company.id, 'BOOKING_PROOF'),
       };
 
     // Apply theme defaults if no config exists
@@ -203,15 +231,99 @@ export const getCompanyPublicPage = async (slug: string) => {
 
     const responseData = {
       company,
-      categories,
-      services,
+      categories: modules.reservations ? categories : [],
+      services: modules.reservations ? services : [],
       staff: staff_profiles,
       settings,
+      modules,
       theme,
       reviewStats: {
         average: Math.round(reviewAverage * 10) / 10, // Round to 1 decimal
         count: reviewCount,
       },
+      commerce: modules.store && commerce_settings
+        ? {
+          settings: {
+            store_enabled: commerce_settings.store_enabled,
+            currency: company.currency,
+            supports_pickup: commerce_settings.supports_pickup,
+            supports_delivery: commerce_settings.supports_delivery,
+            qr_payment_enabled: commerce_settings.qr_payment_enabled,
+            qr_image_url: commerce_settings.qr_image_url || settings.qr_image_url || null,
+            support_phone: commerce_settings.support_phone || company.phone || null,
+            asap_orders_enabled: commerce_settings.asap_orders_enabled,
+            scheduled_orders_enabled: commerce_settings.scheduled_orders_enabled,
+            hero_title: (commerce_settings as any).hero_title ?? null,
+            hero_subtitle: (commerce_settings as any).hero_subtitle ?? null,
+            banner_image_url: (commerce_settings as any).banner_image_url ?? company.home_hero_image_url ?? null,
+          },
+          categories: commerce_categories.map((category: any) => ({
+            id: category.id,
+            name: category.name,
+            slug: category.slug,
+            sort_order: category.sort_order,
+            is_active: category.is_active,
+          })),
+          products: commerce_products.map((product: any) => ({
+            id: product.id,
+            category_id: product.category_id,
+            name: product.name,
+            slug: product.slug,
+            description: product.description,
+            regular_price_cents: product.regular_price_cents,
+            promotional_price_cents: product.promotional_price_cents,
+            promo_valid_from: product.promo_valid_from,
+            promo_valid_until: product.promo_valid_until,
+            promotion_active: isCommercePromotionActive(product),
+            effective_price_cents: getEffectiveCommerceUnitPriceCents(product),
+            stock_quantity: product.stock_quantity,
+            is_active: product.is_active,
+            is_featured: product.is_featured,
+            is_combo: product.is_combo,
+            images: (product.images || []).map((image: any) => image.image_url),
+          })),
+          points_of_sale: commerce_points_of_sale.map((point: any) => ({
+            id: point.id,
+            name: point.name,
+            city: point.city,
+            osm_link: point.google_maps_link,
+            opening_hours_text: point.opening_hours_text,
+            support_phone: point.support_phone,
+            pickup_enabled: point.pickup_enabled,
+            delivery_enabled: point.delivery_enabled,
+            is_active: point.is_active,
+          })),
+          ...(() => {
+            const deliveryRulesResolution = resolveDeliveryRulesWithHoursFallback(
+              commerce_delivery_rules.map((rule: any) => ({
+                id: rule.id,
+                weekday: rule.weekday,
+                delivery_enabled: rule.delivery_enabled,
+                asap_enabled: rule.asap_enabled,
+                scheduled_enabled: rule.scheduled_enabled,
+                windows: (rule.windows || []).map((window: any) => ({
+                  id: window.id,
+                  label: window.label,
+                  start_time: window.start_time,
+                  end_time: window.end_time,
+                  sort_order: window.sort_order,
+                })),
+              })),
+              (companyData.hours || []).map((hour: any) => ({
+                day_of_week: hour.day_of_week,
+                open_time: hour.open_time,
+                close_time: hour.close_time,
+                is_closed: hour.is_closed,
+              })),
+            );
+
+            return {
+              delivery_rules: deliveryRulesResolution.rules,
+              delivery_rules_source: deliveryRulesResolution.source,
+            };
+          })(),
+        }
+        : null,
     };
     return buildSuccessResponse('Company retrieved', responseData);
   } catch (error) {

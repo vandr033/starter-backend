@@ -49,7 +49,7 @@ export async function sendEmailCode(
     return 1;
   }
   try {
-    transporter.sendMail({
+    await transporter.sendMail({
       to: email,
       from: process.env.MAIL_FROM!,
       subject: "Código de verificación",
@@ -131,9 +131,10 @@ export async function sendEmailCode(
         </body>
         </html>
       `,
-    });  
+    });
     return 1;
     } catch (error) {
+      logger.error({ event: "email_code_failed", to: maskEmail(email), err: error }, "Error sending verification email");
       return -1;
     }
 }
@@ -146,7 +147,7 @@ export async function sendStaffInviteEmail(
     companyName: string
 ) {
     try {
-        transporter.sendMail({
+        await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
             subject: `You've been invited to join ${companyName}`,
@@ -194,7 +195,7 @@ export async function sendStaffInviteEmail(
         });
         return 1;
     } catch (error) {
-        console.error('Error sending staff invite email:', error);
+        logger.error({ event: "staff_invite_email_failed", to: maskEmail(email), companyName, err: error }, 'Error sending staff invite email');
         return -1;
     }
 }
@@ -267,7 +268,7 @@ export async function sendResetPasswordEmail(user: User, url: string){
         return;
     }
     try {
-        transporter.sendMail({
+        await transporter.sendMail({
             to: user.email,
             from: process.env.MAIL_FROM!,
             subject: "Restablecimiento de contraseña",
@@ -364,9 +365,10 @@ export async function sendResetPasswordEmail(user: User, url: string){
               </body>
               </html>
             `
-          });  
+          });
           return 1;
           } catch (error) {
+            logger.error({ event: "reset_password_email_failed", to: maskEmail(user.email), err: error }, "Error sending reset password email");
             return -1;
           }
 }

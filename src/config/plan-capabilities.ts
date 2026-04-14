@@ -22,7 +22,8 @@ export type PlanFeatureKey =
     | 'OUTREACH_REACTIVATION_TOOLS'
     | 'GROUP_EVENTS'
     | 'GROUP_CLASSES'
-    | 'GROUP_ADVANCED';
+    | 'GROUP_ADVANCED'
+    | 'STORE_MODULE';
 
 export type PlanCapabilities = {
     maxStaffMembers: number | null;
@@ -52,6 +53,7 @@ const STARTER_FEATURES: Record<PlanFeatureKey, boolean> = {
     GROUP_EVENTS: false,
     GROUP_CLASSES: false,
     GROUP_ADVANCED: false,
+    STORE_MODULE: false,
 };
 
 const BUSINESS_FEATURES: Record<PlanFeatureKey, boolean> = {
@@ -77,6 +79,7 @@ const BUSINESS_FEATURES: Record<PlanFeatureKey, boolean> = {
     GROUP_EVENTS: true,
     GROUP_CLASSES: false,
     GROUP_ADVANCED: false,
+    STORE_MODULE: true,
 };
 
 const PRO_FEATURES: Record<PlanFeatureKey, boolean> = {
@@ -102,6 +105,7 @@ const PRO_FEATURES: Record<PlanFeatureKey, boolean> = {
     GROUP_EVENTS: true,
     GROUP_CLASSES: true,
     GROUP_ADVANCED: true,
+    STORE_MODULE: true,
 };
 
 export const PLAN_CAPABILITIES: Record<ShopPlan, PlanCapabilities> = {
@@ -142,6 +146,7 @@ export const FEATURE_REQUIRED_PLAN: Record<PlanFeatureKey, ShopPlan> = {
     GROUP_EVENTS: ShopPlan.BUSINESS,
     GROUP_CLASSES: ShopPlan.PRO,
     GROUP_ADVANCED: ShopPlan.PRO,
+    STORE_MODULE: ShopPlan.BUSINESS,
 };
 
 export function getPlanCapabilities(plan: ShopPlan): PlanCapabilities {

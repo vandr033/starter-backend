@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { CompanyUserRole } from '@prisma/client';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
+import { requireCompanyModule } from '../middlewares/requireCompanyModule';
 import { validate } from '../middlewares/validate';
 import * as AdminGroupClassController from '../controllers/admin-group-class.controller';
 import { createGroupClassSchema, setGroupItemStatusSchema, updateGroupClassSchema } from '../schemas/group.schema';
@@ -9,7 +10,7 @@ import { createGroupClassSchema, setGroupItemStatusSchema, updateGroupClassSchem
 const router = Router();
 const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
 
-router.use(requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('GROUP_CLASSES'));
+router.use(requireAuth, requireCompanyRole(adminRoles), requireCompanyModule('RESERVATIONS'), requirePlanFeature('GROUP_CLASSES'));
 
 router.get('/', AdminGroupClassController.listClasses);
 router.post('/', validate(createGroupClassSchema), AdminGroupClassController.createClass);

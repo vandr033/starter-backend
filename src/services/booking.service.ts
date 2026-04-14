@@ -2,7 +2,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import * as BookingRepo from '../repositories/booking.repo';
 import { prisma } from '../prisma/client';
 import { notifyBookingCreated } from '../utils/bookingNotifications';
-import { BookingSource } from '@prisma/client';
+import { BookingSource, PaymentStatus } from '@prisma/client';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 
@@ -23,6 +23,12 @@ interface TimeSlot {
 
 interface GetSlotsResult extends MensajeApi {
     data?: TimeSlot[];
+}
+
+export function resolveBookingPaymentStatus(paymentMethod: 'NONE' | 'CASH' | 'QR' | string): PaymentStatus {
+    return paymentMethod === 'NONE'
+        ? PaymentStatus.UNPAID
+        : PaymentStatus.PENDING_CONFIRMATION;
 }
 
 /**
@@ -961,7 +967,7 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
                 end_at: endAt,
                 status: 'CONFIRMED',
                 payment_method: params.payment_method as any,
-                payment_status: params.payment_method === 'NONE' ? ('UNPAID' as any) : ('PENDING_CONFIRMATION' as any),
+                payment_status: resolveBookingPaymentStatus(params.payment_method),
                 qr_proof_image_url: params.qr_proof_image_url,
                 total_price_cents: totalPrice,
                 notes: params.notes,
@@ -1181,7 +1187,7 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
                 end_at: endAt,
                 status: 'CONFIRMED',
                 payment_method: params.payment_method as any,
-                payment_status: params.payment_method === 'NONE' ? ('UNPAID' as any) : ('PENDING' as any),
+                payment_status: resolveBookingPaymentStatus(params.payment_method),
                 qr_proof_image_url: params.qr_proof_image_url,
                 total_price_cents: totalPrice,
                 notes: params.notes,

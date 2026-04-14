@@ -15,6 +15,18 @@ function normalizeCurrencyInput(value: unknown): string | null {
     return normalized;
 }
 
+function normalizeOptionalString(value: unknown, maxLength?: number): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (!normalized) return null;
+    if (maxLength && normalized.length > maxLength) {
+        return normalized.slice(0, maxLength);
+    }
+    return normalized;
+}
+
 export const getAllCompanies = async (req: Request, res: Response) => {
     try {
         mensaje = await CompanyService.getAllCompanies();
@@ -170,6 +182,216 @@ export const getCompanyStatus = async (req: Request, res: Response) => {
         logger.error(error);
         mensaje = buildServiceErrorResponse('company', 'get status', error);
         res.status(500).json(mensaje);
+    }
+}
+
+export const getAdminCompanyProfile = async (req: AuthenticatedRequest, res: Response) => {
+    try {
+        const companyId = (req as any).companyID as number | undefined;
+        if (!companyId) {
+            return res.status(400).json({
+                code: 400,
+                error: true,
+                message: 'Company context not found',
+            });
+        }
+
+        const company = await prisma.company.findUnique({
+            where: { id: companyId },
+            select: {
+                id: true,
+                name: true,
+                slug: true,
+                email: true,
+                phone_prefix: true,
+                phone: true,
+                address: true,
+                city: true,
+                state: true,
+                country_code: true,
+                timezone: true,
+                currency: true,
+                google_maps_url: true,
+                latitude: true,
+                longitude: true,
+                is_active: true,
+            },
+        });
+
+        if (!company) {
+            return res.status(404).json({
+                code: 404,
+                error: true,
+                message: 'Company not found',
+            });
+        }
+
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Company profile retrieved successfully',
+            data: company,
+        });
+    } catch (error) {
+        logger.error('Error getting admin company profile:', error as any);
+        return res.status(500).json({
+            code: 500,
+            error: true,
+            message: 'Internal server error',
+        });
+    }
+}
+
+export const updateAdminCompanyProfile = async (req: AuthenticatedRequest, res: Response) => {
+    try {
+        const companyId = (req as any).companyID as number | undefined;
+        if (!companyId) {
+            return res.status(400).json({
+                code: 400,
+                error: true,
+                message: 'Company context not found',
+            });
+        }
+
+        const updateData: Record<string, unknown> = {};
+        const {
+            name,
+            slug,
+            email,
+            phone_prefix,
+            phone,
+            address,
+            city,
+            state,
+            country_code,
+            timezone,
+            currency,
+            google_maps_url,
+            latitude,
+            longitude,
+            is_active,
+        } = req.body ?? {};
+
+        const normalizedName = normalizeOptionalString(name, 191);
+        if (normalizedName !== undefined) updateData.name = normalizedName;
+
+        const normalizedSlug = normalizeOptionalString(slug, 64);
+        if (normalizedSlug !== undefined) {
+            updateData.slug = normalizedSlug?.toLowerCase() ?? null;
+        }
+
+        if (email !== undefined) {
+            if (email !== null && typeof email !== 'string') {
+                return res.status(400).json({ code: 400, error: true, message: 'email must be a string or null' });
+            }
+            updateData.email = normalizeOptionalString(email, 191);
+        }
+
+        if (phone_prefix !== undefined) {
+            if (phone_prefix !== null && typeof phone_prefix !== 'string') {
+                return res.status(400).json({ code: 400, error: true, message: 'phone_prefix must be a string or null' });
+            }
+            updateData.phone_prefix = normalizeOptionalString(phone_prefix, 8) ?? '591';
+        }
+
+        if (phone !== undefined) {
+            if (typeof phone !== 'string' || !phone.trim()) {
+                return res.status(400).json({ code: 400, error: true, message: 'phone must be a non-empty string' });
+            }
+            updateData.phone = phone.trim();
+        }
+
+        const stringFields = [
+            ['address', address, 255],
+            ['city', city, 128],
+            ['state', state, 128],
+            ['country_code', country_code, 2],
+            ['timezone', timezone, 64],
+            ['google_maps_url', google_maps_url, 512],
+        ] as const;
+
+        for (const [key, value, maxLength] of stringFields) {
+            const normalized = normalizeOptionalString(value, maxLength);
+            if (normalized !== undefined) {
+                updateData[key] = normalized;
+            }
+        }
+
+        if (currency !== undefined) {
+            const normalizedCurrency = normalizeCurrencyInput(currency);
+            if (!normalizedCurrency) {
+                return res.status(400).json({
+                    code: 400,
+                    message: 'currency must be a non-empty string up to 3 characters',
+                    error: true,
+                });
+            }
+            updateData.currency = normalizedCurrency;
+        }
+
+        if (latitude !== undefined) {
+            if (latitude === null || latitude === '') {
+                updateData.latitude = null;
+            } else if (typeof latitude === 'number' && Number.isFinite(latitude)) {
+                updateData.latitude = latitude;
+            } else {
+                return res.status(400).json({ code: 400, error: true, message: 'latitude must be a valid number or null' });
+            }
+        }
+
+        if (longitude !== undefined) {
+            if (longitude === null || longitude === '') {
+                updateData.longitude = null;
+            } else if (typeof longitude === 'number' && Number.isFinite(longitude)) {
+                updateData.longitude = longitude;
+            } else {
+                return res.status(400).json({ code: 400, error: true, message: 'longitude must be a valid number or null' });
+            }
+        }
+
+        if (is_active !== undefined) {
+            if (typeof is_active !== 'boolean') {
+                return res.status(400).json({ code: 400, error: true, message: 'is_active must be a boolean' });
+            }
+            updateData.is_active = is_active;
+        }
+
+        const updated = await prisma.company.update({
+            where: { id: companyId },
+            data: updateData,
+            select: {
+                id: true,
+                name: true,
+                slug: true,
+                email: true,
+                phone_prefix: true,
+                phone: true,
+                address: true,
+                city: true,
+                state: true,
+                country_code: true,
+                timezone: true,
+                currency: true,
+                google_maps_url: true,
+                latitude: true,
+                longitude: true,
+                is_active: true,
+            },
+        });
+
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Company profile updated successfully',
+            data: updated,
+        });
+    } catch (error) {
+        logger.error('Error updating admin company profile:', error as any);
+        return res.status(500).json({
+            code: 500,
+            error: true,
+            message: 'Internal server error',
+        });
     }
 }
 

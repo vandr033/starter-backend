@@ -3,6 +3,7 @@ import * as AdminBookingController from '../controllers/admin-booking.controller
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { CompanyUserRole } from '@prisma/client';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
+import { requireCompanyModule } from '../middlewares/requireCompanyModule';
 
 const router = Router();
 
@@ -10,28 +11,30 @@ const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
 const allStaffRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN, CompanyUserRole.STAFF];
 
 // GET /api/admin/bookings - Get bookings with filters and pagination
-router.get('/', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.getBookings);
+router.get('/', requireAuth, requireCompanyRole(allStaffRoles), requireCompanyModule('RESERVATIONS'), AdminBookingController.getBookings);
 
 // GET /api/admin/bookings/reminders/today/preview - Preview today's reminder targets
 router.get(
     '/reminders/today/preview',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     requirePlanFeature('BOOKING_REMINDERS'),
     AdminBookingController.getTodayReminderPreview
 );
 
 // POST /api/admin/bookings - Create booking on behalf of customer
-router.post('/', requireAuth, requireCompanyRole(adminRoles), AdminBookingController.createBooking);
+router.post('/', requireAuth, requireCompanyRole(adminRoles), requireCompanyModule('RESERVATIONS'), AdminBookingController.createBooking);
 
 // POST /api/admin/bookings/batch - Create multiple recurring bookings
-router.post('/batch', requireAuth, requireCompanyRole(adminRoles), AdminBookingController.createRecurringBookings);
+router.post('/batch', requireAuth, requireCompanyRole(adminRoles), requireCompanyModule('RESERVATIONS'), AdminBookingController.createRecurringBookings);
 
 // POST /api/admin/bookings/:id/reminders/today - Send today's reminder for one booking
 router.post(
     '/:id/reminders/today',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     requirePlanFeature('BOOKING_REMINDERS'),
     AdminBookingController.sendTodayReminder
 );
@@ -41,11 +44,12 @@ router.post(
     '/:id/notifications/no-show',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     requirePlanFeature('TRANSACTIONAL_BOOKING_NOTIFICATIONS'),
     AdminBookingController.sendNoShowNotification
 );
 
 // PUT /api/admin/bookings/:id - Update booking (staff can update their own)
-router.put('/:id', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.updateBooking);
+router.put('/:id', requireAuth, requireCompanyRole(allStaffRoles), requireCompanyModule('RESERVATIONS'), AdminBookingController.updateBooking);
 
 export default router;

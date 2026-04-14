@@ -92,7 +92,13 @@ export const createSuperAdminShopSchema = z
     availableUntil: availableUntilSchema,
     pricePaid: z.number().min(0).nullable().optional(),
     isMarketplaceVisible: z.boolean(),
+    reservations_enabled: z.boolean(),
+    store_enabled: z.boolean(),
     owner: ownerSchema,
+  })
+  .refine((data) => data.reservations_enabled || data.store_enabled, {
+    message: 'At least one company module must be enabled',
+    path: ['reservations_enabled'],
   })
   .strict();
 
@@ -118,6 +124,8 @@ export const updateSuperAdminShopSchema = z
     availableUntil: availableUntilSchema.optional(),
     pricePaid: z.number().min(0).nullable().optional(),
     isMarketplaceVisible: z.boolean().optional(),
+    reservations_enabled: z.boolean().optional(),
+    store_enabled: z.boolean().optional(),
     note: z.string().trim().max(500).optional(),
   })
   .strict()

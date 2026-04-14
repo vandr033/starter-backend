@@ -3,6 +3,7 @@ import { CompanyUserRole } from '@prisma/client';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import * as StaffAvailabilityController from '../controllers/admin-staff-availability.controller';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
+import { requireCompanyModule } from '../middlewares/requireCompanyModule';
 
 const router = Router();
 
@@ -15,6 +16,7 @@ router.get(
     '/me/availability',
     requireAuth,
     requireCompanyRole(allRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.getMyAvailability
 );
@@ -22,6 +24,7 @@ router.get(
     '/:id/availability',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.getStaffAvailability
 );
@@ -29,6 +32,7 @@ router.put(
     '/:id/availability',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.saveStaffAvailability
 );
@@ -38,6 +42,7 @@ router.get(
     '/time-off',
     requireAuth,
     requireCompanyRole(allRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.listTimeOffRequests
 );
@@ -45,6 +50,7 @@ router.post(
     '/time-off',
     requireAuth,
     requireCompanyRole(allRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.createTimeOffRequest
 );
@@ -52,6 +58,7 @@ router.post(
     '/time-off/:id/review',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.reviewTimeOffRequest
 );
@@ -59,6 +66,7 @@ router.post(
     '/time-off/:id/cancel',
     requireAuth,
     requireCompanyRole(allRoles),
+    requireCompanyModule('RESERVATIONS'),
     requireAvailabilityFeature,
     StaffAvailabilityController.cancelTimeOffRequest
 );

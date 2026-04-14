@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { CompanyUserRole } from '@prisma/client';
 import { getStaffServices, updateStaffServices } from '../controllers/admin-staff-services.controller';
+import { requireCompanyModule } from '../middlewares/requireCompanyModule';
 
 const router = Router();
 
@@ -12,6 +13,7 @@ router.get(
     '/:id/services',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     getStaffServices
 );
 
@@ -20,6 +22,7 @@ router.put(
     '/:id/services',
     requireAuth,
     requireCompanyRole(adminRoles),
+    requireCompanyModule('RESERVATIONS'),
     updateStaffServices
 );
 

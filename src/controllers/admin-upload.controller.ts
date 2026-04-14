@@ -91,7 +91,11 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       'about_1',
       'about_2',
       'about_3',
+      'booking_proof',
+      'payment_qr',
       'staff',
+      'commerce_banner',
+      'commerce_product',
       'group_event_cover',
       'group_event_thumbnail',
       'group_class_cover',
@@ -160,7 +164,8 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     }
 
     // Determine storage type and filename
-    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'group-events' | 'group-classes';
+    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'qr' | 'booking-proofs' | 'group-events' | 'group-classes' | 'commerce-banners' | 'commerce-products';
+    let skipDatabaseUpdate = false;
     let filename: string;
     let imageUrlField: string;
 
@@ -187,6 +192,30 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         const imageNumber = type.split('_')[1];
         filename = `image${imageNumber}.${fileExtension}`;
         imageUrlField = `about_image_${imageNumber}_url`;
+        break;
+      case 'payment_qr':
+        storageType = 'qr';
+        filename = `payment-qr.${fileExtension}`;
+        imageUrlField = 'qr_image_url';
+        skipDatabaseUpdate = true;
+        break;
+      case 'booking_proof':
+        storageType = 'booking-proofs';
+        filename = `booking-proof-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${fileExtension}`;
+        imageUrlField = 'qr_image_url';
+        skipDatabaseUpdate = true;
+        break;
+      case 'commerce_banner':
+        storageType = 'commerce-banners';
+        filename = `banner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${fileExtension}`;
+        imageUrlField = 'banner_image_url';
+        skipDatabaseUpdate = true;
+        break;
+      case 'commerce_product':
+        storageType = 'commerce-products';
+        filename = `product-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${fileExtension}`;
+        imageUrlField = 'image_url';
+        skipDatabaseUpdate = true;
         break;
       case 'staff':
         storageType = 'staff';
@@ -233,7 +262,9 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     const url = StorageService.getFileUrl(relativePath);
 
     // Update database record
-    if (type === 'staff') {
+    if (skipDatabaseUpdate) {
+      // The caller persists the returned URL after validating the rest of the form.
+    } else if (type === 'staff') {
       // Update staff profile
       const updated = await prisma.staffProfile.updateMany({
         where: { id: entityId!, company_id: companyId },
