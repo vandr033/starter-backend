@@ -19,6 +19,7 @@ import { generateInstallmentsForEnrollment } from './enrollment-installment.serv
 import { buildWaitlistSpotOpenedTemplate, notifyGroupBookingCreated } from '../utils/groupNotifications';
 import { isTemporaryEmailAddress, sendCustomerMassMessageEmail, sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
+import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
@@ -1793,9 +1794,16 @@ export async function createClassEnrollment(
 }
 
 export interface AdminCreateClassEnrollmentInput {
-    customer_id: number;
+    customer_id?: number;
+    new_member?: {
+        name: string;
+        email: string;
+        phone: string;
+    };
     payment_method: 'NONE' | 'CASH' | 'QR';
     mark_as_paid: boolean;
+    qr_proof_image_url?: string | null;
+    admin_user_id: string;
 }
 
 /**
@@ -1807,19 +1815,47 @@ export async function adminCreateClassEnrollment(
     classId: number,
     input: AdminCreateClassEnrollmentInput,
 ): Promise<ServiceResult> {
-    const customerProfile = await prisma.customerProfile.findFirst({
-        where: { id: input.customer_id, company_id: companyId, deleted_at: null },
-        select: { id: true, user_id: true },
-    });
-    if (!customerProfile) {
-        return { code: 404, error: true, message: 'Customer not found for this company' };
-    }
-
     const gc = await prisma.groupClass.findFirst({
         where: { id: classId, company_id: companyId, deleted_at: null },
     });
     if (!gc) {
         return { code: 404, error: true, message: 'Class not found' };
+    }
+
+    let inviteContext: CustomerAccountInviteContext | null = null;
+    let customerProfile: { id: number; user_id: string } | null = null;
+
+    if (input.customer_id) {
+        customerProfile = await prisma.customerProfile.findFirst({
+            where: { id: input.customer_id, company_id: companyId, deleted_at: null },
+            select: { id: true, user_id: true },
+        });
+        if (!customerProfile) {
+            return { code: 404, error: true, message: 'Customer not found for this company' };
+        }
+    } else if (input.new_member) {
+        const provisioned = await ensureCustomerProfileWithAccount({
+            companyId,
+            fullName: input.new_member.name,
+            email: input.new_member.email,
+            phone: input.new_member.phone,
+        });
+
+        if ('error' in provisioned && provisioned.error) {
+            return {
+                code: provisioned.code,
+                error: true,
+                message: provisioned.message,
+            };
+        }
+
+        customerProfile = {
+            id: provisioned.customerProfileId,
+            user_id: provisioned.userId,
+        };
+        inviteContext = provisioned.inviteContext;
+    } else {
+        return { code: 400, error: true, message: 'customer_id or new_member is required' };
     }
 
     const now = new Date();
@@ -1867,17 +1903,56 @@ export async function adminCreateClassEnrollment(
     }
 
     const isFullCourse = gc.pricing_mode === 'FULL_COURSE';
-    const effectivePaymentMethod: PaymentMethod = isFullCourse ? PaymentMethod.NONE : (input.payment_method as PaymentMethod);
-    let paymentStatus: PaymentStatus;
-    if (isFullCourse) {
-        paymentStatus = PaymentStatus.UNPAID;
-    } else if (gc.price_cents === 0) {
-        paymentStatus = PaymentStatus.PAID;
-    } else if (input.mark_as_paid) {
-        paymentStatus = PaymentStatus.PAID;
-    } else {
-        paymentStatus = PaymentStatus.UNPAID;
+    const canCustomize = await isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
+    const settings = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: {
+            allow_cash_payment: true,
+            allow_qr_payment: true,
+            require_comprobante_for_qr: true,
+        },
+    });
+    const requireComprobante = canCustomize ? (settings?.require_comprobante_for_qr ?? true) : true;
+
+    const selectedPaymentMethod = input.payment_method as PaymentMethod;
+    const qrProofImageUrl = input.qr_proof_image_url?.trim() || null;
+    const expectedAmountCents = isFullCourse ? (gc.monthly_price_cents ?? 0) : gc.price_cents;
+
+    if (expectedAmountCents > 0 && input.mark_as_paid && selectedPaymentMethod === PaymentMethod.NONE) {
+        return { code: 400, error: true, message: 'payment_method is required when mark_as_paid is enabled' };
     }
+
+    if (selectedPaymentMethod === PaymentMethod.CASH && settings && !settings.allow_cash_payment) {
+        return { code: 400, error: true, message: 'Cash payment is not enabled for this business' };
+    }
+
+    if (selectedPaymentMethod === PaymentMethod.QR && settings && !settings.allow_qr_payment) {
+        return { code: 400, error: true, message: 'QR payment is not enabled for this business' };
+    }
+
+    if (selectedPaymentMethod === PaymentMethod.QR && requireComprobante && !qrProofImageUrl) {
+        return { code: 400, error: true, message: 'QR payment proof is required' };
+    }
+
+    let enrollmentPaymentMethod: PaymentMethod = PaymentMethod.NONE;
+    let enrollmentPaymentStatus: PaymentStatus = PaymentStatus.UNPAID;
+    let enrollmentQrProofImageUrl: string | null = null;
+
+    if (expectedAmountCents <= 0) {
+        enrollmentPaymentStatus = PaymentStatus.PAID;
+    } else if (input.mark_as_paid) {
+        enrollmentPaymentMethod = selectedPaymentMethod;
+        enrollmentPaymentStatus = PaymentStatus.PAID;
+        enrollmentQrProofImageUrl = selectedPaymentMethod === PaymentMethod.QR ? qrProofImageUrl : null;
+    } else if (selectedPaymentMethod === PaymentMethod.QR) {
+        enrollmentPaymentMethod = PaymentMethod.QR;
+        enrollmentPaymentStatus = PaymentStatus.PENDING_CONFIRMATION;
+        enrollmentQrProofImageUrl = qrProofImageUrl;
+    } else if (selectedPaymentMethod === PaymentMethod.CASH) {
+        enrollmentPaymentMethod = PaymentMethod.CASH;
+    }
+
+    let shouldDeliverTicketNow = false;
 
     const result = await prisma.$transaction(async (tx) => {
         const enrollment = await tx.groupClassEnrollment.create({
@@ -1889,9 +1964,9 @@ export async function adminCreateClassEnrollment(
                 pricing_mode: gc.pricing_mode,
                 price_cents_snapshot: isFullCourse ? (gc.monthly_price_cents ?? 0) : gc.price_cents,
                 status: GroupBookingStatus.CONFIRMED,
-                payment_method: effectivePaymentMethod,
-                payment_status: paymentStatus,
-                qr_proof_image_url: null,
+                payment_method: enrollmentPaymentMethod,
+                payment_status: enrollmentPaymentStatus,
+                qr_proof_image_url: enrollmentQrProofImageUrl,
                 valid_from: validFrom,
                 valid_until: validUntil,
             },
@@ -1905,6 +1980,58 @@ export async function adminCreateClassEnrollment(
                 billingDay: gc.billing_day,
                 amountCents: gc.monthly_price_cents,
             });
+
+            const firstInstallment = await tx.enrollmentInstallment.findFirst({
+                where: { enrollment_id: enrollment.id },
+                orderBy: { installment_number: 'asc' },
+                select: { id: true },
+            });
+
+            if (firstInstallment) {
+                if (expectedAmountCents <= 0) {
+                    await tx.enrollmentInstallment.update({
+                        where: { id: firstInstallment.id },
+                        data: {
+                            payment_status: PaymentStatus.PAID,
+                            payment_method: PaymentMethod.NONE,
+                            paid_at: now,
+                            marked_paid_by_admin_id: input.admin_user_id,
+                        },
+                    });
+                    shouldDeliverTicketNow = true;
+                } else if (input.mark_as_paid) {
+                    await tx.enrollmentInstallment.update({
+                        where: { id: firstInstallment.id },
+                        data: {
+                            payment_status: PaymentStatus.PAID,
+                            payment_method: selectedPaymentMethod,
+                            qr_proof_image_url: selectedPaymentMethod === PaymentMethod.QR ? qrProofImageUrl : null,
+                            paid_at: now,
+                            marked_paid_by_admin_id: input.admin_user_id,
+                        },
+                    });
+                    shouldDeliverTicketNow = true;
+                } else if (selectedPaymentMethod === PaymentMethod.QR) {
+                    await tx.enrollmentInstallment.update({
+                        where: { id: firstInstallment.id },
+                        data: {
+                            payment_status: PaymentStatus.PENDING_CONFIRMATION,
+                            payment_method: PaymentMethod.QR,
+                            qr_proof_image_url: qrProofImageUrl,
+                        },
+                    });
+                } else if (selectedPaymentMethod === PaymentMethod.CASH) {
+                    await tx.enrollmentInstallment.update({
+                        where: { id: firstInstallment.id },
+                        data: {
+                            payment_status: PaymentStatus.UNPAID,
+                            payment_method: PaymentMethod.CASH,
+                        },
+                    });
+                }
+            }
+        } else if (enrollmentPaymentStatus === PaymentStatus.PAID) {
+            shouldDeliverTicketNow = true;
         }
 
         return {
@@ -1915,10 +2042,16 @@ export async function adminCreateClassEnrollment(
         } as ServiceResult;
     });
 
-    if (!result.error && result.data) {
+    if (!result.error && result.data && shouldDeliverTicketNow) {
         const enrollmentId = (result.data as { id: number }).id;
         void issueClassTicketForEnrollment(companyId, enrollmentId).catch((error) => {
             logger.error({ companyId, enrollmentId, error }, 'Failed to issue class ticket after admin enrollment');
+        });
+    }
+
+    if (!result.error && inviteContext) {
+        void sendCustomerPortalInvite(inviteContext).catch((error) => {
+            logger.error({ companyId, classId, inviteContext, error }, 'Failed to send customer portal invite after admin class enrollment');
         });
     }
 
@@ -2072,6 +2205,10 @@ export async function confirmClassEnrollmentPayment(companyId: number, enrollmen
     await prisma.groupClassEnrollment.update({
         where: { id: enrollmentId },
         data: { payment_status: 'PAID' },
+    });
+
+    void issueClassTicketForEnrollment(companyId, enrollmentId).catch((error) => {
+        logger.error({ companyId, enrollmentId, error }, 'Failed to issue class ticket after payment confirmation');
     });
 
     return { code: 200, error: false, message: 'Enrollment payment confirmed' };

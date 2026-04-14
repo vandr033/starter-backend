@@ -3,6 +3,7 @@ import * as AdminBookingRepo from '../repositories/admin-booking.repo';
 import * as BookingRepo from '../repositories/booking.repo';
 import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { logger } from '../config/logger';
 import {
     notifyBookingCreated,
     notifyBookingUpdated,
@@ -14,6 +15,7 @@ import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookingNotifications';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { sendReviewRequestReminder } from '../utils/reviewNotifications';
+import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -47,6 +49,7 @@ interface ResolvedAdminCustomer {
     clientEmail: string | null;
     clientPhonePrefix: string | null;
     clientPhoneNumber: string | null;
+    inviteContext?: CustomerAccountInviteContext | null;
 }
 
 interface ResolvedAdminPayment {
@@ -266,13 +269,45 @@ async function resolveAdminCustomer(
     }
 
     const { phonePrefix, phoneNumber } = parseClientPhone(input.client_phone);
+
+    const normalizedEmail = normalizeEmail(input.client_email);
+    if (normalizedEmail) {
+        const provisioned = await ensureCustomerProfileWithAccount({
+            companyId,
+            fullName: input.client_name.trim(),
+            email: normalizedEmail,
+            phone: phoneNumber,
+            phonePrefix,
+        });
+
+        if ('error' in provisioned && provisioned.error) {
+            return {
+                code: provisioned.code,
+                message: provisioned.message,
+                error: true,
+            };
+        }
+
+        return {
+            customer: {
+                customerId: provisioned.customerProfileId,
+                clientName: provisioned.userName || input.client_name.trim(),
+                clientEmail: provisioned.userEmail || normalizedEmail,
+                clientPhonePrefix: provisioned.userPhonePrefix || phonePrefix,
+                clientPhoneNumber: provisioned.userPhoneNumber || phoneNumber,
+                inviteContext: provisioned.inviteContext,
+            },
+        };
+    }
+
     return {
         customer: {
             customerId: null,
             clientName: input.client_name.trim(),
-            clientEmail: input.client_email?.trim() || null,
+            clientEmail: normalizedEmail,
             clientPhonePrefix: phonePrefix,
             clientPhoneNumber: phoneNumber,
+            inviteContext: null,
         },
     };
 }
@@ -1044,16 +1079,6 @@ export async function createBooking(
             };
         }
 
-        const customerResult = await resolveAdminCustomer(data.companyId, {
-            customer_id: data.customer_id,
-            client_name: data.client_name,
-            client_phone: data.client_phone,
-            client_email: data.client_email,
-        });
-        if ('error' in customerResult) {
-            return customerResult;
-        }
-
         const sessionResult = await prepareAdminBookingSession({
             companyId: data.companyId,
             staffId: data.staff_id,
@@ -1067,6 +1092,16 @@ export async function createBooking(
         });
         if ('error' in sessionResult) {
             return sessionResult;
+        }
+
+        const customerResult = await resolveAdminCustomer(data.companyId, {
+            customer_id: data.customer_id,
+            client_name: data.client_name,
+            client_phone: data.client_phone,
+            client_email: data.client_email,
+        });
+        if ('error' in customerResult) {
+            return customerResult;
         }
 
         const booking = await createAdminBookingRecord({
@@ -1089,6 +1124,12 @@ export async function createBooking(
                 totalPrice: sessionResult.prepared.totalPrice,
                 customer: customerResult.customer,
                 services: sessionResult.prepared.services,
+            });
+        }
+
+        if (customerResult.customer.inviteContext) {
+            void sendCustomerPortalInvite(customerResult.customer.inviteContext).catch((error) => {
+                logger.error({ companyId: data.companyId, bookingId: booking?.id, error }, 'Failed to send customer portal invite after admin booking');
             });
         }
 
@@ -1137,16 +1178,6 @@ export async function createRecurringBookings(
             };
         }
 
-        const customerResult = await resolveAdminCustomer(data.companyId, {
-            customer_id: data.customer_id,
-            client_name: data.client_name,
-            client_phone: data.client_phone,
-            client_email: data.client_email,
-        });
-        if ('error' in customerResult) {
-            return customerResult;
-        }
-
         const preparedSessions: PreparedAdminBookingSession[] = [];
         for (const session of data.sessions) {
             const preparedResult = await prepareAdminBookingSession({
@@ -1184,6 +1215,16 @@ export async function createRecurringBookings(
             preparedSessions.push(preparedResult.prepared);
         }
 
+        const customerResult = await resolveAdminCustomer(data.companyId, {
+            customer_id: data.customer_id,
+            client_name: data.client_name,
+            client_phone: data.client_phone,
+            client_email: data.client_email,
+        });
+        if ('error' in customerResult) {
+            return customerResult;
+        }
+
         const createdBookings: any[] = [];
         for (let index = 0; index < preparedSessions.length; index += 1) {
             const prepared = preparedSessions[index];
@@ -1212,6 +1253,12 @@ export async function createRecurringBookings(
                     services: prepared.services,
                 });
             }
+        }
+
+        if (customerResult.customer.inviteContext) {
+            void sendCustomerPortalInvite(customerResult.customer.inviteContext).catch((error) => {
+                logger.error({ companyId: data.companyId, bookingCount: createdBookings.length, error }, 'Failed to send customer portal invite after recurring admin bookings');
+            });
         }
 
         return {

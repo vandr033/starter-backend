@@ -2,8 +2,51 @@ import { PaymentMethod, PaymentStatus } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
 import { getEnrollmentInstallmentPlan } from './group-payments.service';
+import { issueClassTicketForEnrollment } from './group-ticket.service';
+import { logger } from '../config/logger';
 
 type ServiceResult = MensajeApi & { data?: unknown };
+
+async function unlockEnrollmentAccessFromFirstInstallment(params: {
+    companyId: number;
+    installmentId: number;
+    paymentMethod: PaymentMethod;
+    qrProofImageUrl?: string | null;
+}) {
+    const installment = await prisma.enrollmentInstallment.findFirst({
+        where: { id: params.installmentId },
+        include: {
+            enrollment: {
+                select: {
+                    id: true,
+                    company_id: true,
+                },
+            },
+        },
+    });
+
+    if (!installment || installment.enrollment.company_id !== params.companyId || installment.installment_number !== 1) {
+        return;
+    }
+
+    await prisma.groupClassEnrollment.update({
+        where: { id: installment.enrollment.id },
+        data: {
+            payment_method: params.paymentMethod,
+            payment_status: PaymentStatus.PAID,
+            qr_proof_image_url: params.paymentMethod === PaymentMethod.QR ? (params.qrProofImageUrl ?? installment.qr_proof_image_url ?? null) : null,
+        },
+    });
+
+    try {
+        await issueClassTicketForEnrollment(params.companyId, installment.enrollment.id);
+    } catch (error) {
+        logger.error(
+            { companyId: params.companyId, enrollmentId: installment.enrollment.id, installmentId: params.installmentId, error },
+            'Failed to issue class ticket after first installment payment',
+        );
+    }
+}
 
 /**
  * Given an enrollment date and the class end date, compute how many
@@ -156,6 +199,12 @@ export async function markInstallmentPaid(
         },
     });
 
+    await unlockEnrollmentAccessFromFirstInstallment({
+        companyId,
+        installmentId,
+        paymentMethod: paymentMethod as PaymentMethod,
+    });
+
     return { code: 200, error: false, message: 'Installment marked as paid', data: updated };
 }
 
@@ -189,6 +238,13 @@ export async function confirmInstallmentQrPayment(
             paid_at: new Date(),
             marked_paid_by_admin_id: adminUserId,
         },
+    });
+
+    await unlockEnrollmentAccessFromFirstInstallment({
+        companyId,
+        installmentId,
+        paymentMethod: updated.payment_method,
+        qrProofImageUrl: updated.qr_proof_image_url,
     });
 
     return { code: 200, error: false, message: 'QR payment confirmed', data: updated };

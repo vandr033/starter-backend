@@ -191,9 +191,26 @@ export async function createClassEnrollmentAdmin(req: AuthenticatedRequest, res:
         return res.status(400).json({ code: 400, error: true, message: 'Invalid classId' });
     }
 
+    const adminUserId = req.authUser?.id;
+    if (!adminUserId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
     const customerId = typeof req.body?.customer_id === 'number' ? req.body.customer_id : null;
-    if (!customerId) {
-        return res.status(400).json({ code: 400, error: true, message: 'customer_id is required' });
+    const newMember = req.body?.new_member && typeof req.body.new_member === 'object'
+        ? {
+            name: typeof req.body.new_member.name === 'string' ? req.body.new_member.name.trim() : '',
+            email: typeof req.body.new_member.email === 'string' ? req.body.new_member.email.trim() : '',
+            phone: typeof req.body.new_member.phone === 'string' ? req.body.new_member.phone.trim() : '',
+        }
+        : null;
+
+    if (!customerId && !newMember) {
+        return res.status(400).json({ code: 400, error: true, message: 'customer_id or new_member is required' });
+    }
+
+    if (newMember && (!newMember.name || !newMember.email || !newMember.phone)) {
+        return res.status(400).json({ code: 400, error: true, message: 'new_member requires name, email, and phone' });
     }
 
     const paymentMethod = req.body?.payment_method;
@@ -204,9 +221,12 @@ export async function createClassEnrollmentAdmin(req: AuthenticatedRequest, res:
     const markAsPaid = req.body?.mark_as_paid === true;
 
     const result = await GroupBookingService.adminCreateClassEnrollment(companyId, classId, {
-        customer_id: customerId,
+        customer_id: customerId ?? undefined,
+        new_member: newMember ?? undefined,
         payment_method: paymentMethod,
         mark_as_paid: markAsPaid,
+        qr_proof_image_url: typeof req.body?.qr_proof_image_url === 'string' ? req.body.qr_proof_image_url : undefined,
+        admin_user_id: adminUserId,
     });
     return res.status(result.code).json(result);
 }

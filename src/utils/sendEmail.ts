@@ -261,6 +261,82 @@ export async function sendAdminTempPasswordInviteEmail(params: {
     }
 }
 
+export async function sendCustomerPortalAccessEmail(params: {
+    email: string;
+    companyName: string;
+    temporaryPassword?: string;
+    loginUrl?: string;
+}) {
+    const { email, companyName, temporaryPassword, loginUrl } = params;
+    const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/auth/sign-in`;
+
+    if (isTemporaryEmailAddress(email)) {
+        logger.info({ event: "email_skipped_temp_address", to: maskEmail(email) }, "Skipping customer access email for temporary address");
+        return 1;
+    }
+
+    try {
+        const hasTempPassword = typeof temporaryPassword === "string" && temporaryPassword.length > 0;
+        const info = await transporter.sendMail({
+            to: email,
+            from: process.env.MAIL_FROM!,
+            subject: hasTempPassword ? `Tu acceso a ${companyName}` : `Accede a tus reservas en ${companyName}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 620px; margin: 0 auto; padding: 20px; background: #f8fafc;">
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
+                        <h2 style="margin-top: 0;">${hasTempPassword ? "Tu cuenta ya está lista" : "Acceso a tus reservas"}</h2>
+                        <p>${hasTempPassword
+                            ? `Creamos una cuenta para que puedas revisar tus reservas y pases de <strong>${escapeHtml(companyName)}</strong>.`
+                            : `Tu cuenta en <strong>${escapeHtml(companyName)}</strong> ya existe y puedes usarla para revisar tus reservas y pases.`}
+                        </p>
+                        ${hasTempPassword ? `
+                            <p>Usa estas credenciales temporales:</p>
+                            <ul>
+                                <li><strong>Email:</strong> ${escapeHtml(email)}</li>
+                                <li><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword!)}</li>
+                            </ul>
+                            <p>Al iniciar sesión te pediremos cambiar la contraseña.</p>
+                        ` : `
+                            <p>Ingresa con tu email habitual. Si no recuerdas tu contraseña, usa la opción de recuperación desde el login.</p>
+                        `}
+                        <p>
+                            <a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer">Ir al login</a>
+                        </p>
+                    </div>
+                </div>
+            `,
+        });
+        logger.info(
+            {
+                event: "customer_portal_access_email_sent",
+                to: maskEmail(email),
+                companyName,
+                loginUrl: safeLoginUrl,
+                hasTempPassword,
+                messageId: info.messageId,
+                accepted: info.accepted,
+                rejected: info.rejected,
+                response: info.response,
+            },
+            "Customer portal access email sent",
+        );
+        return 1;
+    } catch (error) {
+        logger.error(
+            {
+                event: "customer_portal_access_email_failed",
+                to: maskEmail(email),
+                companyName,
+                loginUrl: safeLoginUrl,
+                hasTempPassword: Boolean(temporaryPassword),
+                err: error,
+            },
+            "Error sending customer portal access email",
+        );
+        return -1;
+    }
+}
+
 export async function sendResetPasswordEmail(user: User, url: string){
     if (isTemporaryEmailAddress(user.email)) {
         logger.info({ event: "email_skipped_temp_address", to: maskEmail(user.email) }, "Skipping reset password email for temporary address");
