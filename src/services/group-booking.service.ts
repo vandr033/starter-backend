@@ -1792,6 +1792,139 @@ export async function createClassEnrollment(
     return result;
 }
 
+export interface AdminCreateClassEnrollmentInput {
+    customer_id: number;
+    payment_method: 'NONE' | 'CASH' | 'QR';
+    mark_as_paid: boolean;
+}
+
+/**
+ * Admin: create an enrollment for a customer on behalf of the business.
+ * Bypasses the PUBLISHED status requirement and auto-confirms the enrollment.
+ */
+export async function adminCreateClassEnrollment(
+    companyId: number,
+    classId: number,
+    input: AdminCreateClassEnrollmentInput,
+): Promise<ServiceResult> {
+    const customerProfile = await prisma.customerProfile.findFirst({
+        where: { id: input.customer_id, company_id: companyId, deleted_at: null },
+        select: { id: true, user_id: true },
+    });
+    if (!customerProfile) {
+        return { code: 404, error: true, message: 'Customer not found for this company' };
+    }
+
+    const gc = await prisma.groupClass.findFirst({
+        where: { id: classId, company_id: companyId, deleted_at: null },
+    });
+    if (!gc) {
+        return { code: 404, error: true, message: 'Class not found' };
+    }
+
+    const now = new Date();
+
+    const existingActive = await prisma.groupClassEnrollment.findFirst({
+        where: {
+            company_id: companyId,
+            group_class_id: classId,
+            user_id: customerProfile.user_id,
+            status: { in: ['CONFIRMED', 'PENDING'] },
+            valid_until: { gte: now },
+        },
+    });
+    if (existingActive) {
+        return { code: 400, error: true, message: 'This customer already has an active pass for this class' };
+    }
+
+    let validFrom = now;
+    let validUntil: Date;
+
+    if (gc.pricing_mode === 'PER_SESSION') {
+        const nextSession = await prisma.groupClassSession.findFirst({
+            where: { company_id: companyId, group_class_id: classId, cancelled_at: null, start_at: { gte: now } },
+            orderBy: { start_at: 'asc' },
+            select: { start_at: true, end_at: true },
+        });
+        if (nextSession) {
+            validFrom = nextSession.start_at;
+            validUntil = nextSession.end_at;
+        } else {
+            validUntil = gc.recurrence_end_date
+                ? new Date(gc.recurrence_end_date)
+                : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        }
+    } else if (gc.pricing_mode === 'WEEKLY_PASS') {
+        validUntil = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    } else if (gc.pricing_mode === 'FULL_COURSE') {
+        if (!gc.recurrence_end_date) {
+            return { code: 400, error: true, message: 'This class does not have an end date configured' };
+        }
+        validUntil = new Date(gc.recurrence_end_date);
+    } else {
+        validUntil = new Date(now);
+        validUntil.setMonth(validUntil.getMonth() + 1);
+    }
+
+    const isFullCourse = gc.pricing_mode === 'FULL_COURSE';
+    const effectivePaymentMethod: PaymentMethod = isFullCourse ? PaymentMethod.NONE : (input.payment_method as PaymentMethod);
+    let paymentStatus: PaymentStatus;
+    if (isFullCourse) {
+        paymentStatus = PaymentStatus.UNPAID;
+    } else if (gc.price_cents === 0) {
+        paymentStatus = PaymentStatus.PAID;
+    } else if (input.mark_as_paid) {
+        paymentStatus = PaymentStatus.PAID;
+    } else {
+        paymentStatus = PaymentStatus.UNPAID;
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        const enrollment = await tx.groupClassEnrollment.create({
+            data: {
+                company_id: companyId,
+                group_class_id: classId,
+                customer_profile_id: customerProfile.id,
+                user_id: customerProfile.user_id,
+                pricing_mode: gc.pricing_mode,
+                price_cents_snapshot: isFullCourse ? (gc.monthly_price_cents ?? 0) : gc.price_cents,
+                status: GroupBookingStatus.CONFIRMED,
+                payment_method: effectivePaymentMethod,
+                payment_status: paymentStatus,
+                qr_proof_image_url: null,
+                valid_from: validFrom,
+                valid_until: validUntil,
+            },
+        });
+
+        if (isFullCourse && gc.recurrence_end_date && gc.monthly_price_cents && gc.billing_day) {
+            await generateInstallmentsForEnrollment(tx, {
+                enrollmentId: enrollment.id,
+                enrollmentDate: now,
+                classEndDate: new Date(gc.recurrence_end_date),
+                billingDay: gc.billing_day,
+                amountCents: gc.monthly_price_cents,
+            });
+        }
+
+        return {
+            code: 201,
+            error: false,
+            message: 'Enrollment created by admin',
+            data: enrollment,
+        } as ServiceResult;
+    });
+
+    if (!result.error && result.data) {
+        const enrollmentId = (result.data as { id: number }).id;
+        void issueClassTicketForEnrollment(companyId, enrollmentId).catch((error) => {
+            logger.error({ companyId, enrollmentId, error }, 'Failed to issue class ticket after admin enrollment');
+        });
+    }
+
+    return result;
+}
+
 /**
  * Admin: list enrollments for a class.
  */

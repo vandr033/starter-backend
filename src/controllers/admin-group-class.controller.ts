@@ -182,6 +182,35 @@ export async function listClassEnrollments(req: AuthenticatedRequest, res: Respo
     return res.status(result.code).json(result);
 }
 
+export async function createClassEnrollmentAdmin(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const classId = parseId(req.params.classId);
+    if (!classId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid classId' });
+    }
+
+    const customerId = typeof req.body?.customer_id === 'number' ? req.body.customer_id : null;
+    if (!customerId) {
+        return res.status(400).json({ code: 400, error: true, message: 'customer_id is required' });
+    }
+
+    const paymentMethod = req.body?.payment_method;
+    if (!paymentMethod || !['NONE', 'CASH', 'QR'].includes(paymentMethod)) {
+        return res.status(400).json({ code: 400, error: true, message: 'payment_method must be NONE, CASH, or QR' });
+    }
+
+    const markAsPaid = req.body?.mark_as_paid === true;
+
+    const result = await GroupBookingService.adminCreateClassEnrollment(companyId, classId, {
+        customer_id: customerId,
+        payment_method: paymentMethod,
+        mark_as_paid: markAsPaid,
+    });
+    return res.status(result.code).json(result);
+}
+
 export async function listClassSessionAttendance(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;

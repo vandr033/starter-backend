@@ -25,5 +25,6 @@ router.post('/sessions/:sessionId/cancel', AdminGroupClassController.cancelSessi
 router.get('/sessions/:sessionId/attendance', AdminGroupClassController.listClassSessionAttendance);
 
 router.get('/:classId/enrollments', AdminGroupClassController.listClassEnrollments);
+router.post('/:classId/enrollments', AdminGroupClassController.createClassEnrollmentAdmin);
 
 export default router;
