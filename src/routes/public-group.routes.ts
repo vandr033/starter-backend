@@ -50,6 +50,25 @@ router.get(
 );
 
 router.post(
+    '/events/:eventId/guest-checkout/start',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_EVENTS'),
+    PublicGroupController.startPaidEventGuestCheckout,
+);
+router.post(
+    '/events/:eventId/guest-checkout/resend',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_EVENTS'),
+    PublicGroupController.resendPaidEventGuestCheckout,
+);
+router.post(
+    '/events/:eventId/guest-checkout/verify',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_EVENTS'),
+    PublicGroupController.verifyPaidEventGuestCheckout,
+);
+
+router.post(
     '/events/bookings',
     requireAuth,
     requireActiveCompany({ source: 'body', key: 'company_id' }),

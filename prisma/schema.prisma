@@ -71,6 +71,7 @@ model Company {
   group_tickets                 GroupTicket[]
   group_event_interests         GroupEventInterest[]
   free_event_registrations      FreeEventRegistration[]
+  paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[]
   service_required_resources    ServiceRequiredResource[]
   installment_reminder_logs     InstallmentReminderLog[]
 
@@ -170,6 +171,7 @@ model User {
   group_session_attendances    GroupSessionAttendance[]
   group_event_interests        GroupEventInterest[]
   free_event_registrations     FreeEventRegistration[]
+  paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[]
   marked_paid_installments     EnrollmentInstallment[]  @relation("InstallmentMarkedPaidBy")
   sent_installment_reminders   InstallmentReminderLog[] @relation("InstallmentReminderSentBy")
 
@@ -896,6 +898,7 @@ model GroupEvent {
   attendances        GroupSessionAttendance[]
   interests          GroupEventInterest[]
   free_registrations   FreeEventRegistration[]
+  paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[]
 
   @@unique([company_id, slug])
   @@index([company_id, status])
@@ -1243,4 +1246,39 @@ model FreeEventRegistration {
   @@index([company_id, group_event_id])
   @@index([user_id])
   @@map("free_event_registration")
+}
+
+model PaidEventGuestCheckoutSession {
+  id                      String    @id @default(cuid())
+  company_id              Int
+  group_event_id          Int
+  resolved_user_id        String?
+  full_name               String    @db.VarChar(191)
+  first_name              String?   @db.VarChar(100)
+  last_name               String?   @db.VarChar(100)
+  email                   String    @db.VarChar(254)
+  phone_prefix            String    @db.VarChar(8)
+  phone_number            String    @db.VarChar(32)
+  account_outcome         String    @db.VarChar(64)
+  otp_hash                String    @db.VarChar(255)
+  otp_attempts            Int       @default(0)
+  otp_max_attempts        Int       @default(5)
+  otp_expires_at          DateTime
+  resend_available_at     DateTime
+  email_delivery_succeeded Boolean  @default(false)
+  phone_delivery_succeeded Boolean  @default(false)
+  delivery_attempted_at   DateTime?
+  consumed_at             DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  company     Company    @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  group_event GroupEvent @relation(fields: [group_event_id], references: [id], onDelete: Cascade)
+  user        User?      @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, group_event_id, consumed_at], map: "pegcs_company_event_consumed_idx")
+  @@index([email, phone_number], map: "pegcs_email_phone_idx")
+  @@index([resolved_user_id], map: "pegcs_user_idx")
+  @@index([otp_expires_at], map: "pegcs_otp_expires_idx")
+  @@map("paid_event_guest_checkout_session")
 }

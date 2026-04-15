@@ -7,6 +7,7 @@ import * as GroupBookingService from '../services/group-booking.service';
 import * as InstallmentService from '../services/enrollment-installment.service';
 import * as GroupPaymentsService from '../services/group-payments.service';
 import { resendTicketByCode } from '../services/group-ticket.service';
+import * as PaidEventGuestCheckoutService from '../services/paid-event-guest-checkout.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -117,6 +118,60 @@ export async function createEventBooking(req: AuthenticatedRequest, res: Respons
         notes: payload.notes,
         extra_attendees: payload.extra_attendees,
     });
+
+    return res.status(result.code).json(result);
+}
+
+export async function startPaidEventGuestCheckout(req: AuthenticatedRequest, res: Response) {
+    const companyId = parseId(req.body?.company_id ?? req.query.company_id);
+    const eventId = parseId(req.params.eventId);
+    if (!companyId || !eventId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id or eventId' });
+    }
+
+    const result = await PaidEventGuestCheckoutService.startPaidEventGuestCheckout(companyId, eventId, {
+        full_name: typeof req.body?.full_name === 'string' ? req.body.full_name : '',
+        email: typeof req.body?.email === 'string' ? req.body.email : '',
+        phonePrefix: typeof req.body?.phonePrefix === 'string' ? req.body.phonePrefix : '',
+        phoneNumber: typeof req.body?.phoneNumber === 'string' ? req.body.phoneNumber : '',
+        tosAccepted: Boolean(req.body?.tosAccepted),
+    });
+
+    return res.status(result.code).json(result);
+}
+
+export async function resendPaidEventGuestCheckout(req: AuthenticatedRequest, res: Response) {
+    const companyId = parseId(req.body?.company_id ?? req.query.company_id);
+    const eventId = parseId(req.params.eventId);
+    const sessionId = typeof req.body?.checkout_session_id === 'string' ? req.body.checkout_session_id.trim() : '';
+    if (!companyId || !eventId || !sessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id, eventId or checkout_session_id' });
+    }
+
+    const result = await PaidEventGuestCheckoutService.resendPaidEventGuestCheckoutCode(companyId, eventId, sessionId);
+    return res.status(result.code).json(result);
+}
+
+export async function verifyPaidEventGuestCheckout(req: AuthenticatedRequest, res: Response) {
+    const companyId = parseId(req.body?.company_id ?? req.query.company_id);
+    const eventId = parseId(req.params.eventId);
+    const sessionId = typeof req.body?.checkout_session_id === 'string' ? req.body.checkout_session_id.trim() : '';
+    const code = typeof req.body?.code === 'string' ? req.body.code : '';
+    if (!companyId || !eventId || !sessionId || !code.trim()) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id, eventId, checkout_session_id or code' });
+    }
+
+    const result = await PaidEventGuestCheckoutService.verifyPaidEventGuestCheckout(
+        companyId,
+        eventId,
+        sessionId,
+        code,
+        req.headers as HeadersInit,
+    );
+
+    if (result.cookies && result.cookies.length > 0) {
+        res.setHeader('Set-Cookie', result.cookies);
+    }
 
     return res.status(result.code).json(result);
 }
