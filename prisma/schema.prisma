@@ -899,6 +899,7 @@ model GroupEvent {
   interests          GroupEventInterest[]
   free_registrations   FreeEventRegistration[]
   paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[]
+  whatsapp_groups      WhatsappEventGroup[]
 
   @@unique([company_id, slug])
   @@index([company_id, status])
@@ -1281,4 +1282,19 @@ model PaidEventGuestCheckoutSession {
   @@index([resolved_user_id], map: "pegcs_user_idx")
   @@index([otp_expires_at], map: "pegcs_otp_expires_idx")
   @@map("paid_event_guest_checkout_session")
+}
+
+// ─── WhatsApp Event Group ─────────────────────────────────────────────────────
+
+model WhatsappEventGroup {
+  id             Int       @id @default(autoincrement())
+  group_event_id Int
+  group_jid      String    @db.VarChar(64)
+  group_name     String    @db.VarChar(255)
+  created_at     DateTime  @default(now())
+
+  group_event    GroupEvent @relation(fields: [group_event_id], references: [id], onDelete: Cascade)
+
+  @@index([group_event_id])
+  @@map("whatsapp_event_group")
 }

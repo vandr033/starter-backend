@@ -22,4 +22,8 @@ router.get('/:eventId/bookings', AdminGroupEventController.listEventBookings);
 router.get('/:eventId/interests', AdminGroupEventController.listEventInterests);
 router.get('/:eventId/attendance', AdminGroupEventController.listEventAttendance);
 
+router.get('/:eventId/whatsapp-groups', AdminGroupEventController.listWhatsappGroups);
+router.post('/:eventId/whatsapp-groups', AdminGroupEventController.createEventWhatsappGroup);
+router.post('/:eventId/whatsapp-groups/:groupId/message', AdminGroupEventController.sendMessageToWhatsappGroup);
+
 export default router;

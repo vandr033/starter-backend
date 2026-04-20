@@ -4,6 +4,8 @@ import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import * as GroupEventService from '../services/group-event.service';
 import * as GroupBookingService from '../services/group-booking.service';
 import * as GroupAttendanceService from '../services/group-attendance.service';
+import { prisma } from '../prisma/client';
+import { createWhatsappGroup, sendWhatsappGroupMessage } from '../utils/whatsappSender';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -151,4 +153,77 @@ export async function listEventAttendance(req: AuthenticatedRequest, res: Respon
 
     const result = await GroupAttendanceService.listEventAttendance(companyId, eventId);
     return res.status(result.code).json(result);
+}
+
+export async function listWhatsappGroups(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+    const eventId = parseId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ message: 'Invalid eventId' });
+
+    const event = await prisma.groupEvent.findFirst({ where: { id: eventId, company_id: companyId } });
+    if (!event) return res.status(404).json({ message: 'Event not found' });
+
+    const groups = await prisma.whatsappEventGroup.findMany({ where: { group_event_id: eventId }, orderBy: { created_at: 'desc' } });
+    return res.json({ groups });
+}
+
+export async function createEventWhatsappGroup(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+    const eventId = parseId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ message: 'Invalid eventId' });
+
+    const event = await prisma.groupEvent.findFirst({ where: { id: eventId, company_id: companyId }, include: { company: true } });
+    if (!event) return res.status(404).json({ message: 'Event not found' });
+
+    const { groupName, staffPhones = [], includeParticipants = true } = req.body as {
+        groupName?: string;
+        staffPhones?: string[];
+        includeParticipants?: boolean;
+    };
+
+    const name = groupName?.trim() || event.title;
+
+    const phones: string[] = [...staffPhones];
+
+    if (includeParticipants) {
+        const registrations = await prisma.freeEventRegistration.findMany({
+            where: { group_event_id: eventId, status: 'CONFIRMED' },
+            select: { phone_prefix: true, phone_number: true },
+        });
+        for (const r of registrations) {
+            if (r.phone_prefix && r.phone_number) {
+                phones.push(`${r.phone_prefix.replace(/\D/g, '')}${r.phone_number.replace(/\D/g, '')}`);
+            }
+        }
+    }
+
+    const unique = [...new Set(phones.filter(Boolean))];
+    const result = await createWhatsappGroup(name, unique);
+    if (!result) return res.status(502).json({ message: 'Failed to create WhatsApp group' });
+
+    const saved = await prisma.whatsappEventGroup.create({
+        data: { group_event_id: eventId, group_jid: result.jid, group_name: result.name },
+    });
+    return res.status(201).json({ group: saved });
+}
+
+export async function sendMessageToWhatsappGroup(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+    const eventId = parseId(req.params.eventId);
+    const groupId = parseId(req.params.groupId);
+    if (!eventId || !groupId) return res.status(400).json({ message: 'Invalid params' });
+
+    const group = await prisma.whatsappEventGroup.findFirst({
+        where: { id: groupId, group_event_id: eventId, group_event: { company_id: companyId } },
+    });
+    if (!group) return res.status(404).json({ message: 'Group not found' });
+
+    const { message } = req.body as { message?: string };
+    if (!message?.trim()) return res.status(400).json({ message: 'Message is required' });
+
+    await sendWhatsappGroupMessage(group.group_jid, message.trim());
+    return res.json({ ok: true });
 }

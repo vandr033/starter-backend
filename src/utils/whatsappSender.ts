@@ -152,6 +152,36 @@ export const sendWhatsappText = async (phone: string, text: string) => {
   }
 }
 
+export const createWhatsappGroup = async (name: string, participantPhones: string[]): Promise<{ jid: string; name: string } | null> => {
+  const participants = participantPhones.map((p) => `${p.replace(/\D/g, "")}@c.us`);
+  try {
+    const res = await fetch("https://www.wasenderapi.com/api/groups", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ name, participants }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      logger.error({ event: "whatsapp_create_group_failed", status: res.status, body }, "WhatsApp group creation failed");
+      return null;
+    }
+    const data = (await res.json()) as { data?: { id?: string } };
+    const jid = data?.data?.id ?? null;
+    if (!jid) return null;
+    return { jid, name };
+  } catch (error) {
+    logger.error({ event: "whatsapp_create_group_error", error: buildErrorLog(error) }, "createWhatsappGroup threw");
+    return null;
+  }
+};
+
+export const sendWhatsappGroupMessage = async (groupJid: string, text: string) => {
+  return sendWhatsappText(groupJid, text);
+};
+
 export const sendWhatsappImage = async (phone: string, imageUrl: string, caption?: string) => {
   try {
     const imagePayload: ImageUrlMessage = {
