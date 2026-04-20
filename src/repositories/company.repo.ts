@@ -414,6 +414,14 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
   return await prisma.company.findUnique({
     where: { slug, is_active: true },
     include: {
+      config_messages: {
+        where: { key: 'default_language' },
+        select: {
+          key: true,
+          value: true,
+        },
+        take: 1,
+      },
       categories: {
         where: { is_active: true, deleted_at: null },
         orderBy: { position: 'asc' },

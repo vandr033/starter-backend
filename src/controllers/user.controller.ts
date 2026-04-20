@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import * as UserService from '../services/user.sevice';
+import * as UserService from '../services/user.service';
 
 export async function getUserById(req: Request, res: Response) {
     const id = typeof req.params.id === 'string' ? req.params.id : '';

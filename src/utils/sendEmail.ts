@@ -28,7 +28,7 @@ const maskEmail = (email: string) => {
 export function isTemporaryEmailAddress(email?: string | null): boolean {
     const normalized = (email ?? "").trim().toLowerCase();
     if (!normalized) return false;
-    return normalized.endsWith("@tmppriconpri.com") || normalized.endsWith("@temp.bookinsite.com");
+    return normalized.endsWith("@tmppriconpri.com") || normalized.endsWith("@temp.priconpri.com");
 }
 
 function escapeHtml(input: string): string {

@@ -19,8 +19,12 @@ export type AdminCompanyUserSummary = {
         currency: string;
         plan: ShopPlan;
         availableUntil: Date;
+        default_language: string;
     };
 };
+
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const FALLBACK_DEFAULT_LANGUAGE = 'es';
 
 interface AdminSignInResult extends MensajeApi {
     data?: {
@@ -59,6 +63,15 @@ async function getAdminCompanyUsers(userId: string) {
                     currency: true,
                     plan: true,
                     availableUntil: true,
+                    config_messages: {
+                        where: {
+                            key: DEFAULT_LANGUAGE_KEY,
+                        },
+                        select: {
+                            value: true,
+                        },
+                        take: 1,
+                    },
                 },
             },
         },
@@ -70,12 +83,25 @@ async function getAdminCompanyUsers(userId: string) {
 }
 
 function toAdminCompanyUserSummary(companyUser: Awaited<ReturnType<typeof getAdminCompanyUsers>>[number]): AdminCompanyUserSummary {
+    const defaultLanguage =
+        companyUser.company?.config_messages?.[0]?.value?.trim().toLowerCase() || FALLBACK_DEFAULT_LANGUAGE;
+
     return {
         id: companyUser.id,
         company_id: companyUser.company_id,
         role: companyUser.role,
         is_primary_contact: companyUser.is_primary_contact,
-        company: companyUser.company ?? undefined,
+        company: companyUser.company
+            ? {
+                id: companyUser.company.id,
+                name: companyUser.company.name,
+                slug: companyUser.company.slug,
+                currency: companyUser.company.currency,
+                plan: companyUser.company.plan,
+                availableUntil: companyUser.company.availableUntil,
+                default_language: defaultLanguage,
+            }
+            : undefined,
     };
 }
 

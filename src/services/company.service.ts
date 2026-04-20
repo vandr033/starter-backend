@@ -7,6 +7,8 @@ import * as CompanyRepo from '../repositories/company.repo';
 import { MensajeApi } from '../types/MensajeApi';
 import { Prisma } from '../prisma/client';
 let mensaje: MensajeApi;
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const FALLBACK_DEFAULT_LANGUAGE = 'es';
 export const getAllCompanies = async () => {
   try {
     const companies = await CompanyRepo.getAllCompanies();
@@ -144,10 +146,15 @@ export const getCompanyPublicPage = async (slug: string) => {
       services,
       staff_profiles,
       company_settings,
+      config_messages,
       theme_config,
       reviews,
       ...company
     } = companyData;
+
+    const defaultLanguage =
+      config_messages?.find((item: { key: string; value: string }) => item.key === DEFAULT_LANGUAGE_KEY)?.value?.trim().toLowerCase() ||
+      FALLBACK_DEFAULT_LANGUAGE;
 
     // Calculate review stats
     const reviewCount = reviews.length;
@@ -164,6 +171,7 @@ export const getCompanyPublicPage = async (slug: string) => {
         require_comprobante_for_qr: company_settings.require_comprobante_for_qr,
         auto_confirm_bookings: company_settings.auto_confirm_bookings,
         social_links: (company_settings as any).social_links || {},
+        default_language: defaultLanguage,
         max_advance_booking_days: company_settings.max_advance_booking_days ?? null,
         min_advance_booking_minutes: company_settings.min_advance_booking_minutes ?? null,
         custom_tos: (company_settings as any).custom_tos ?? null,
@@ -176,6 +184,7 @@ export const getCompanyPublicPage = async (slug: string) => {
         require_comprobante_for_qr: true,
         auto_confirm_bookings: true,
         social_links: {},
+        default_language: defaultLanguage,
         max_advance_booking_days: null,
         min_advance_booking_minutes: null,
         custom_tos: null,
