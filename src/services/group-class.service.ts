@@ -21,6 +21,7 @@ export interface CreateGroupClassInput {
     monthly_price_cents?: number | null;
     billing_day?: number | null;
     max_capacity_per_session: number;
+    capacity_visible?: boolean;
     session_duration_minutes: number;
     recurrence_type: RecurrenceType;
     recurrence_config: Record<string, unknown>;
@@ -42,6 +43,7 @@ export interface UpdateGroupClassInput {
     monthly_price_cents?: number | null;
     billing_day?: number | null;
     max_capacity_per_session?: number;
+    capacity_visible?: boolean;
     session_duration_minutes?: number;
     recurrence_type?: RecurrenceType;
     recurrence_config?: Record<string, unknown>;
@@ -214,6 +216,7 @@ export async function createGroupClass(companyId: number, userId: string, input:
             monthly_price_cents: input.monthly_price_cents ?? null,
             billing_day: input.billing_day ?? null,
             max_capacity_per_session: input.max_capacity_per_session,
+            capacity_visible: input.capacity_visible ?? false,
             session_duration_minutes: input.session_duration_minutes,
             recurrence_type: input.recurrence_type,
             recurrence_config: input.recurrence_config as any,
@@ -285,6 +288,7 @@ export async function updateGroupClass(companyId: number, classId: number, input
         }
         updateData.max_capacity_per_session = input.max_capacity_per_session;
     }
+    if (input.capacity_visible !== undefined) updateData.capacity_visible = input.capacity_visible;
     if (input.session_duration_minutes !== undefined) {
         if (input.session_duration_minutes < 5) {
             return { code: 400, error: true, message: 'session_duration_minutes must be at least 5' };

@@ -69,6 +69,25 @@ router.post(
 );
 
 router.post(
+    '/classes/:classId/guest-enrollment/start',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_CLASSES'),
+    PublicGroupController.startClassGuestEnrollment,
+);
+router.post(
+    '/classes/:classId/guest-enrollment/resend',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_CLASSES'),
+    PublicGroupController.resendClassGuestEnrollment,
+);
+router.post(
+    '/classes/:classId/guest-enrollment/verify',
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_CLASSES'),
+    PublicGroupController.verifyClassGuestEnrollment,
+);
+
+router.post(
     '/events/bookings',
     requireAuth,
     requireActiveCompany({ source: 'body', key: 'company_id' }),
@@ -108,6 +127,14 @@ router.post(
     requirePlanFeature('GROUP_EVENTS'),
     validate(companyScopedActionSchema),
     PublicGroupController.captureEventInterest,
+);
+router.post(
+    '/classes/:classId/interest',
+    requireAuth,
+    requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requirePlanFeature('GROUP_CLASSES'),
+    validate(companyScopedActionSchema),
+    PublicGroupController.captureClassInterest,
 );
 
 router.get('/my/bookings', requireAuth, PublicGroupController.getMyEventBookings);

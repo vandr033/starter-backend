@@ -1585,6 +1585,70 @@ export async function captureEventInterest(companyId: number, userId: string, ev
     return result;
 }
 
+export async function captureClassInterest(companyId: number, userId: string, classId: number): Promise<ServiceResult> {
+    const result = await prisma.$transaction(async (tx) => {
+        const groupClass = await tx.groupClass.findFirst({
+            where: { id: classId, company_id: companyId, status: 'PUBLISHED', deleted_at: null },
+            select: { id: true },
+        });
+        if (!groupClass) return { code: 404, error: true, message: 'Class not found' } as ServiceResult;
+
+        const customerProfile = await tx.customerProfile.upsert({
+            where: { company_id_user_id: { company_id: companyId, user_id: userId } },
+            update: {},
+            create: { company_id: companyId, user_id: userId },
+        });
+
+        const existingInterest = await tx.groupClassInterest.findUnique({
+            where: {
+                group_class_id_user_id: {
+                    group_class_id: classId,
+                    user_id: userId,
+                },
+            },
+        });
+
+        if (existingInterest) {
+            const interest = await tx.groupClassInterest.update({
+                where: { id: existingInterest.id },
+                data: {
+                    customer_profile_id: existingInterest.customer_profile_id ?? customerProfile.id,
+                },
+            });
+            return {
+                code: 200,
+                error: false,
+                message: 'Class interest already captured',
+                data: {
+                    ...interest,
+                    already_interested: true,
+                },
+            } as ServiceResult;
+        }
+
+        const interest = await tx.groupClassInterest.create({
+            data: {
+                company_id: companyId,
+                group_class_id: classId,
+                user_id: userId,
+                customer_profile_id: customerProfile.id,
+            },
+        });
+
+        return {
+            code: 201,
+            error: false,
+            message: 'Class interest captured',
+            data: {
+                ...interest,
+                already_interested: false,
+            },
+        } as ServiceResult;
+    });
+
+    return result;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CLASS ENROLLMENTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1719,13 +1783,15 @@ export async function createClassEnrollment(
         let paymentStatus: PaymentStatus = PaymentStatus.UNPAID;
         if (isFullCourse) {
             paymentStatus = PaymentStatus.UNPAID; // installments govern actual payment
-        } else if (gc.price_cents === 0) {
-            paymentStatus = PaymentStatus.PAID;
         } else if (input.payment_method === 'QR') {
             paymentStatus = PaymentStatus.PENDING_CONFIRMATION;
+        } else if (gc.price_cents === 0) {
+            paymentStatus = PaymentStatus.PAID;
         }
 
-        const status: GroupBookingStatus = (isFullCourse || gc.price_cents === 0 || autoConfirm)
+        const status: GroupBookingStatus = input.payment_method === 'QR'
+            ? GroupBookingStatus.PENDING
+            : (isFullCourse || gc.price_cents === 0 || autoConfirm)
             ? GroupBookingStatus.CONFIRMED
             : GroupBookingStatus.PENDING;
 
@@ -1744,7 +1810,7 @@ export async function createClassEnrollment(
                 pricing_mode: gc.pricing_mode,
                 price_cents_snapshot: isFullCourse ? (gc.monthly_price_cents ?? 0) : gc.price_cents,
                 status,
-                payment_method: (isFullCourse || gc.price_cents === 0) ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
+                payment_method: isFullCourse ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                 payment_status: paymentStatus,
                 qr_proof_image_url: isFullCourse ? null : (input.qr_proof_image_url ?? null),
                 valid_from: validFrom,

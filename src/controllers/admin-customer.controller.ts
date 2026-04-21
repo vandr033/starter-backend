@@ -16,6 +16,18 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
     }
 }
 
+export async function listInterestCaptureLeads(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const leads = await CustomerService.listInterestCaptureLeads(companyId);
+
+        return res.json({ data: leads });
+    } catch (error: any) {
+        console.error('Error listing interest capture leads:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
 export async function getCustomerHistory(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;

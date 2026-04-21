@@ -70,8 +70,10 @@ model Company {
   group_session_attendances     GroupSessionAttendance[]
   group_tickets                 GroupTicket[]
   group_event_interests         GroupEventInterest[]
+  group_class_interests         GroupClassInterest[]
   free_event_registrations      FreeEventRegistration[]
   paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[]
+  group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
   service_required_resources    ServiceRequiredResource[]
   installment_reminder_logs     InstallmentReminderLog[]
 
@@ -170,8 +172,10 @@ model User {
   group_class_enrollments      GroupClassEnrollment[]
   group_session_attendances    GroupSessionAttendance[]
   group_event_interests        GroupEventInterest[]
+  group_class_interests        GroupClassInterest[]
   free_event_registrations     FreeEventRegistration[]
   paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[]
+  group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
   marked_paid_installments     EnrollmentInstallment[]  @relation("InstallmentMarkedPaidBy")
   sent_installment_reminders   InstallmentReminderLog[] @relation("InstallmentReminderSentBy")
 
@@ -272,6 +276,7 @@ model CustomerProfile {
   group_class_enrollments   GroupClassEnrollment[]
   group_session_attendances GroupSessionAttendance[]
   group_event_interests     GroupEventInterest[]
+  group_class_interests     GroupClassInterest[]
 
   @@unique([company_id, user_id])
   @@index([preferred_staff_id])
@@ -883,6 +888,7 @@ model GroupEvent {
   is_free            Boolean          @default(true)
   price_cents        Int              @default(0)
   max_capacity       Int
+  capacity_visible   Boolean          @default(false)
   start_at           DateTime
   end_at             DateTime
   location_text      String?          @db.VarChar(500)
@@ -924,6 +930,7 @@ model GroupClass {
   monthly_price_cents       Int?
   billing_day               Int?
   max_capacity_per_session  Int
+  capacity_visible          Boolean          @default(false)
   session_duration_minutes  Int
   recurrence_type           RecurrenceType   @default(WEEKLY)
   recurrence_config         Json             @default("{}")
@@ -941,6 +948,8 @@ model GroupClass {
   sessions          GroupClassSession[]
   staff_assignments GroupStaffAssignment[]
   enrollments       GroupClassEnrollment[]
+  interests         GroupClassInterest[]
+  guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
 
   @@unique([company_id, slug])
   @@index([company_id, status])
@@ -1213,6 +1222,24 @@ model GroupEventInterest {
   @@map("group_event_interest")
 }
 
+model GroupClassInterest {
+  id                  Int      @id @default(autoincrement())
+  company_id          Int
+  group_class_id      Int
+  user_id             String
+  customer_profile_id Int?
+  created_at          DateTime @default(now())
+
+  company          Company          @relation(fields: [company_id], references: [id])
+  group_class      GroupClass       @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [user_id], references: [id])
+  customer_profile CustomerProfile? @relation(fields: [customer_profile_id], references: [id])
+
+  @@unique([group_class_id, user_id])
+  @@index([company_id, group_class_id])
+  @@map("group_class_interest")
+}
+
 model FreeEventRegistration {
   id                           Int                            @id @default(autoincrement())
   group_event_id               Int
@@ -1282,6 +1309,41 @@ model PaidEventGuestCheckoutSession {
   @@index([resolved_user_id], map: "pegcs_user_idx")
   @@index([otp_expires_at], map: "pegcs_otp_expires_idx")
   @@map("paid_event_guest_checkout_session")
+}
+
+model GroupClassGuestEnrollmentSession {
+  id                      String    @id @default(cuid())
+  company_id              Int
+  group_class_id          Int
+  resolved_user_id        String?
+  full_name               String    @db.VarChar(191)
+  first_name              String?   @db.VarChar(100)
+  last_name               String?   @db.VarChar(100)
+  email                   String    @db.VarChar(254)
+  phone_prefix            String    @db.VarChar(8)
+  phone_number            String    @db.VarChar(32)
+  account_outcome         String    @db.VarChar(64)
+  otp_hash                String    @db.VarChar(255)
+  otp_attempts            Int       @default(0)
+  otp_max_attempts        Int       @default(5)
+  otp_expires_at          DateTime
+  resend_available_at     DateTime
+  email_delivery_succeeded Boolean  @default(false)
+  phone_delivery_succeeded Boolean  @default(false)
+  delivery_attempted_at   DateTime?
+  consumed_at             DateTime?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  company     Company    @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  group_class GroupClass @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
+  user        User?      @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, group_class_id, consumed_at], map: "gcges_company_class_consumed_idx")
+  @@index([email, phone_number], map: "gcges_email_phone_idx")
+  @@index([resolved_user_id], map: "gcges_user_idx")
+  @@index([otp_expires_at], map: "gcges_otp_expires_idx")
+  @@map("group_class_guest_enrollment_session")
 }
 
 // ─── WhatsApp Event Group ─────────────────────────────────────────────────────

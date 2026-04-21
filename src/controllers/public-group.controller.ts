@@ -8,6 +8,7 @@ import * as InstallmentService from '../services/enrollment-installment.service'
 import * as GroupPaymentsService from '../services/group-payments.service';
 import { resendTicketByCode } from '../services/group-ticket.service';
 import * as PaidEventGuestCheckoutService from '../services/paid-event-guest-checkout.service';
+import * as ClassGuestEnrollmentService from '../services/class-guest-enrollment.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -196,6 +197,59 @@ export async function createClassEnrollment(req: AuthenticatedRequest, res: Resp
     return res.status(result.code).json(result);
 }
 
+export async function startClassGuestEnrollment(req: AuthenticatedRequest, res: Response) {
+    const companyId = parseId(req.body?.company_id ?? req.query.company_id);
+    const classId = parseId(req.params.classId);
+    if (!companyId || !classId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id or classId' });
+    }
+
+    const result = await ClassGuestEnrollmentService.startClassGuestEnrollment(companyId, classId, {
+        full_name: typeof req.body?.full_name === 'string' ? req.body.full_name : '',
+        email: typeof req.body?.email === 'string' ? req.body.email : '',
+        phonePrefix: typeof req.body?.phonePrefix === 'string' ? req.body.phonePrefix : '',
+        phoneNumber: typeof req.body?.phoneNumber === 'string' ? req.body.phoneNumber : '',
+    });
+
+    return res.status(result.code).json(result);
+}
+
+export async function resendClassGuestEnrollment(req: AuthenticatedRequest, res: Response) {
+    const companyId = parseId(req.body?.company_id ?? req.query.company_id);
+    const classId = parseId(req.params.classId);
+    const sessionId = typeof req.body?.checkout_session_id === 'string' ? req.body.checkout_session_id.trim() : '';
+    if (!companyId || !classId || !sessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id, classId or checkout_session_id' });
+    }
+
+    const result = await ClassGuestEnrollmentService.resendClassGuestEnrollmentCode(companyId, classId, sessionId);
+    return res.status(result.code).json(result);
+}
+
+export async function verifyClassGuestEnrollment(req: AuthenticatedRequest, res: Response) {
+    const companyId = parseId(req.body?.company_id ?? req.query.company_id);
+    const classId = parseId(req.params.classId);
+    const sessionId = typeof req.body?.checkout_session_id === 'string' ? req.body.checkout_session_id.trim() : '';
+    const code = typeof req.body?.code === 'string' ? req.body.code : '';
+    if (!companyId || !classId || !sessionId || !code.trim()) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid company_id, classId, checkout_session_id or code' });
+    }
+
+    const result = await ClassGuestEnrollmentService.verifyClassGuestEnrollment(
+        companyId,
+        classId,
+        sessionId,
+        code,
+        req.headers as HeadersInit,
+    );
+
+    if (result.cookies && result.cookies.length > 0) {
+        res.setHeader('Set-Cookie', result.cookies);
+    }
+
+    return res.status(result.code).json(result);
+}
+
 export async function joinEventWaitlist(req: AuthenticatedRequest, res: Response) {
     const userId = req.authUser?.id;
     if (!userId) {
@@ -247,6 +301,24 @@ export async function captureEventInterest(req: AuthenticatedRequest, res: Respo
     }
 
     const result = await GroupBookingService.captureEventInterest(companyId, userId, eventId);
+    return res.status(result.code).json(result);
+}
+
+export async function captureClassInterest(req: AuthenticatedRequest, res: Response) {
+    const userId = req.authUser?.id;
+    if (!userId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const classId = parseId(req.params.classId);
+    if (!classId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid classId' });
+    }
+
+    const result = await GroupBookingService.captureClassInterest(companyId, userId, classId);
     return res.status(result.code).json(result);
 }
 

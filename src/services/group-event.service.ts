@@ -18,6 +18,7 @@ export interface CreateGroupEventInput {
     is_free: boolean;
     price_cents: number;
     max_capacity: number;
+    capacity_visible?: boolean;
     start_at: string; // ISO date-time
     end_at: string;
     location_text?: string | null;
@@ -34,6 +35,7 @@ export interface UpdateGroupEventInput {
     is_free?: boolean;
     price_cents?: number;
     max_capacity?: number;
+    capacity_visible?: boolean;
     start_at?: string;
     end_at?: string;
     location_text?: string | null;
@@ -166,6 +168,7 @@ export async function createGroupEvent(companyId: number, userId: string, input:
             is_free: input.is_free,
             price_cents: input.is_free ? 0 : input.price_cents,
             max_capacity: input.max_capacity,
+            capacity_visible: input.capacity_visible ?? false,
             start_at: startAt,
             end_at: endAt,
             location_text: locationText,
@@ -226,6 +229,7 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
         }
         updateData.max_capacity = input.max_capacity;
     }
+    if (input.capacity_visible !== undefined) updateData.capacity_visible = input.capacity_visible;
     const timeZone = await getCompanyTimeZone(companyId);
     if (input.start_at !== undefined) updateData.start_at = parseDateTimeInTimeZone(input.start_at, timeZone);
     if (input.end_at !== undefined) updateData.end_at = parseDateTimeInTimeZone(input.end_at, timeZone);

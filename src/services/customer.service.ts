@@ -265,6 +265,174 @@ export async function listCustomers(companyId: number, search?: string) {
     return getCustomersWithBookingStats(companyId, search);
 }
 
+export async function listInterestCaptureLeads(companyId: number) {
+    const [
+        legacyEventInterests,
+        freeEventInterests,
+        classInterests,
+        classEnrollments,
+    ] = await Promise.all([
+        prisma.groupEventInterest.findMany({
+            where: {
+                company_id: companyId,
+                group_event: { is_free: true, deleted_at: null },
+            },
+            include: {
+                group_event: { select: { id: true, title: true, start_at: true } },
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.freeEventRegistration.findMany({
+            where: {
+                company_id: companyId,
+                status: 'INTERESTED',
+                group_event: { is_free: true, deleted_at: null },
+            },
+            include: {
+                group_event: { select: { id: true, title: true, start_at: true } },
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.groupClassInterest.findMany({
+            where: {
+                company_id: companyId,
+                group_class: { deleted_at: null },
+            },
+            include: {
+                group_class: { select: { id: true, title: true, recurrence_start_date: true } },
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+        prisma.groupClassEnrollment.findMany({
+            where: {
+                company_id: companyId,
+                group_class: { deleted_at: null },
+            },
+            include: {
+                group_class: { select: { id: true, title: true, recurrence_start_date: true } },
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                    },
+                },
+            },
+            orderBy: { created_at: 'desc' },
+        }),
+    ]);
+
+    const rows = [
+        ...legacyEventInterests.map((row) => ({
+            id: `event-interest-${row.id}`,
+            source: 'EVENT' as const,
+            sourceLabel: 'Evento',
+            itemId: row.group_event_id,
+            itemTitle: row.group_event.title,
+            itemDate: row.group_event.start_at,
+            personName: row.user.name,
+            email: row.user.email,
+            phonePrefix: row.user.phone_prefix,
+            phoneNumber: row.user.phoneNumber,
+            status: 'INTERESTED',
+            createdAt: row.created_at,
+        })),
+        ...freeEventInterests.map((row) => {
+            const fallbackName = [row.first_name, row.last_name]
+                .map((value) => value?.trim() ?? '')
+                .filter((value) => value.length > 0)
+                .join(' ');
+            return {
+                id: `free-event-interest-${row.id}`,
+                source: 'EVENT' as const,
+                sourceLabel: 'Evento',
+                itemId: row.group_event_id,
+                itemTitle: row.group_event.title,
+                itemDate: row.group_event.start_at,
+                personName: row.user?.name ?? fallbackName,
+                email: row.user?.email ?? row.email,
+                phonePrefix: row.user?.phone_prefix ?? row.phone_prefix,
+                phoneNumber: row.user?.phoneNumber ?? row.phone_number,
+                status: row.status,
+                createdAt: row.created_at,
+            };
+        }),
+        ...classInterests.map((row) => ({
+            id: `class-interest-${row.id}`,
+            source: 'CLASS' as const,
+            sourceLabel: 'Clase',
+            itemId: row.group_class_id,
+            itemTitle: row.group_class.title,
+            itemDate: row.group_class.recurrence_start_date,
+            personName: row.user.name,
+            email: row.user.email,
+            phonePrefix: row.user.phone_prefix,
+            phoneNumber: row.user.phoneNumber,
+            status: 'INTERESTED',
+            createdAt: row.created_at,
+        })),
+        ...classEnrollments.map((row) => ({
+            id: `class-enrollment-${row.id}`,
+            source: 'CLASS' as const,
+            sourceLabel: 'Clase',
+            itemId: row.group_class_id,
+            itemTitle: row.group_class.title,
+            itemDate: row.group_class.recurrence_start_date,
+            personName: row.user.name,
+            email: row.user.email,
+            phonePrefix: row.user.phone_prefix,
+            phoneNumber: row.user.phoneNumber,
+            status: row.status,
+            createdAt: row.created_at,
+        })),
+    ];
+
+    const deduped = new Map<string, (typeof rows)[number]>();
+    rows
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .forEach((row) => {
+            const email = row.email?.trim().toLowerCase();
+            const phone = buildFullPhone(row.phonePrefix, row.phoneNumber);
+            const key = `${row.source}:${row.itemId}:${email || phone || row.id}`;
+            if (!deduped.has(key)) deduped.set(key, row);
+        });
+
+    return Array.from(deduped.values()).map((row) => ({
+        ...row,
+        itemDate: row.itemDate?.toISOString?.() ?? null,
+        createdAt: row.createdAt.toISOString(),
+    }));
+}
+
 export async function getCustomersHistory(
     companyId: number,
     params: { customerKey: string; page: number; limit: number }
