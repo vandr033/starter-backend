@@ -923,9 +923,8 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
 
         const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0);
         const totalPrice = services.reduce((sum, service) => sum + service.price_cents, 0);
-        const startAt = new Date(params.start_at);
-        const endAt = new Date(params.start_at);
-        endAt.setMinutes(endAt.getMinutes() + totalDuration);
+        const startAt = parseDateTimeInTimeZone(params.start_at, company.timezone);
+        const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
 
         // Validate advance booking limits
         const advanceError = await validateAdvanceBookingLimits(params.company_id, startAt);
@@ -1122,9 +1121,8 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
 
         const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0);
         const totalPrice = services.reduce((sum, service) => sum + service.price_cents, 0);
-        const startAt = new Date(params.start_at);
-        const endAt = new Date(params.start_at);
-        endAt.setMinutes(endAt.getMinutes() + totalDuration);
+        const startAt = parseDateTimeInTimeZone(params.start_at, company.timezone);
+        const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
 
         // Validate advance booking limits
         const advanceError = await validateAdvanceBookingLimits(params.company_id, startAt);

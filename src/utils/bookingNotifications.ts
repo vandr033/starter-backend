@@ -42,6 +42,7 @@ interface BookingNotificationData {
     startAt: Date;
     endAt: Date;
     totalPriceCents: number;
+    timeZone?: string | null;
 }
 
 export type ReminderChannel = "WHATSAPP" | "EMAIL";
@@ -90,21 +91,37 @@ function resolveLocaleTag(locale?: SupportedLocale): string {
     return locale === "en" ? "en-US" : "es-BO";
 }
 
-function formatDate(date: Date, locale: SupportedLocale = "es"): string {
+function formatDate(date: Date, locale: SupportedLocale = "es", timeZone?: string | null): string {
     return date.toLocaleDateString(resolveLocaleTag(locale), {
         weekday: "long",
         year: "numeric",
         month: "long",
         day: "numeric",
+        ...(timeZone ? { timeZone } : {}),
     });
 }
 
-function formatTime(date: Date, locale: SupportedLocale = "es"): string {
+function formatTime(date: Date, locale: SupportedLocale = "es", timeZone?: string | null): string {
     return date.toLocaleTimeString(resolveLocaleTag(locale), {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
+        ...(timeZone ? { timeZone } : {}),
     });
+}
+
+async function withCompanyTimeZone<T extends BookingNotificationData>(data: T): Promise<T> {
+    if (data.timeZone) return data;
+
+    const company = await prisma.company.findUnique({
+        where: { id: data.companyId },
+        select: { timezone: true },
+    });
+
+    return {
+        ...data,
+        timeZone: company?.timezone || "UTC",
+    };
 }
 
 function formatPrice(cents: number): string {
@@ -261,8 +278,8 @@ function buildInternalWhatsappText(
         `Email: ${data.customerEmail || "No disponible"}`,
         `Staff: ${data.staffName || "No asignado"}`,
         `Servicios: ${services}`,
-        `Fecha: ${formatDate(data.startAt)}`,
-        `Hora: ${formatTime(data.startAt)} – ${formatTime(data.endAt)}`,
+        `Fecha: ${formatDate(data.startAt, "es", data.timeZone)}`,
+        `Hora: ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
         `Total: ${formatPrice(data.totalPriceCents)} Bs`,
         ``,
         `Gestionar reserva: ${manageUrl}`,
@@ -307,8 +324,8 @@ function bookingInternalEmailHtml(
           <p><strong>Email cliente:</strong> ${data.customerEmail || "No disponible"}</p>
           <p><strong>Negocio:</strong> ${data.companyName}</p>
           <p><strong>Staff:</strong> ${data.staffName || "No asignado"}</p>
-          <p><strong>Fecha:</strong> ${formatDate(data.startAt)}</p>
-          <p><strong>Hora:</strong> ${formatTime(data.startAt)} – ${formatTime(data.endAt)}</p>
+          <p><strong>Fecha:</strong> ${formatDate(data.startAt, "es", data.timeZone)}</p>
+          <p><strong>Hora:</strong> ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}</p>
           <p><strong>Servicios:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>Total:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
@@ -353,8 +370,8 @@ function bookingEmailHtml(
         <div class="details">
           <p><strong>Negocio:</strong> ${data.companyName}</p>
           <p><strong>Profesional:</strong> ${data.staffName}</p>
-          <p><strong>Fecha:</strong> ${formatDate(data.startAt)}</p>
-          <p><strong>Hora:</strong> ${formatTime(data.startAt)} – ${formatTime(data.endAt)}</p>
+          <p><strong>Fecha:</strong> ${formatDate(data.startAt, "es", data.timeZone)}</p>
+          <p><strong>Hora:</strong> ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}</p>
           <p><strong>Servicios:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>Total:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
@@ -418,8 +435,8 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
         <div class="details">
           <p><strong>${content.company}:</strong> ${data.companyName}</p>
           <p><strong>${content.staff}:</strong> ${data.staffName || content.staffFallback}</p>
-          <p><strong>${content.date}:</strong> ${formatDate(data.startAt, locale)}</p>
-          <p><strong>${content.time}:</strong> ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}</p>
+          <p><strong>${content.date}:</strong> ${formatDate(data.startAt, locale, data.timeZone)}</p>
+          <p><strong>${content.time}:</strong> ${formatTime(data.startAt, locale, data.timeZone)} – ${formatTime(data.endAt, locale, data.timeZone)}</p>
           <p><strong>${content.services}:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>${content.total}:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
@@ -478,8 +495,8 @@ function buildWhatsappText(data: BookingNotificationData, intro: string): string
         ``,
         `📍 ${data.companyName}`,
         `👤 ${data.staffName}`,
-        `📅 ${formatDate(data.startAt)}`,
-        `🕐 ${formatTime(data.startAt)} – ${formatTime(data.endAt)}`,
+        `📅 ${formatDate(data.startAt, "es", data.timeZone)}`,
+        `🕐 ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
         `✂️ ${services}`,
         `💰 ${formatPrice(data.totalPriceCents)} Bs`,
     ].join("\n");
@@ -495,8 +512,8 @@ function buildTodayReminderWhatsappText(data: BookingReminderData): string {
             ``,
             `📍 ${data.companyName}`,
             `👤 ${data.staffName || "Not assigned"}`,
-            `📅 ${formatDate(data.startAt, locale)}`,
-            `🕐 ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}`,
+            `📅 ${formatDate(data.startAt, locale, data.timeZone)}`,
+            `🕐 ${formatTime(data.startAt, locale, data.timeZone)} – ${formatTime(data.endAt, locale, data.timeZone)}`,
             `✂️ ${services}`,
             `💰 ${formatPrice(data.totalPriceCents)} Bs`,
             ``,
@@ -509,8 +526,8 @@ function buildTodayReminderWhatsappText(data: BookingReminderData): string {
         ``,
         `📍 ${data.companyName}`,
         `👤 ${data.staffName || "No asignado"}`,
-        `📅 ${formatDate(data.startAt, locale)}`,
-        `🕐 ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}`,
+        `📅 ${formatDate(data.startAt, locale, data.timeZone)}`,
+        `🕐 ${formatTime(data.startAt, locale, data.timeZone)} – ${formatTime(data.endAt, locale, data.timeZone)}`,
         `✂️ ${services}`,
         `💰 ${formatPrice(data.totalPriceCents)} Bs`,
         ``,
@@ -595,8 +612,8 @@ function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: st
         <div class="details">
           <p><strong>${localized.company}:</strong> ${escapeHtml(data.companyName)}</p>
           <p><strong>${localized.staff}:</strong> ${escapeHtml(data.staffName || "")}</p>
-          <p><strong>${localized.date}:</strong> ${formatDate(data.startAt, locale)}</p>
-          <p><strong>${localized.time}:</strong> ${formatTime(data.startAt, locale)} – ${formatTime(data.endAt, locale)}</p>
+          <p><strong>${localized.date}:</strong> ${formatDate(data.startAt, locale, data.timeZone)}</p>
+          <p><strong>${localized.time}:</strong> ${formatTime(data.startAt, locale, data.timeZone)} – ${formatTime(data.endAt, locale, data.timeZone)}</p>
           <p><strong>${localized.services}:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>${localized.total}:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
@@ -613,6 +630,7 @@ function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: st
  * Checks company settings before sending. Fire-and-forget.
  */
 export async function notifyBookingCreated(data: BookingNotificationData): Promise<void> {
+    data = await withCompanyTimeZone(data);
     const { sendEmail: doEmail, sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
 
     if (doEmail && data.customerEmail) {
@@ -668,6 +686,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
  * Send notification when a booking is updated (rescheduled, staff changed, etc.).
  */
 export async function notifyBookingUpdated(data: BookingNotificationData): Promise<void> {
+    data = await withCompanyTimeZone(data);
     const { sendEmail: doEmail, sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
 
     if (doEmail && data.customerEmail) {
@@ -696,6 +715,7 @@ export async function notifyBookingUpdated(data: BookingNotificationData): Promi
  * Send notification when a booking is cancelled.
  */
 export async function notifyBookingCancelled(data: BookingNotificationData): Promise<void> {
+    data = await withCompanyTimeZone(data);
     const { sendEmail: doEmail, sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
 
     if (doEmail && data.customerEmail) {
@@ -727,6 +747,7 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
 export async function notifyBookingTodayReminder(
     data: BookingReminderData,
 ): Promise<{ sent: boolean; channel?: ReminderChannel; reason?: string }> {
+    data = await withCompanyTimeZone(data);
     const customerPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
     const customerEmail = normalizeEmail(data.customerEmail);
     const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
@@ -761,6 +782,7 @@ export async function notifyBookingTodayReminder(
 export async function notifyBookingNoShow(
     data: BookingNoShowNotificationData,
 ): Promise<{ sent: boolean; channel?: ReminderChannel; reason?: string }> {
+    data = await withCompanyTimeZone(data);
     const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
     const customerPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
     const customerEmail = normalizeEmail(data.customerEmail);
