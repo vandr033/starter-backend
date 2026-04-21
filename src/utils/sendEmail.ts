@@ -2,6 +2,12 @@
 import nodemailer from "nodemailer";
 import { User } from "better-auth/*";
 import { logger } from "../config/logger";
+import {
+    getCompanyNotificationBranding,
+    mergeBranding,
+    renderBrandedEmail,
+    type NotificationBranding,
+} from "./notificationBranding";
 export const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
@@ -17,6 +23,26 @@ export const transporter = nodemailer.createTransport({
   logger: true,
   debug: true,
 });
+
+const originalSendMail = transporter.sendMail.bind(transporter);
+transporter.sendMail = ((mailOptions: Parameters<typeof transporter.sendMail>[0], callback?: any) => {
+  if (
+    mailOptions &&
+    typeof mailOptions === "object" &&
+    typeof mailOptions.html === "string" &&
+    !mailOptions.html.includes("Powered by Priconpri")
+  ) {
+    mailOptions = {
+      ...mailOptions,
+      html: renderBrandedEmail({
+        title: typeof mailOptions.subject === "string" ? mailOptions.subject : "Priconpri",
+        bodyHtml: mailOptions.html,
+      }),
+    };
+  }
+
+  return originalSendMail(mailOptions as any, callback as any);
+}) as typeof transporter.sendMail;
 
 const maskEmail = (email: string) => {
     const [local, domain] = email.split("@");
@@ -40,6 +66,32 @@ function escapeHtml(input: string): string {
         .replace(/'/g, "&#39;");
 }
 
+type EmailBrandingOptions = {
+    companyId?: number;
+    branding?: NotificationBranding | null;
+};
+
+async function resolveEmailBranding(options?: EmailBrandingOptions): Promise<NotificationBranding | null> {
+    const companyBranding = options?.companyId
+        ? await getCompanyNotificationBranding(options.companyId)
+        : null;
+    return mergeBranding(companyBranding, options?.branding);
+}
+
+async function brandedEmailHtml(params: {
+    title: string;
+    bodyHtml: string;
+    preheader?: string;
+    options?: EmailBrandingOptions;
+}): Promise<string> {
+    return renderBrandedEmail({
+        title: params.title,
+        bodyHtml: params.bodyHtml,
+        preheader: params.preheader,
+        branding: await resolveEmailBranding(params.options),
+    });
+}
+
 export async function sendEmailCode(
   email: string,
   code: string
@@ -49,88 +101,24 @@ export async function sendEmailCode(
     return 1;
   }
   try {
+    const html = await brandedEmailHtml({
+      title: "Código de verificación",
+      preheader: "Tu código de verificación de Priconpri",
+      bodyHtml: `
+        <h2 style="margin-top:0;">¡Hola!</h2>
+        <p>Gracias por usar Priconpri. Para completar tu verificación, utiliza el siguiente código:</p>
+        <div style="background:#fdf2f8;border:2px dashed #9f145b;padding:20px;text-align:center;margin:20px 0;border-radius:10px;">
+          <div style="font-size:32px;font-weight:bold;letter-spacing:5px;color:#9f145b;font-family:monospace;">${escapeHtml(code)}</div>
+        </div>
+        <p><strong>Importante:</strong> Este código expirará en 15 minutos por razones de seguridad.</p>
+        <p>Si no solicitaste este código, puedes ignorar este correo.</p>
+      `,
+    });
     transporter.sendMail({
       to: email,
       from: process.env.MAIL_FROM!,
       subject: "Código de verificación",
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Código de verificación</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              line-height: 1.6;
-              color: #333;
-              max-width: 600px;
-              margin: 0 auto;
-              padding: 20px;
-              background-color: #f4f4f4;
-            }
-            .container {
-              background-color: #ffffff;
-              padding: 30px;
-              border-radius: 10px;
-              box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            }
-            .header {
-              text-align: center;
-              margin-bottom: 30px;
-            }
-            .logo {
-              font-size: 24px;
-              font-weight: bold;
-              color: #007bff;
-            }
-            .code-box {
-              background-color: #f8f9fa;
-              border: 2px dashed #007bff;
-              padding: 20px;
-              text-align: center;
-              margin: 20px 0;
-              border-radius: 5px;
-            }
-            .code {
-              font-size: 32px;
-              font-weight: bold;
-              letter-spacing: 5px;
-              color: #007bff;
-              font-family: monospace;
-            }
-            .footer {
-              text-align: center;
-              margin-top: 30px;
-              font-size: 12px;
-              color: #666;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <div class="logo">Verificación de Cuenta</div>
-            </div>
-            
-            <h2>¡Hola!</h2>
-            <p>Gracias por usar nuestro servicio. Para completar tu verificación, por favor utiliza el siguiente código:</p>
-            
-            <div class="code-box">
-              <div class="code">${code}</div>
-            </div>
-            
-            <p><strong>Importante:</strong> Este código expirará en 15 minutos por razones de seguridad.</p>
-            <p>Si no solicitaste este código, puedes ignorar este correo de forma segura.</p>
-            
-            <div class="footer">
-              <p> 2025 Tu Empresa. Todos los derechos reservados.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
+      html,
     });  
     return 1;
     } catch (error) {
@@ -209,27 +197,26 @@ export async function sendAdminTempPasswordInviteEmail(params: {
     const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/admin/login`;
 
     try {
+        const subject = `Acceso temporal a ${companyName}`;
+        const html = await brandedEmailHtml({
+            title: "Invitación al panel",
+            bodyHtml: `
+                <p>Se creó un acceso para <strong>${escapeHtml(companyName)}</strong>.</p>
+                <p>Usa estas credenciales temporales:</p>
+                <ul>
+                    <li><strong>Email:</strong> ${escapeHtml(email)}</li>
+                    <li><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword)}</li>
+                </ul>
+                <p>Al iniciar sesión, deberás cambiar la contraseña antes de poder usar el panel.</p>
+                <p><a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#9f145b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">Ir al login</a></p>
+            `,
+            options: { branding: { companyName } },
+        });
         const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
-            subject: `Acceso temporal a ${companyName}`,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 620px; margin: 0 auto; padding: 20px; background: #f8fafc;">
-                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
-                        <h2 style="margin-top: 0;">Invitación al panel</h2>
-                        <p>Se creó un acceso para <strong>${companyName}</strong>.</p>
-                        <p>Usa estas credenciales temporales:</p>
-                        <ul>
-                            <li><strong>Email:</strong> ${email}</li>
-                            <li><strong>Contraseña temporal:</strong> ${temporaryPassword}</li>
-                        </ul>
-                        <p>Al iniciar sesión, deberás cambiar la contraseña antes de poder usar el panel.</p>
-                        <p>
-                            <a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer">Ir al login</a>
-                        </p>
-                    </div>
-                </div>
-            `,
+            subject,
+            html,
         });
         logger.info(
             {
@@ -277,34 +264,33 @@ export async function sendCustomerPortalAccessEmail(params: {
 
     try {
         const hasTempPassword = typeof temporaryPassword === "string" && temporaryPassword.length > 0;
+        const subject = hasTempPassword ? `Tu acceso a ${companyName}` : `Accede a tus reservas en ${companyName}`;
+        const html = await brandedEmailHtml({
+            title: hasTempPassword ? "Tu cuenta ya está lista" : "Acceso a tus reservas",
+            bodyHtml: `
+                <p>${hasTempPassword
+                    ? `Creamos una cuenta para que puedas revisar tus reservas y pases de <strong>${escapeHtml(companyName)}</strong>.`
+                    : `Tu cuenta en <strong>${escapeHtml(companyName)}</strong> ya existe y puedes usarla para revisar tus reservas y pases.`}
+                </p>
+                ${hasTempPassword ? `
+                    <p>Usa estas credenciales temporales:</p>
+                    <ul>
+                        <li><strong>Email:</strong> ${escapeHtml(email)}</li>
+                        <li><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword!)}</li>
+                    </ul>
+                    <p>Al iniciar sesión te pediremos cambiar la contraseña.</p>
+                ` : `
+                    <p>Ingresa con tu email habitual. Si no recuerdas tu contraseña, usa la opción de recuperación desde el login.</p>
+                `}
+                <p><a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#9f145b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">Ir al login</a></p>
+            `,
+            options: { branding: { companyName } },
+        });
         const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
-            subject: hasTempPassword ? `Tu acceso a ${companyName}` : `Accede a tus reservas en ${companyName}`,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 620px; margin: 0 auto; padding: 20px; background: #f8fafc;">
-                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
-                        <h2 style="margin-top: 0;">${hasTempPassword ? "Tu cuenta ya está lista" : "Acceso a tus reservas"}</h2>
-                        <p>${hasTempPassword
-                            ? `Creamos una cuenta para que puedas revisar tus reservas y pases de <strong>${escapeHtml(companyName)}</strong>.`
-                            : `Tu cuenta en <strong>${escapeHtml(companyName)}</strong> ya existe y puedes usarla para revisar tus reservas y pases.`}
-                        </p>
-                        ${hasTempPassword ? `
-                            <p>Usa estas credenciales temporales:</p>
-                            <ul>
-                                <li><strong>Email:</strong> ${escapeHtml(email)}</li>
-                                <li><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword!)}</li>
-                            </ul>
-                            <p>Al iniciar sesión te pediremos cambiar la contraseña.</p>
-                        ` : `
-                            <p>Ingresa con tu email habitual. Si no recuerdas tu contraseña, usa la opción de recuperación desde el login.</p>
-                        `}
-                        <p>
-                            <a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer">Ir al login</a>
-                        </p>
-                    </div>
-                </div>
-            `,
+            subject,
+            html,
         });
         logger.info(
             {
@@ -508,6 +494,7 @@ export async function sendGenericEmail(
     to: string,
     subject: string,
     html: string,
+    options?: EmailBrandingOptions,
 ): Promise<void> {
     if (isTemporaryEmailAddress(to)) {
         logger.info(
@@ -517,11 +504,16 @@ export async function sendGenericEmail(
         return;
     }
     try {
+        const brandedHtml = await brandedEmailHtml({
+            title: subject,
+            bodyHtml: html,
+            options,
+        });
         await transporter.sendMail({
             to,
             from: process.env.MAIL_FROM!,
             subject,
-            html,
+            html: brandedHtml,
         });
     } catch (error) {
         logger.error(
@@ -537,6 +529,10 @@ export async function sendCustomerMassMessageEmail(params: {
     companyName: string;
     message: string;
     locale?: 'es' | 'en';
+    companyId?: number;
+    companyPhonePrefix?: string | null;
+    companyPhone?: string | null;
+    companyLogoUrl?: string | null;
 }) {
     if (isTemporaryEmailAddress(params.email)) {
         logger.info(
@@ -558,19 +554,27 @@ export async function sendCustomerMassMessageEmail(params: {
     const messageHtml = escapeHtml(params.message).replace(/\r?\n/g, '<br/>');
 
     try {
+        const html = await brandedEmailHtml({
+            title,
+            bodyHtml: `
+                <p>${intro}</p>
+                <div style="margin-top: 16px; background: #fdf2f8; border-radius: 10px; padding: 14px; border:1px solid #fbcfe8;">${messageHtml}</div>
+            `,
+            options: {
+                companyId: params.companyId,
+                branding: {
+                    companyName: params.companyName,
+                    companyPhonePrefix: params.companyPhonePrefix,
+                    companyPhone: params.companyPhone,
+                    companyLogoUrl: params.companyLogoUrl,
+                },
+            },
+        });
         await transporter.sendMail({
             to: params.email,
             from: process.env.MAIL_FROM!,
             subject,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 620px; margin: 0 auto; padding: 20px; background: #f8fafc;">
-                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px;">
-                        <h2 style="margin-top: 0;">${title}</h2>
-                        <p>${intro}</p>
-                        <div style="margin-top: 16px; background: #f8fafc; border-radius: 8px; padding: 14px;">${messageHtml}</div>
-                    </div>
-                </div>
-            `,
+            html,
         });
 
         return 1;

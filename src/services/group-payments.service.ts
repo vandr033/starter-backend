@@ -706,12 +706,12 @@ export async function sendInstallmentReminder(
 
     try {
         if (channel === 'WHATSAPP') {
-            const result = await sendWhatsappText(recipientPhone!, reminderCopy.text);
+            const result = await sendWhatsappText(recipientPhone!, reminderCopy.text, { companyId });
             if (result === -1) {
                 throw new Error('WhatsApp reminder delivery failed');
             }
         } else {
-            await sendGenericEmail(recipientEmail!, reminderCopy.subject, reminderCopy.html);
+            await sendGenericEmail(recipientEmail!, reminderCopy.subject, reminderCopy.html, { companyId });
         }
 
         const log = await GroupPaymentsRepo.createReminderLog({

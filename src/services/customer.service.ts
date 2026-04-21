@@ -451,7 +451,7 @@ export async function sendMassCustomerMessage(
                 await sleep(waitMs);
             }
 
-            const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
+            const waResult = await sendWhatsappText(whatsappTarget, whatsappText, { companyId });
             if (waResult !== -1) {
                 whatsappSent += 1;
                 seenWhatsappTargets.add(whatsappTarget);
@@ -472,6 +472,7 @@ export async function sendMassCustomerMessage(
                 companyName: company.name,
                 message,
                 locale,
+                companyId,
             });
             if (emailResult === 1) {
                 emailSent += 1;

@@ -3,6 +3,13 @@ import { createWasender, RetryConfig, TextOnlyMessage } from "wasenderapi";
 import { prisma } from "../prisma/client";
 import { logger } from "../config/logger";
 import { CompanyUserRole } from "@prisma/client";
+import {
+    appendCompanyContactLine,
+    getCompanyNotificationBranding,
+    mergeBranding,
+    renderBrandedEmail,
+    type NotificationBranding,
+} from "./notificationBranding";
 
 const smtpHost = process.env.MAIL_HOST || "smtp.gmail.com";
 const smtpPort = Number(process.env.MAIL_PORT || 587);
@@ -43,6 +50,8 @@ interface BookingNotificationData {
     endAt: Date;
     totalPriceCents: number;
     timeZone?: string | null;
+    internalAudience?: InternalAudience;
+    branding?: NotificationBranding | null;
 }
 
 export type ReminderChannel = "WHATSAPP" | "EMAIL";
@@ -59,7 +68,8 @@ interface BookingNoShowNotificationData extends BookingReminderData {
     customMessage?: string | null;
 }
 
-type InternalRecipientRole = "staff" | "owner";
+type InternalRecipientRole = "staff" | "owner" | "admin";
+type InternalAudience = "all" | "none" | "staff" | "management";
 
 interface InternalRecipient {
     userId: string;
@@ -111,16 +121,23 @@ function formatTime(date: Date, locale: SupportedLocale = "es", timeZone?: strin
 }
 
 async function withCompanyTimeZone<T extends BookingNotificationData>(data: T): Promise<T> {
-    if (data.timeZone) return data;
-
-    const company = await prisma.company.findUnique({
-        where: { id: data.companyId },
-        select: { timezone: true },
-    });
+    const [company, branding] = await Promise.all([
+        data.timeZone
+            ? Promise.resolve(null)
+            : prisma.company.findUnique({
+                where: { id: data.companyId },
+                select: { timezone: true },
+            }),
+        getCompanyNotificationBranding(data.companyId),
+    ]);
 
     return {
         ...data,
-        timeZone: company?.timezone || "UTC",
+        timeZone: data.timeZone || company?.timezone || "UTC",
+        branding: mergeBranding(branding, {
+            ...data.branding,
+            companyName: data.companyName,
+        }),
     };
 }
 
@@ -223,13 +240,14 @@ async function getInternalRecipients(companyId: number, staffId?: number) {
         }
     }
 
-    const owners = await prisma.companyUser.findMany({
+    const managementUsers = await prisma.companyUser.findMany({
         where: {
             company_id: companyId,
-            role: CompanyUserRole.OWNER,
+            role: { in: [CompanyUserRole.OWNER, CompanyUserRole.ADMIN] },
             deleted_at: null,
         },
         select: {
+            role: true,
             user: {
                 select: {
                     id: true,
@@ -243,17 +261,24 @@ async function getInternalRecipients(companyId: number, staffId?: number) {
         },
     });
 
-    for (const owner of owners) {
+    for (const companyUser of managementUsers) {
         upsertRecipient({
-            userId: owner.user.id,
-            role: "owner",
-            name: owner.user.first_name || owner.user.name || "Owner",
-            email: normalizeEmail(owner.user.email),
-            phone: buildFullPhone(owner.user.phone_prefix, owner.user.phoneNumber),
+            userId: companyUser.user.id,
+            role: companyUser.role === CompanyUserRole.ADMIN ? "admin" : "owner",
+            name: companyUser.user.first_name || companyUser.user.name || "Admin",
+            email: normalizeEmail(companyUser.user.email),
+            phone: buildFullPhone(companyUser.user.phone_prefix, companyUser.user.phoneNumber),
         });
     }
 
     return Array.from(recipientsByUserId.values());
+}
+
+function recipientMatchesAudience(recipient: InternalRecipient, audience: InternalAudience = "all"): boolean {
+    if (audience === "none") return false;
+    if (audience === "staff") return recipient.role === "staff";
+    if (audience === "management") return recipient.role === "owner" || recipient.role === "admin";
+    return true;
 }
 
 function buildInternalWhatsappText(
@@ -286,16 +311,57 @@ function buildInternalWhatsappText(
     ].join("\n");
 }
 
+function buildPendingManagementWhatsappText(data: BookingNotificationData): string {
+    const services = data.serviceNames.join(", ");
+    const manageUrl = getManageBookingUrl(data.bookingId);
+    const customerPhone =
+        buildFullPhone(data.customerPhonePrefix, data.customerPhone) || "No disponible";
+
+    return [
+        "⏳ Nueva reserva pendiente de confirmación",
+        ``,
+        `Cliente: ${data.customerName || "Sin nombre"}`,
+        `Teléfono: ${customerPhone}`,
+        `Email: ${data.customerEmail || "No disponible"}`,
+        `Staff: ${data.staffName || "No asignado"}`,
+        `Servicios: ${services}`,
+        `Fecha: ${formatDate(data.startAt, "es", data.timeZone)}`,
+        `Hora: ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
+        `Total: ${formatPrice(data.totalPriceCents)} Bs`,
+        ``,
+        `Confirmar reserva: ${manageUrl}`,
+    ].join("\n");
+}
+
+function buildStaffConfirmedWhatsappText(data: BookingNotificationData): string {
+    const services = data.serviceNames.join(", ");
+    const manageUrl = getManageBookingUrl(data.bookingId);
+
+    return [
+        "✅ Reserva confirmada asignada",
+        ``,
+        `Cliente: ${data.customerName || "Sin nombre"}`,
+        `Servicios: ${services}`,
+        `Fecha: ${formatDate(data.startAt, "es", data.timeZone)}`,
+        `Hora: ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
+        ``,
+        `Ver reserva: ${manageUrl}`,
+    ].join("\n");
+}
+
 function bookingInternalEmailHtml(
     data: BookingNotificationData,
     recipient: InternalRecipient,
+    options?: { heading?: string; message?: string },
 ): string {
     const serviceList = data.serviceNames.map((s) => `<li>${s}</li>`).join("");
     const manageUrl = getManageBookingUrl(data.bookingId);
     const customerPhone =
         buildFullPhone(data.customerPhonePrefix, data.customerPhone) || "No disponible";
-    const heading =
-        recipient.role === "staff" ? "Nueva reserva asignada" : "Nueva reserva en tu tienda";
+    const heading = options?.heading || (
+        recipient.role === "staff" ? "Nueva reserva asignada" : "Nueva reserva en tu tienda"
+    );
+    const message = options?.message || "Se registró una nueva reserva. Aquí están los datos:";
 
     return `
     <!DOCTYPE html>
@@ -317,7 +383,7 @@ function bookingInternalEmailHtml(
       <div class="container">
         <div class="header"><h1>${heading}</h1></div>
         <p>Hola ${recipient.name || ""},</p>
-        <p>Se registró una nueva reserva. Aquí están los datos:</p>
+        <p>${message}</p>
         <div class="details">
           <p><strong>Cliente:</strong> ${data.customerName || "Sin nombre"}</p>
           <p><strong>Teléfono cliente:</strong> ${customerPhone}</p>
@@ -488,6 +554,18 @@ async function sendWhatsapp(phone: string, text: string): Promise<boolean> {
     }
 }
 
+function brandEmail(data: BookingNotificationData, title: string, html: string): string {
+    return renderBrandedEmail({
+        title,
+        bodyHtml: html,
+        branding: data.branding,
+    });
+}
+
+function brandWhatsapp(data: BookingNotificationData, text: string): string {
+    return appendCompanyContactLine(text, data.branding);
+}
+
 function buildWhatsappText(data: BookingNotificationData, intro: string): string {
     const services = data.serviceNames.join(", ");
     return [
@@ -640,7 +718,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
             "Tu reserva ha sido creada exitosamente. Aquí están los detalles:",
             "#007bff"
         );
-        void sendEmail(data.customerEmail, `Reserva confirmada – ${data.companyName}`, html);
+        void sendEmail(data.customerEmail, `Reserva confirmada – ${data.companyName}`, brandEmail(data, "Reserva Confirmada", html));
     }
 
     if (doWa && data.customerPhone) {
@@ -650,7 +728,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
                 data,
                 `✅ Hola ${data.customerName || ""}, tu reserva en ${data.companyName} ha sido confirmada.`
             );
-            void sendWhatsapp(phone, text);
+            void sendWhatsapp(phone, brandWhatsapp(data, text));
         }
     }
 
@@ -659,18 +737,22 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
         try {
             const recipients = await getInternalRecipients(data.companyId, data.staffId);
             for (const recipient of recipients) {
+                if (!recipientMatchesAudience(recipient, data.internalAudience)) {
+                    continue;
+                }
+
                 if (doEmail && recipient.email) {
                     const subject =
                         recipient.role === "staff"
                             ? `Nueva reserva asignada – ${data.companyName}`
                             : `Nueva reserva en tu tienda – ${data.companyName}`;
                     const html = bookingInternalEmailHtml(data, recipient);
-                    void sendEmail(recipient.email, subject, html);
+                    void sendEmail(recipient.email, subject, brandEmail(data, subject, html));
                 }
 
                 if (doWa && recipient.phone) {
                     const text = buildInternalWhatsappText(data, recipient.role);
-                    void sendWhatsapp(recipient.phone, text);
+                    void sendWhatsapp(recipient.phone, brandWhatsapp(data, text));
                 }
             }
         } catch (err) {
@@ -679,6 +761,69 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
                 "Failed to send internal booking notifications",
             );
         }
+    }
+}
+
+/**
+ * Send a WhatsApp-only alert to owners/admins when a booking needs manual confirmation.
+ */
+export async function notifyBookingPendingForManagement(data: BookingNotificationData): Promise<void> {
+    data = await withCompanyTimeZone(data);
+    const { sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
+    if (!doWa) return;
+
+    try {
+        const recipients = await getInternalRecipients(data.companyId);
+        const text = buildPendingManagementWhatsappText(data);
+        for (const recipient of recipients) {
+            if (!recipientMatchesAudience(recipient, "management") || !recipient.phone) {
+                continue;
+            }
+            void sendWhatsapp(recipient.phone, brandWhatsapp(data, text));
+        }
+    } catch (err) {
+        logger.error(
+            { err, bookingId: data.bookingId },
+            "Failed to send pending booking management notifications",
+        );
+    }
+}
+
+/**
+ * Notify only the assigned staff member when a pending booking is confirmed.
+ */
+export async function notifyBookingConfirmedForStaff(data: BookingNotificationData): Promise<void> {
+    data = await withCompanyTimeZone(data);
+    const { sendEmail: doEmail, sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
+    if (!data.staffId || (!doEmail && !doWa)) return;
+
+    try {
+        const recipients = (await getInternalRecipients(data.companyId, data.staffId)).filter(
+            (recipient) => recipientMatchesAudience(recipient, "staff"),
+        );
+
+        for (const recipient of recipients) {
+            if (doEmail && recipient.email) {
+                const html = bookingInternalEmailHtml(data, {
+                    ...recipient,
+                    role: "staff",
+                }, {
+                    heading: "Reserva confirmada asignada",
+                    message: "La reserva fue confirmada. Aquí están los datos:",
+                });
+                void sendEmail(recipient.email, `Reserva confirmada asignada – ${data.companyName}`, brandEmail(data, "Reserva confirmada asignada", html));
+            }
+
+            if (doWa && recipient.phone) {
+                const text = buildStaffConfirmedWhatsappText(data);
+                void sendWhatsapp(recipient.phone, brandWhatsapp(data, text));
+            }
+        }
+    } catch (err) {
+        logger.error(
+            { err, bookingId: data.bookingId },
+            "Failed to send staff booking confirmation notification",
+        );
     }
 }
 
@@ -696,7 +841,7 @@ export async function notifyBookingUpdated(data: BookingNotificationData): Promi
             "Tu reserva ha sido modificada. Revisa los nuevos detalles:",
             "#f59e0b"
         );
-        void sendEmail(data.customerEmail, `Reserva actualizada – ${data.companyName}`, html);
+        void sendEmail(data.customerEmail, `Reserva actualizada – ${data.companyName}`, brandEmail(data, "Reserva Actualizada", html));
     }
 
     if (doWa && data.customerPhone) {
@@ -706,7 +851,7 @@ export async function notifyBookingUpdated(data: BookingNotificationData): Promi
                 data,
                 `📝 Hola ${data.customerName || ""}, tu reserva en ${data.companyName} ha sido actualizada.`
             );
-            void sendWhatsapp(phone, text);
+            void sendWhatsapp(phone, brandWhatsapp(data, text));
         }
     }
 }
@@ -725,7 +870,7 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
             "Tu reserva ha sido cancelada. Si esto fue un error, por favor contáctanos para reagendar.",
             "#dc3545"
         );
-        void sendEmail(data.customerEmail, `Reserva cancelada – ${data.companyName}`, html);
+        void sendEmail(data.customerEmail, `Reserva cancelada – ${data.companyName}`, brandEmail(data, "Reserva Cancelada", html));
     }
 
     if (doWa && data.customerPhone) {
@@ -735,7 +880,7 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
                 data,
                 `❌ Hola ${data.customerName || ""}, tu reserva en ${data.companyName} ha sido cancelada.`
             );
-            void sendWhatsapp(phone, text);
+            void sendWhatsapp(phone, brandWhatsapp(data, text));
         }
     }
 }
@@ -754,7 +899,7 @@ export async function notifyBookingTodayReminder(
 
     if (customerPhone) {
         const text = buildTodayReminderWhatsappText(data);
-        const ok = await sendWhatsapp(customerPhone, text);
+        const ok = await sendWhatsapp(customerPhone, brandWhatsapp(data, text));
         return ok
             ? { sent: true, channel: "WHATSAPP" }
             : { sent: false, reason: "WHATSAPP_SEND_FAILED" };
@@ -766,7 +911,7 @@ export async function notifyBookingTodayReminder(
             locale === "en"
                 ? `Today's appointment reminder – ${data.companyName}`
                 : `Recordatorio de cita de hoy – ${data.companyName}`;
-        const ok = await sendEmail(customerEmail, subject, html);
+        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
         return ok
             ? { sent: true, channel: "EMAIL" }
             : { sent: false, reason: "EMAIL_SEND_FAILED" };
@@ -791,7 +936,7 @@ export async function notifyBookingNoShow(
 
     if (preferred === "WHATSAPP") {
         if (!customerPhone) return { sent: false, reason: "NO_WHATSAPP_CONTACT" };
-        const ok = await sendWhatsapp(customerPhone, message);
+        const ok = await sendWhatsapp(customerPhone, brandWhatsapp(data, message));
         return ok ? { sent: true, channel: "WHATSAPP" } : { sent: false, reason: "WHATSAPP_SEND_FAILED" };
     }
 
@@ -802,12 +947,12 @@ export async function notifyBookingNoShow(
                 ? `No-show notice – ${data.companyName}`
                 : `Aviso de no asistencia – ${data.companyName}`;
         const html = bookingNoShowEmailHtml(data, message);
-        const ok = await sendEmail(customerEmail, subject, html);
+        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
         return ok ? { sent: true, channel: "EMAIL" } : { sent: false, reason: "EMAIL_SEND_FAILED" };
     }
 
     if (customerPhone) {
-        const ok = await sendWhatsapp(customerPhone, message);
+        const ok = await sendWhatsapp(customerPhone, brandWhatsapp(data, message));
         if (ok) return { sent: true, channel: "WHATSAPP" };
     }
 
@@ -817,7 +962,7 @@ export async function notifyBookingNoShow(
                 ? `No-show notice – ${data.companyName}`
                 : `Aviso de no asistencia – ${data.companyName}`;
         const html = bookingNoShowEmailHtml(data, message);
-        const ok = await sendEmail(customerEmail, subject, html);
+        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
         return ok ? { sent: true, channel: "EMAIL" } : { sent: false, reason: "EMAIL_SEND_FAILED" };
     }
 

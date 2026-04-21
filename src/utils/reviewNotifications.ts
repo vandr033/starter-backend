@@ -148,7 +148,7 @@ export async function notifyNewReview(data: NewReviewNotificationData): Promise<
             <p><strong>Comentario:</strong> ${commentSnippet}</p>
           </div>
         `;
-        void sendGenericEmail(admin.user.email, subject, html).catch((err) => {
+        void sendGenericEmail(admin.user.email, subject, html, { companyId: data.companyId }).catch((err) => {
           logger.error({ err, adminEmail: admin.user.email }, 'Failed to send new review email to admin');
         });
       }
@@ -168,7 +168,7 @@ export async function notifyNewReview(data: NewReviewNotificationData): Promise<
             .filter(Boolean)
             .join('\n');
 
-          void sendWhatsappText(fullPhone, text).catch((err) => {
+          void sendWhatsappText(fullPhone, text, { companyId: data.companyId }).catch((err) => {
             logger.error({ err, phone: fullPhone }, 'Failed to send new review WhatsApp to admin');
           });
         }
@@ -237,7 +237,7 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
                 reviewUrl,
               ].join('\n');
 
-        await sendWhatsappText(fullPhone, text);
+        await sendWhatsappText(fullPhone, text, { companyId: data.companyId });
         return { sent: true, channel: 'WHATSAPP' };
       }
     }
@@ -269,7 +269,7 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
             </div>
           `;
 
-      await sendGenericEmail(data.customerEmail, subject, html);
+      await sendGenericEmail(data.customerEmail, subject, html, { companyId: data.companyId });
       return { sent: true, channel: 'EMAIL' };
     }
 

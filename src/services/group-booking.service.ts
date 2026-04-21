@@ -827,7 +827,7 @@ async function runEventMassMessage(
                 );
             } else {
                 attemptedChannel = true;
-                const waResult = await sendWhatsappText(whatsappTarget, whatsappText);
+                const waResult = await sendWhatsappText(whatsappTarget, whatsappText, { companyId });
                 if (waResult !== -1) {
                     whatsappSent += 1;
                     seenWhatsappTargets.add(whatsappTarget);
@@ -899,6 +899,7 @@ async function runEventMassMessage(
                     companyName: company.name,
                     message,
                     locale,
+                    companyId,
                 });
 
                 if (emailResult === 1) {
@@ -1455,13 +1456,13 @@ async function notifyWaitlistOfOpenSpot(companyId: number, eventId: number): Pro
 
                 if (sendEmail && entry.user.email && !isTemporaryEmailAddress(entry.user.email)) {
                     const html = `<p>${template.text.replace(/\n/g, '<br/>')}</p>`;
-                    await sendGenericEmail(entry.user.email, template.subject, html);
+                    await sendGenericEmail(entry.user.email, template.subject, html, { companyId });
                     delivered = true;
                 }
 
                 const fullPhone = buildFullPhone(entry.user.phone_prefix, entry.user.phoneNumber);
                 if (sendWhatsapp && fullPhone) {
-                    const result = await sendWhatsappText(fullPhone, template.text);
+                    const result = await sendWhatsappText(fullPhone, template.text, { companyId });
                     if (result !== -1) {
                         delivered = true;
                     }

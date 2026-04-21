@@ -229,7 +229,7 @@ export async function notifyGroupBookingCreated(input: {
             admins
                 .map((admin) => admin.user.email?.trim())
                 .filter((email): email is string => Boolean(email))
-                .map((email) => sendGenericEmail(email, subject, html)),
+                .map((email) => sendGenericEmail(email, subject, html, { companyId: input.companyId })),
         );
     } catch (error) {
         logger.error({ input, error }, 'Failed to send internal group booking notifications');

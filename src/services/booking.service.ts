@@ -1,7 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as BookingRepo from '../repositories/booking.repo';
 import { prisma } from '../prisma/client';
-import { notifyBookingCreated } from '../utils/bookingNotifications';
+import { notifyBookingCreated, notifyBookingPendingForManagement } from '../utils/bookingNotifications';
 import { BookingSource, BookingStatus, PaymentStatus } from '@prisma/client';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
@@ -707,9 +707,9 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (bookingFlowSettings.autoConfirm && canSendTransactionalNotifications && company && booking) {
+        if (canSendTransactionalNotifications && company && booking) {
             const user = await prisma.user.findUnique({ where: { id: user_id }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
-            void notifyBookingCreated({
+            const notificationData = {
                 companyId: company_id,
                 bookingId: booking.id,
                 staffId: staff_id,
@@ -723,7 +723,13 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
                 startAt,
                 endAt,
                 totalPriceCents: totalPrice,
-            });
+            };
+
+            if (bookingFlowSettings.autoConfirm) {
+                void notifyBookingCreated(notificationData);
+            } else {
+                void notifyBookingPendingForManagement(notificationData);
+            }
         }
 
         const resolvedSource = booking_source ?? BookingSource.SALON_SITE;
@@ -1008,9 +1014,9 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             params.company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (bookingFlowSettings.autoConfirm && canSendTransactionalNotifications) {
+        if (canSendTransactionalNotifications) {
             const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
-            void notifyBookingCreated({
+            const notificationData = {
                 companyId: params.company_id,
                 bookingId: booking.id,
                 staffId: params.staff_id,
@@ -1024,7 +1030,13 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
                 startAt: booking.start_at,
                 endAt: endAt,
                 totalPriceCents: totalPrice,
-            });
+            };
+
+            if (bookingFlowSettings.autoConfirm) {
+                void notifyBookingCreated(notificationData);
+            } else {
+                void notifyBookingPendingForManagement(notificationData);
+            }
         }
 
         const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;
@@ -1237,9 +1249,9 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             params.company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (bookingFlowSettings.autoConfirm && canSendTransactionalNotifications && (params.client_email || params.client_phone_number)) {
+        if (canSendTransactionalNotifications) {
             const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
-            void notifyBookingCreated({
+            const notificationData = {
                 companyId: params.company_id,
                 bookingId: booking.id,
                 staffId: params.staff_id,
@@ -1253,7 +1265,13 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
                 startAt: booking.start_at,
                 endAt: endAt,
                 totalPriceCents: totalPrice,
-            });
+            };
+
+            if (bookingFlowSettings.autoConfirm) {
+                void notifyBookingCreated(notificationData);
+            } else {
+                void notifyBookingPendingForManagement(notificationData);
+            }
         }
 
         const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;

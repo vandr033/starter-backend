@@ -245,7 +245,7 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
 
     if (sendEmail && user.email && !isTemporaryEmailAddress(user.email)) {
         try {
-            await sendGenericEmail(user.email, emailSubject, emailHtml);
+            await sendGenericEmail(user.email, emailSubject, emailHtml, { companyId });
             successfulChannels.push('EMAIL');
         } catch (error) {
             logger.error(
@@ -257,11 +257,11 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
 
     const phoneTarget = buildFullPhone(user.phone_prefix, user.phoneNumber);
     if (sendWhatsapp && phoneTarget) {
-        const imageResult = await sendWhatsappImage(phoneTarget, qrImageUrl, whatsappCaption);
+        const imageResult = await sendWhatsappImage(phoneTarget, qrImageUrl, whatsappCaption, { companyId });
         if (imageResult !== -1) {
             successfulChannels.push('WHATSAPP');
         } else {
-            const textResult = await sendWhatsappText(phoneTarget, whatsappFallbackText);
+            const textResult = await sendWhatsappText(phoneTarget, whatsappFallbackText, { companyId });
             if (textResult !== -1) {
                 successfulChannels.push('WHATSAPP');
             } else {

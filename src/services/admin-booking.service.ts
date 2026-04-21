@@ -6,6 +6,7 @@ import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
 import {
     notifyBookingCreated,
+    notifyBookingConfirmedForStaff,
     notifyBookingUpdated,
     notifyBookingCancelled,
     notifyBookingTodayReminder,
@@ -987,6 +988,7 @@ export async function updateBooking(
             const notificationData = {
                 companyId,
                 bookingId,
+                staffId: updatedBooking.staff_id,
                 customerEmail,
                 customerPhone,
                 customerPhonePrefix,
@@ -1001,7 +1003,8 @@ export async function updateBooking(
 
             if (updates.status === BookingStatus.CONFIRMED && existingBooking.status === BookingStatus.PENDING) {
                 // Manual confirmation — send the booking confirmed notification
-                void notifyBookingCreated(notificationData);
+                void notifyBookingCreated({ ...notificationData, internalAudience: 'none' });
+                void notifyBookingConfirmedForStaff(notificationData);
             } else if (updates.status === BookingStatus.CANCELLED && !isNoShowMarked(updatedBooking.notes)) {
                 void notifyBookingCancelled(notificationData);
             } else if (updates.start_at || updates.staff_id || updates.service_ids) {

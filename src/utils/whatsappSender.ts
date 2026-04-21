@@ -1,5 +1,11 @@
 import { createWasender, RetryConfig, TextOnlyMessage, ImageUrlMessage } from "wasenderapi";
 import { logger } from "../config/logger";
+import {
+  appendCompanyContactLine,
+  getCompanyNotificationBranding,
+  mergeBranding,
+  type NotificationBranding,
+} from "./notificationBranding";
 
 
 const apiKey = process.env.WASENDER_API_KEY!;
@@ -124,15 +130,28 @@ function enqueueWhatsappSend<T>(
 }
 
 export const sendWhatsappCode = async (phone: string, code: string) => {
-  return sendWhatsappText(phone, `Tu codigo de verificacion es: ${code}`)
+  return sendWhatsappText(phone, `Priconpri\n\nTu codigo de verificacion es: ${code}`)
 }
 
-export const sendWhatsappText = async (phone: string, text: string) => {
+export const sendWhatsappText = async (
+  phone: string,
+  text: string,
+  options?: { companyId?: number; branding?: NotificationBranding | null },
+) => {
   try{
+    const companyBranding = options?.companyId
+      ? await getCompanyNotificationBranding(options.companyId)
+      : null;
+    const branding = mergeBranding(companyBranding, options?.branding);
+    const brandedText = branding
+      ? appendCompanyContactLine(text, branding)
+      : text.includes("Priconpri")
+        ? text
+        : `${text.trim()}\n\nPriconpri`;
     const textPayload: TextOnlyMessage = {
       messageType: "text",
       to: phone,
-      text,
+      text: brandedText,
     }
     const result = await enqueueWhatsappSend(() => wasender.send(textPayload), {
       phone,
@@ -182,13 +201,29 @@ export const sendWhatsappGroupMessage = async (groupJid: string, text: string) =
   return sendWhatsappText(groupJid, text);
 };
 
-export const sendWhatsappImage = async (phone: string, imageUrl: string, caption?: string) => {
+export const sendWhatsappImage = async (
+  phone: string,
+  imageUrl: string,
+  caption?: string,
+  options?: { companyId?: number; branding?: NotificationBranding | null },
+) => {
   try {
+    const companyBranding = options?.companyId
+      ? await getCompanyNotificationBranding(options.companyId)
+      : null;
+    const branding = mergeBranding(companyBranding, options?.branding);
+    const brandedCaption = caption
+      ? branding
+        ? appendCompanyContactLine(caption, branding)
+        : caption.includes("Priconpri")
+          ? caption
+          : `${caption.trim()}\n\nPriconpri`
+      : caption;
     const imagePayload: ImageUrlMessage = {
       messageType: "image",
       to: phone,
       imageUrl,
-      text: caption,
+      text: brandedCaption,
     }
     const result = await enqueueWhatsappSend(() => wasender.send(imagePayload), {
       phone,

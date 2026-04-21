@@ -1212,6 +1212,7 @@ async function sendRegistrationNotifications(opts: {
                     opts.email,
                     content.emailSubject,
                     content.emailHtml,
+                    { companyId: opts.companyId },
                 );
             } catch (err) {
                 logger.warn({ err, eventId: opts.eventId, email: opts.email }, 'Free event: email notification failed');
@@ -1223,7 +1224,7 @@ async function sendRegistrationNotifications(opts: {
         if (sendWhatsappEnabled) {
             try {
                 const fullPhone = `${opts.phonePrefix}${opts.phoneNumber}`;
-                await sendWhatsappText(fullPhone, content.whatsappMessage);
+                await sendWhatsappText(fullPhone, content.whatsappMessage, { companyId: opts.companyId });
             } catch (err) {
                 logger.warn(
                     { err, eventId: opts.eventId, phone: `${opts.phonePrefix}${opts.phoneNumber}` },
@@ -1645,7 +1646,7 @@ export async function inviteInterestedRegistration(
     // Send notifications according to admin-selected channels
     if (channels.email && !isTemporaryEmailAddress(registration.email)) {
         try {
-            await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml);
+            await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml, { companyId });
         } catch (err) {
             logger.warn({ err, eventId, registrationId }, 'Invite: email send failed');
         }
@@ -1654,7 +1655,7 @@ export async function inviteInterestedRegistration(
     if (channels.whatsapp) {
         try {
             const fullPhone = `${registration.phone_prefix}${registration.phone_number}`;
-            await sendWhatsappText(fullPhone, content.whatsappMessage);
+            await sendWhatsappText(fullPhone, content.whatsappMessage, { companyId });
         } catch (err) {
             logger.warn({ err, eventId, registrationId }, 'Invite: WhatsApp send failed');
         }
