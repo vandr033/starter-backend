@@ -16,6 +16,7 @@ import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookin
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { sendReviewRequestReminder } from '../utils/reviewNotifications';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
+import { parseDateTimeInTimeZone } from '../utils/timezone';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -104,6 +105,15 @@ function getTimeZoneParts(date: Date, timeZone: string) {
         minute: value('minute'),
         second: value('second'),
     };
+}
+
+async function getCompanyTimeZone(companyId: number): Promise<string> {
+    const company = await prisma.company.findUnique({
+        where: { id: companyId },
+        select: { timezone: true },
+    });
+
+    return company?.timezone || 'UTC';
 }
 
 function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
@@ -395,7 +405,8 @@ async function prepareAdminBookingSession(params: {
         };
     }
 
-    const startAt = new Date(params.startAtRaw);
+    const timeZone = await getCompanyTimeZone(params.companyId);
+    const startAt = parseDateTimeInTimeZone(params.startAtRaw, timeZone);
     if (isNaN(startAt.getTime())) {
         return {
             code: 400,
@@ -709,6 +720,8 @@ export async function updateBooking(
     actorRole?: CompanyUserRole
 ): Promise<AdminBookingResult> {
     try {
+        const timeZone = await getCompanyTimeZone(companyId);
+
         // Check if booking exists
         const existingBooking = await AdminBookingRepo.getBookingById(bookingId, companyId);
         if (!existingBooking) {
@@ -801,7 +814,7 @@ export async function updateBooking(
 
             // Use new start_at if provided, otherwise use existing
             const baseStartAt = updates.start_at
-                ? new Date(updates.start_at)
+                ? parseDateTimeInTimeZone(updates.start_at, timeZone)
                 : existingBooking.start_at;
             const endAt = new Date(baseStartAt.getTime() + totalDuration * 60 * 1000);
 
@@ -824,7 +837,7 @@ export async function updateBooking(
 
             // If start_at was also provided, reschedule (end_at is already handled above)
             if (updates.start_at) {
-                const startAt = new Date(updates.start_at);
+                const startAt = parseDateTimeInTimeZone(updates.start_at, timeZone);
                 if (isNaN(startAt.getTime())) {
                     return {
                         code: 400,
@@ -860,7 +873,7 @@ export async function updateBooking(
             }
         } else if (updates.start_at) {
             // Reschedule without service change
-            const startAt = new Date(updates.start_at);
+            const startAt = parseDateTimeInTimeZone(updates.start_at, timeZone);
 
             if (isNaN(startAt.getTime())) {
                 return {

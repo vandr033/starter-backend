@@ -4,6 +4,7 @@ import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { sanitizeRichText } from '../utils/richText';
+import { parseDateTimeInTimeZone } from '../utils/timezone';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +111,15 @@ async function getDefaultCompanyLocationText(companyId: number): Promise<string 
     return location.length > 0 ? location : null;
 }
 
+async function getCompanyTimeZone(companyId: number): Promise<string> {
+    const company = await prisma.company.findUnique({
+        where: { id: companyId },
+        select: { timezone: true },
+    });
+
+    return company?.timezone || 'UTC';
+}
+
 // ─── Service ────────────────────────────────────────────────────────────────
 
 export async function createGroupEvent(companyId: number, userId: string, input: CreateGroupEventInput): Promise<ServiceResult> {
@@ -121,8 +131,9 @@ export async function createGroupEvent(companyId: number, userId: string, input:
     const slugSource = input.slug?.trim() || input.title;
     const slug = await resolveUniqueEventSlug(companyId, slugSource);
 
-    const startAt = new Date(input.start_at);
-    const endAt = new Date(input.end_at);
+    const timeZone = await getCompanyTimeZone(companyId);
+    const startAt = parseDateTimeInTimeZone(input.start_at, timeZone);
+    const endAt = parseDateTimeInTimeZone(input.end_at, timeZone);
     if (endAt <= startAt) {
         return { code: 400, error: true, message: 'end_at must be after start_at' };
     }
@@ -131,8 +142,8 @@ export async function createGroupEvent(companyId: number, userId: string, input:
         return { code: 400, error: true, message: 'max_capacity must be at least 1' };
     }
 
-    if (!input.is_free && input.price_cents <= 0) {
-        return { code: 400, error: true, message: 'Paid events must have a positive price' };
+    if (!input.is_free && input.price_cents < 0) {
+        return { code: 400, error: true, message: 'price_cents must be non-negative' };
     }
 
     const requestedLocation = input.location_text?.trim() ?? '';
@@ -215,20 +226,21 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
         }
         updateData.max_capacity = input.max_capacity;
     }
-    if (input.start_at !== undefined) updateData.start_at = new Date(input.start_at);
-    if (input.end_at !== undefined) updateData.end_at = new Date(input.end_at);
+    const timeZone = await getCompanyTimeZone(companyId);
+    if (input.start_at !== undefined) updateData.start_at = parseDateTimeInTimeZone(input.start_at, timeZone);
+    if (input.end_at !== undefined) updateData.end_at = parseDateTimeInTimeZone(input.end_at, timeZone);
     if (input.location_text !== undefined) updateData.location_text = input.location_text;
 
-    const finalStartAt = input.start_at ? new Date(input.start_at) : existing.start_at;
-    const finalEndAt = input.end_at ? new Date(input.end_at) : existing.end_at;
+    const finalStartAt = input.start_at ? parseDateTimeInTimeZone(input.start_at, timeZone) : existing.start_at;
+    const finalEndAt = input.end_at ? parseDateTimeInTimeZone(input.end_at, timeZone) : existing.end_at;
     if (finalEndAt <= finalStartAt) {
         return { code: 400, error: true, message: 'end_at must be after start_at' };
     }
 
     const finalIsFree = input.is_free ?? existing.is_free;
     const finalPrice = input.price_cents ?? existing.price_cents;
-    if (!finalIsFree && finalPrice <= 0) {
-        return { code: 400, error: true, message: 'Paid events must have a positive price' };
+    if (!finalIsFree && finalPrice < 0) {
+        return { code: 400, error: true, message: 'price_cents must be non-negative' };
     }
     if (finalIsFree) {
         updateData.price_cents = 0;

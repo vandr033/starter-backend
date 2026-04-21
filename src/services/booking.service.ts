@@ -5,6 +5,7 @@ import { notifyBookingCreated } from '../utils/bookingNotifications';
 import { BookingSource } from '@prisma/client';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
+import { parseDateTimeInTimeZone } from '../utils/timezone';
 
 interface GetSlotsParams {
     company_id: number;
@@ -564,7 +565,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
         const totalPrice = services.reduce((sum, s) => sum + s.price_cents, 0);
 
-        const startAt = new Date(start_at);
+        const startAt = parseDateTimeInTimeZone(start_at, company.timezone);
         const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
 
         // 4.5 Validate advance booking limits

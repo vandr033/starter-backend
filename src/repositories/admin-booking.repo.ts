@@ -18,11 +18,13 @@ export async function getBookingsWithFilters(params: {
         deleted_at: null,
     };
 
-    if (startDate) {
-        where.start_at = { ...where.start_at, gte: startDate };
-    }
-    if (endDate) {
-        where.end_at = { ...where.end_at, lte: endDate };
+    if (startDate && endDate) {
+        where.start_at = { lt: endDate };
+        where.end_at = { gt: startDate };
+    } else if (startDate) {
+        where.end_at = { gt: startDate };
+    } else if (endDate) {
+        where.start_at = { lt: endDate };
     }
     if (status) {
         where.status = status;
