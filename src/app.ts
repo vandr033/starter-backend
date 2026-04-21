@@ -10,6 +10,61 @@ import { errorHandler } from "./middlewares/error";
 const app = express();
 app.set("trust proxy", 1);
 
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const rateLimitHandler: express.RequestHandler = (_req, res) => {
+  res.status(429).json({
+    code: 429,
+    error: true,
+    message: "Too many requests. Please wait a moment and try again.",
+  });
+};
+
+const generalApiLimiter = rateLimit({
+  windowMs: 60_000,
+  max: readPositiveIntEnv("RATE_LIMIT_MAX_PER_MINUTE", 600),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+});
+
+const authLimiter = rateLimit({
+  windowMs: 60_000,
+  max: readPositiveIntEnv("AUTH_RATE_LIMIT_MAX_PER_MINUTE", 60),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+});
+
+const bookingAvailabilityLimiter = rateLimit({
+  windowMs: 60_000,
+  max: readPositiveIntEnv("BOOKING_AVAILABILITY_RATE_LIMIT_MAX_PER_MINUTE", 1_200),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+});
+
+const bookingWriteLimiter = rateLimit({
+  windowMs: 60_000,
+  max: readPositiveIntEnv("BOOKING_WRITE_RATE_LIMIT_MAX_PER_MINUTE", 30),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+});
+
+const bookingAvailabilityPaths = new Set([
+  "/api/booking/available-dates",
+  "/api/booking/slots",
+]);
+
+const bookingWritePathPattern = /^\/api\/booking(?:\/public|\/customer|\/\d+(?:\/cancel)?)?$/;
+
 function parseOriginList(value?: string | null): string[] {
   if (!value) return [];
   return value
@@ -69,7 +124,25 @@ app.use(
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-app.use(rateLimit({ windowMs: 60_000, max: 120 }));
+
+app.use((req, res, next) => {
+  if (req.method === "GET" && bookingAvailabilityPaths.has(req.path)) {
+    return bookingAvailabilityLimiter(req, res, next);
+  }
+
+  return generalApiLimiter(req, res, next);
+});
+
+app.use((req, res, next) => {
+  if (
+    (req.method === "POST" || req.method === "PUT" || req.method === "DELETE")
+    && bookingWritePathPattern.test(req.path)
+  ) {
+    return bookingWriteLimiter(req, res, next);
+  }
+
+  return next();
+});
 
 let authHandlerPromise: Promise<express.RequestHandler> | null = null;
 
@@ -87,7 +160,7 @@ async function getAuthHandler() {
 }
 
 // 1) Better Auth on /api/auth prefix (no "*")
-app.use("/api/auth", async (req, res, next) => {
+app.use("/api/auth", authLimiter, async (req, res, next) => {
   try {
     const authHandler = await getAuthHandler();
     return authHandler(req, res, next);
