@@ -2,7 +2,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import * as BookingRepo from '../repositories/booking.repo';
 import { prisma } from '../prisma/client';
 import { notifyBookingCreated } from '../utils/bookingNotifications';
-import { BookingSource } from '@prisma/client';
+import { BookingSource, BookingStatus, PaymentStatus } from '@prisma/client';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
@@ -44,6 +44,24 @@ async function validatePaymentMethod(companyId: number, paymentMethod: string): 
         return 'QR payment is not enabled for this business';
     }
     return null;
+}
+
+async function resolveBookingFlowSettings(companyId: number): Promise<{
+    requireComprobante: boolean;
+    autoConfirm: boolean;
+}> {
+    const [settings, canCustomizeFlow] = await Promise.all([
+        prisma.companySettings.findUnique({
+            where: { company_id: companyId },
+            select: { require_comprobante_for_qr: true, auto_confirm_bookings: true },
+        }),
+        isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION'),
+    ]);
+
+    return {
+        requireComprobante: canCustomizeFlow ? (settings?.require_comprobante_for_qr ?? true) : true,
+        autoConfirm: canCustomizeFlow ? (settings?.auto_confirm_bookings ?? true) : true,
+    };
 }
 
 /**
@@ -526,17 +544,10 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         }
 
         // 1.6 Fetch QR/confirm settings (plan-gated)
-        const bookingSettings = await prisma.companySettings.findUnique({
-            where: { company_id },
-            select: { require_comprobante_for_qr: true, auto_confirm_bookings: true },
-        });
-        const canCustomizeFlow = await isFeatureEnabledForCompany(company_id, 'BOOKING_FLOW_CUSTOMIZATION');
-        // STARTER plan: force defaults (auto-confirm ON, comprobante required)
-        const requireComprobante = canCustomizeFlow ? (bookingSettings?.require_comprobante_for_qr ?? true) : true;
-        const autoConfirm = canCustomizeFlow ? (bookingSettings?.auto_confirm_bookings ?? true) : true;
+        const bookingFlowSettings = await resolveBookingFlowSettings(company_id);
 
         // 1.7 Validate comprobante if required for QR
-        if (payment_method === 'QR' && requireComprobante && !qr_proof_image_url) {
+        if (payment_method === 'QR' && bookingFlowSettings.requireComprobante && !qr_proof_image_url) {
             return { code: 400, message: 'Comprobante is required for QR payment bookings', error: true };
         }
 
@@ -669,7 +680,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         }));
 
         // 10. Determine booking status based on auto_confirm setting
-        const bookingStatus = autoConfirm ? 'CONFIRMED' as const : 'PENDING' as const;
+        const bookingStatus = bookingFlowSettings.autoConfirm ? BookingStatus.CONFIRMED : BookingStatus.PENDING;
 
         // 11. Create booking with services in transaction
         const booking = await BookingRepo.createBookingWithServices(
@@ -696,7 +707,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (autoConfirm && canSendTransactionalNotifications && company && booking) {
+        if (bookingFlowSettings.autoConfirm && canSendTransactionalNotifications && company && booking) {
             const user = await prisma.user.findUnique({ where: { id: user_id }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
             void notifyBookingCreated({
                 companyId: company_id,
@@ -904,6 +915,11 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             return { code: 400, message: paymentError, error: true };
         }
 
+        const bookingFlowSettings = await resolveBookingFlowSettings(params.company_id);
+        if (params.payment_method === 'QR' && bookingFlowSettings.requireComprobante && !params.qr_proof_image_url) {
+            return { code: 400, message: 'Comprobante is required for QR payment bookings', error: true };
+        }
+
         // Calculate end time and total price
         const services = await prisma.service.findMany({
             where: {
@@ -946,6 +962,8 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             };
         }
 
+        const bookingStatus = bookingFlowSettings.autoConfirm ? BookingStatus.CONFIRMED : BookingStatus.PENDING;
+
         // Create the booking with customer
         const booking = await prisma.booking.create({
             data: {
@@ -959,9 +977,9 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
                 booking_type: 'CUSTOMER',
                 start_at: startAt,
                 end_at: endAt,
-                status: 'CONFIRMED',
+                status: bookingStatus,
                 payment_method: params.payment_method as any,
-                payment_status: params.payment_method === 'NONE' ? ('UNPAID' as any) : ('PENDING_CONFIRMATION' as any),
+                payment_status: params.payment_method === 'NONE' ? PaymentStatus.UNPAID : PaymentStatus.PENDING_CONFIRMATION,
                 qr_proof_image_url: params.qr_proof_image_url,
                 total_price_cents: totalPrice,
                 notes: params.notes,
@@ -985,12 +1003,12 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             data: bookingServices,
         });
 
-        // Send notification (fire-and-forget) only when included in plan
+        // Send notification (fire-and-forget) only when auto-confirmed and included in plan
         const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
             params.company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (canSendTransactionalNotifications) {
+        if (bookingFlowSettings.autoConfirm && canSendTransactionalNotifications) {
             const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
             void notifyBookingCreated({
                 companyId: params.company_id,
@@ -1010,7 +1028,10 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
         }
 
         const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;
-        void MarketplaceAnalyticsService.trackBookingConfirmed({
+        const trackBooking = bookingFlowSettings.autoConfirm
+            ? MarketplaceAnalyticsService.trackBookingConfirmed
+            : MarketplaceAnalyticsService.trackBookingStarted;
+        void trackBooking({
             source: toAnalyticsSource(resolvedSource),
             booking_source: resolvedSource,
             company_id: params.company_id,
@@ -1102,6 +1123,11 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             return { code: 400, message: paymentError, error: true };
         }
 
+        const bookingFlowSettings = await resolveBookingFlowSettings(params.company_id);
+        if (params.payment_method === 'QR' && bookingFlowSettings.requireComprobante && !params.qr_proof_image_url) {
+            return { code: 400, message: 'Comprobante is required for QR payment bookings', error: true };
+        }
+
         // Calculate end time and total price
         const services = await prisma.service.findMany({
             where: {
@@ -1164,6 +1190,8 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             }
         }
 
+        const bookingStatus = bookingFlowSettings.autoConfirm ? BookingStatus.CONFIRMED : BookingStatus.PENDING;
+
         // Create the booking without customer profile (guest booking)
         const booking = await prisma.booking.create({
             data: {
@@ -1178,9 +1206,9 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
                 booking_type: 'CUSTOMER',
                 start_at: startAt,
                 end_at: endAt,
-                status: 'CONFIRMED',
+                status: bookingStatus,
                 payment_method: params.payment_method as any,
-                payment_status: params.payment_method === 'NONE' ? ('UNPAID' as any) : ('PENDING' as any),
+                payment_status: params.payment_method === 'NONE' ? PaymentStatus.UNPAID : PaymentStatus.PENDING_CONFIRMATION,
                 qr_proof_image_url: params.qr_proof_image_url,
                 total_price_cents: totalPrice,
                 notes: params.notes,
@@ -1204,12 +1232,12 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             data: bookingServices,
         });
 
-        // Send notification if contact info available (fire-and-forget) and included in plan
+        // Send notification if contact info available (fire-and-forget), auto-confirmed, and included in plan
         const canSendTransactionalNotifications = await isFeatureEnabledForCompany(
             params.company_id,
             'TRANSACTIONAL_BOOKING_NOTIFICATIONS',
         );
-        if (canSendTransactionalNotifications && (params.client_email || params.client_phone_number)) {
+        if (bookingFlowSettings.autoConfirm && canSendTransactionalNotifications && (params.client_email || params.client_phone_number)) {
             const staffProfile = await prisma.staffProfile.findFirst({ where: { id: params.staff_id, company_id: params.company_id }, select: { display_name: true } });
             void notifyBookingCreated({
                 companyId: params.company_id,
@@ -1229,7 +1257,10 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
         }
 
         const resolvedSource = params.booking_source ?? BookingSource.SALON_SITE;
-        void MarketplaceAnalyticsService.trackBookingConfirmed({
+        const trackBooking = bookingFlowSettings.autoConfirm
+            ? MarketplaceAnalyticsService.trackBookingConfirmed
+            : MarketplaceAnalyticsService.trackBookingStarted;
+        void trackBooking({
             source: toAnalyticsSource(resolvedSource),
             booking_source: resolvedSource,
             company_id: params.company_id,

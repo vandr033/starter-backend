@@ -120,16 +120,6 @@ export async function createPublicBooking(req: Request, res: Response) {
             return res.status(400).json(mensaje);
         }
 
-        // If payment method is QR, qr_proof_image_url is required
-        if (payment_method === 'QR' && !qr_proof_image_url) {
-            mensaje = {
-                code: 400,
-                message: 'qr_proof_image_url is required when payment_method is QR',
-                error: true,
-            };
-            return res.status(400).json(mensaje);
-        }
-
         if (booking_source !== undefined) {
             if (typeof booking_source !== 'string' || !Object.values(BookingSource).includes(booking_source as BookingSource)) {
                 mensaje = {
