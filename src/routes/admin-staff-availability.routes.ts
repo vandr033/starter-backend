@@ -32,6 +32,13 @@ router.put(
     requireAvailabilityFeature,
     StaffAvailabilityController.saveStaffAvailability
 );
+router.post(
+    '/:id/availability/from-company-hours',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireAvailabilityFeature,
+    StaffAvailabilityController.assignStaffAvailabilityFromCompanyHours
+);
 
 // Staff time-off
 router.get(

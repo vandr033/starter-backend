@@ -69,6 +69,28 @@ export async function saveStaffAvailability(req: AuthenticatedRequest, res: Resp
     return res.status(result.code).json(result);
 }
 
+export async function assignStaffAvailabilityFromCompanyHours(req: AuthenticatedRequest, res: Response) {
+    const { companyId } = getCompanyContext(req);
+    const staffId = parseInt(req.params.id as string, 10);
+    const overwrite = req.body?.overwrite === true;
+
+    if (!companyId) {
+        mensaje = { code: 400, error: true, message: 'Company context not found' };
+        return res.status(400).json(mensaje);
+    }
+    if (isNaN(staffId)) {
+        mensaje = { code: 400, error: true, message: 'Invalid staff id' };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await StaffAvailabilityService.assignStaffAvailabilityFromCompanyHours(
+        companyId,
+        staffId,
+        overwrite
+    );
+    return res.status(result.code).json(result);
+}
+
 export async function createTimeOffRequest(req: AuthenticatedRequest, res: Response) {
     const { companyId, userId, role } = getCompanyContext(req);
     const { starts_at, ends_at, reason, staff_id } = req.body || {};

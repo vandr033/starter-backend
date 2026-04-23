@@ -49,6 +49,14 @@ function validateCTAButtons(buttons: unknown): string | null {
     return null;
 }
 
+function parseOptionalIsoDate(value: unknown, field: string): { value?: string | null; error?: string } {
+    if (value === undefined || value === null || value === '') return { value: null };
+    if (typeof value !== 'string') return { error: `${field} must be an ISO date string when provided` };
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return { error: `${field} must be a valid date/time` };
+    return { value: parsed.toISOString() };
+}
+
 const VALID_HERO_VARIANTS = ['hero-cinematic', 'hero-split', 'hero-minimal'];
 const VALID_SERVICES_VARIANTS = ['services-grid', 'services-list'];
 const VALID_TEAM_VARIANTS = ['team-cards', 'team-spotlight'];
@@ -245,6 +253,16 @@ export async function updateTheme(
                 if (b.sticky !== undefined && typeof b.sticky !== 'boolean') {
                     return { code: 400, message: 'Each banner sticky must be boolean when provided', error: true };
                 }
+                const startsAt = parseOptionalIsoDate(b.starts_at, 'Banner starts_at');
+                if (startsAt.error) return { code: 400, message: startsAt.error, error: true };
+                const endsAt = parseOptionalIsoDate(b.ends_at ?? b.expires_at, 'Banner ends_at');
+                if (endsAt.error) return { code: 400, message: endsAt.error, error: true };
+                if (startsAt.value && endsAt.value && new Date(startsAt.value) >= new Date(endsAt.value)) {
+                    return { code: 400, message: 'Banner start date/time must be before end date/time', error: true };
+                }
+                b.starts_at = startsAt.value;
+                b.ends_at = endsAt.value;
+                b.expires_at = endsAt.value;
             }
         }
 

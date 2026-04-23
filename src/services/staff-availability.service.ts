@@ -27,6 +27,14 @@ function normalizeDateOnly(value: Date): Date {
     return d;
 }
 
+function normalizeTime(value: string): string {
+    const trimmed = value.trim();
+    if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+        return trimmed.slice(0, 5);
+    }
+    return trimmed;
+}
+
 function isIntervalWithinWindows(
     startMinutes: number,
     endMinutes: number,
@@ -248,6 +256,69 @@ export async function saveStaffAvailability(
     }
 }
 
+export async function assignStaffAvailabilityFromCompanyHours(
+    companyId: number,
+    staffId: number,
+    overwrite = false
+): Promise<ServiceResult> {
+    try {
+        const staff = await getStaffById(companyId, staffId);
+        if (!staff) {
+            return { code: 404, error: true, message: 'Staff not found' };
+        }
+
+        const existingCount = await prisma.staffAvailability.count({
+            where: { company_id: companyId, staff_id: staffId },
+        });
+
+        if (existingCount > 0 && !overwrite) {
+            return {
+                code: 409,
+                error: true,
+                message: 'Staff already has availability blocks. Confirm overwrite to continue.',
+            };
+        }
+
+        const companyHours = await prisma.hours.findMany({
+            where: {
+                company_id: companyId,
+                is_closed: false,
+                open_time: { not: null },
+                close_time: { not: null },
+            },
+            orderBy: [{ day_of_week: 'asc' }, { open_time: 'asc' }],
+        });
+
+        const slots = companyHours
+            .map((hour) => ({
+                day_of_week: hour.day_of_week,
+                start_time: normalizeTime(hour.open_time as string),
+                end_time: normalizeTime(hour.close_time as string),
+                is_active: true,
+            }))
+            .filter((slot) => slot.start_time < slot.end_time);
+
+        if (slots.length === 0) {
+            return {
+                code: 400,
+                error: true,
+                message: 'No open company hours found to copy',
+            };
+        }
+
+        // Admin auto-assign is intentionally an overwrite, not a merge: the result should
+        // exactly mirror current store hours and avoid accidental duplicate or expanded blocks.
+        return await saveStaffAvailability(companyId, staffId, slots);
+    } catch (error: any) {
+        return {
+            code: 500,
+            error: true,
+            message: 'Failed to assign availability from company hours',
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
 export async function createTimeOffRequest(params: {
     companyId: number;
     actorUserId: string;
@@ -368,7 +439,7 @@ export async function createTimeOffRequest(params: {
                     startsAt,
                     endsAt,
                     reason: reason || null,
-                    dashboardUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/dashboard/availability`,
+                    dashboardUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/dashboard/permissions`,
                 });
             }
         }
