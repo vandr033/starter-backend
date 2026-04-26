@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import { BookingStatus, CompanyUserRole, StaffProfileStatus } from '@prisma/client';
+import { INACTIVE_BOOKING_STATUSES } from '../utils/booking-status';
 
 interface GetAllStaffOptions {
     shopId?: number;
@@ -71,7 +72,7 @@ export async function getAllStaff(options: GetAllStaffOptions) {
         where: {
             staff_id: { in: staffIds },
             deleted_at: null,
-            status: { not: BookingStatus.CANCELLED },
+            status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
         },
         _count: { id: true },
     });

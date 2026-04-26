@@ -6,10 +6,11 @@ import {
   mergeBranding,
   type NotificationBranding,
 } from "./notificationBranding";
+import { getWasenderPersonalAccessToken } from "./env-aliases";
 
 
 const apiKey = process.env.WASENDER_API_KEY!;
-const personalAccessToken = process.env.WASENDER_PERSONAL_ACCESS_TOKEN!;
+const personalAccessToken = getWasenderPersonalAccessToken()!;
 const configuredMinIntervalMs = Number(process.env.WASENDER_MIN_INTERVAL_MS || "5000");
 const minIntervalMs = Math.max(5000, Number.isFinite(configuredMinIntervalMs) ? configuredMinIntervalMs : 5000);
 

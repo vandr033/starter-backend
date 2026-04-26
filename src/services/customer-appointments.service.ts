@@ -2,6 +2,7 @@ import { prisma } from "../prisma/client";
 import { MensajeApi } from "../types/MensajeApi";
 import { BookingStatus } from "@prisma/client";
 import { notifyBookingCancelled, notifyBookingUpdated } from "../utils/bookingNotifications";
+import { getBookingLifecycleStatus, isTerminalBookingStatus } from "../utils/booking-status";
 
 const bookingInclude = {
     company: {
@@ -71,17 +72,16 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
             const settings = (b.company as any).company_settings;
             const cancelLimit = settings?.cancel_limit_minutes ?? 120;
             const rescheduleLimit = settings?.reschedule_limit_minutes ?? 120;
+            const lifecycleStatus = getBookingLifecycleStatus(b.status, b.notes);
 
             const canCancel =
                 !isPast &&
-                b.status !== BookingStatus.CANCELLED &&
-                b.status !== BookingStatus.COMPLETED &&
+                !isTerminalBookingStatus(b.status, b.notes) &&
                 minutesUntilStart > cancelLimit;
 
             const canModify =
                 !isPast &&
-                b.status !== BookingStatus.CANCELLED &&
-                b.status !== BookingStatus.COMPLETED &&
+                !isTerminalBookingStatus(b.status, b.notes) &&
                 minutesUntilStart > rescheduleLimit;
 
             return {
@@ -102,7 +102,7 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
                 })),
                 start_at: b.start_at,
                 end_at: b.end_at,
-                status: b.status,
+                status: lifecycleStatus,
                 payment_method: b.payment_method,
                 payment_status: b.payment_status,
                 total_price_cents: b.total_price_cents,
@@ -155,12 +155,16 @@ export async function cancelBooking(
             return { code: 404, message: "Booking not found", error: true };
         }
 
-        if (booking.status === BookingStatus.CANCELLED) {
+        if (getBookingLifecycleStatus(booking.status, booking.notes) === BookingStatus.CANCELLED) {
             return { code: 400, message: "Booking is already cancelled", error: true };
         }
 
         if (booking.status === BookingStatus.COMPLETED) {
             return { code: 400, message: "Cannot cancel a completed booking", error: true };
+        }
+
+        if (getBookingLifecycleStatus(booking.status, booking.notes) === BookingStatus.NO_SHOW) {
+            return { code: 400, message: "Cannot cancel a no-show booking", error: true };
         }
 
         const now = new Date();
@@ -244,7 +248,7 @@ export async function modifyBooking(
             return { code: 404, message: "Booking not found", error: true };
         }
 
-        if (booking.status === BookingStatus.CANCELLED || booking.status === BookingStatus.COMPLETED) {
+        if (isTerminalBookingStatus(booking.status, booking.notes)) {
             return { code: 400, message: "Cannot modify this booking", error: true };
         }
 

@@ -27,6 +27,36 @@ export async function listStaff(req: AuthenticatedRequest, res: Response) {
 }
 
 /**
+ * GET /api/admin/staff/:id
+ * Get a single staff profile for the admin's company
+ */
+export async function getStaff(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const staffId = Number(req.params.id);
+
+    if (!companyId) {
+        mensaje = {
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (!Number.isInteger(staffId) || staffId <= 0) {
+        mensaje = {
+            code: 400,
+            message: 'Invalid staff ID',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    const result = await StaffService.getStaff(companyId, staffId);
+    return res.status(result.code).json(result);
+}
+
+/**
  * GET /api/admin/staff/me
  * Get authenticated staff member profile for current company context
  */

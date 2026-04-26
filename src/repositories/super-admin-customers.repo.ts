@@ -1,5 +1,6 @@
 import { BookingStatus, CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { INACTIVE_BOOKING_STATUSES } from '../utils/booking-status';
 
 interface GetAllCustomersOptions {
     search?: string;
@@ -89,7 +90,7 @@ export async function getAllCustomers(options: GetAllCustomersOptions) {
         prisma.booking.findMany({
             where: {
                 deleted_at: null,
-                status: { not: BookingStatus.CANCELLED },
+                status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
                 ...(shopId ? { company_id: shopId } : {}),
             },
             select: {

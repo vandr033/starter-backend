@@ -29,6 +29,14 @@ export type PlanCapabilities = {
     features: Record<PlanFeatureKey, boolean>;
 };
 
+export type CompanyCapabilitiesPayload = {
+    version: 1;
+    currentPlan: ShopPlan;
+    maxStaffMembers: number | null;
+    features: Record<PlanFeatureKey, boolean>;
+    requiredPlans: Record<PlanFeatureKey, ShopPlan>;
+};
+
 const STARTER_FEATURES: Record<PlanFeatureKey, boolean> = {
     ROLES_PERMISSIONS: false,
     STAFF_AVAILABILITY: false,
@@ -158,4 +166,16 @@ export function getFeatureRequiredPlan(feature: PlanFeatureKey): ShopPlan {
 
 export function getPlanStaffLimit(plan: ShopPlan): number | null {
     return getPlanCapabilities(plan).maxStaffMembers;
+}
+
+export function getCompanyCapabilitiesPayload(plan: ShopPlan): CompanyCapabilitiesPayload {
+    const capabilities = getPlanCapabilities(plan);
+
+    return {
+        version: 1,
+        currentPlan: plan,
+        maxStaffMembers: capabilities.maxStaffMembers,
+        features: { ...capabilities.features },
+        requiredPlans: { ...FEATURE_REQUIRED_PLAN },
+    };
 }

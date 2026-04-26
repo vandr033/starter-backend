@@ -1,7 +1,6 @@
 import { prisma } from '../prisma/client';
 import { BookingStatus } from '@prisma/client';
-
-const NO_SHOW_NOTE_MARKER = '[NO_SHOW]';
+import { INACTIVE_BOOKING_STATUSES, isNoShowBooking } from '../utils/booking-status';
 
 function startOfDay(date: Date): Date {
     const d = new Date(date);
@@ -49,10 +48,6 @@ function normalizePrefix(prefix?: string | null): string {
     return value || '591';
 }
 
-function isNoShow(status: BookingStatus, notes?: string | null): boolean {
-    return status === BookingStatus.CANCELLED && (notes || '').includes(NO_SHOW_NOTE_MARKER);
-}
-
 function buildCustomerIdentity(booking: {
     customer_id: number | null;
     client_email: string | null;
@@ -87,7 +82,7 @@ export async function getBookingCounts(companyId: number, staffId?: number) {
         company_id: companyId,
         deleted_at: null,
         ...(staffId ? { staff_id: staffId } : {}),
-        status: { not: BookingStatus.CANCELLED },
+        status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
     };
 
     const [total, thisMonth, thisWeek, today, upcoming7Days] = await Promise.all([
@@ -118,7 +113,7 @@ export async function getRevenueTotals(companyId: number, staffId?: number) {
         company_id: companyId,
         deleted_at: null,
         ...(staffId ? { staff_id: staffId } : {}),
-        status: { not: BookingStatus.CANCELLED },
+        status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
     };
 
     const [totalAgg, monthAgg, weekAgg, todayAgg] = await Promise.all([
@@ -146,7 +141,7 @@ export async function getTopServices(companyId: number, limit = 5, staffId?: num
         where: {
             company_id: companyId,
             booking: {
-                status: { not: BookingStatus.CANCELLED },
+                status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
                 deleted_at: null,
                 ...(staffId ? { staff_id: staffId } : {}),
             },
@@ -180,7 +175,7 @@ export async function getTopStaff(companyId: number, limit = 5, staffId?: number
         by: ['staff_id'],
         where: {
             company_id: companyId,
-            status: { not: BookingStatus.CANCELLED },
+            status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
             deleted_at: null,
             ...(staffId ? { staff_id: staffId } : {}),
         },
@@ -230,7 +225,7 @@ export async function getBookingsByStatus(companyId: number, staffId?: number) {
     ]);
 
     for (const row of rows) {
-        if (isNoShow(row.status, row.notes)) {
+        if (isNoShowBooking(row.status, row.notes)) {
             counters.set('NO_SHOW', (counters.get('NO_SHOW') || 0) + 1);
             continue;
         }
@@ -250,7 +245,7 @@ export async function getBookingsByCategory(companyId: number, limit = 6, staffI
             company_id: companyId,
             booking: {
                 deleted_at: null,
-                status: { not: BookingStatus.CANCELLED },
+                status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
                 ...(staffId ? { staff_id: staffId } : {}),
             },
         },
@@ -378,7 +373,7 @@ export async function getBusiestMoments(companyId: number, staffId?: number) {
         where: {
             company_id: companyId,
             deleted_at: null,
-            status: { not: BookingStatus.CANCELLED },
+            status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
             ...(staffId ? { staff_id: staffId } : {}),
         },
         select: {

@@ -6,6 +6,7 @@ import { VerificationChannel, VerificationPurpose } from '../types/verification-
 import bcrypt from 'bcryptjs';
 import { generateNumericCode } from '../utils/otp';
 import { sendEmailCode } from '../utils/sendEmail';
+import { getCompanyCapabilitiesPayload, type CompanyCapabilitiesPayload } from '../config/plan-capabilities';
 
 export type AdminCompanyUserSummary = {
     id: number;
@@ -18,6 +19,7 @@ export type AdminCompanyUserSummary = {
         slug: string;
         currency: string;
         plan: ShopPlan;
+        capabilities: CompanyCapabilitiesPayload;
         availableUntil: Date;
         default_language: string;
     };
@@ -98,6 +100,7 @@ function toAdminCompanyUserSummary(companyUser: Awaited<ReturnType<typeof getAdm
                 slug: companyUser.company.slug,
                 currency: companyUser.company.currency,
                 plan: companyUser.company.plan,
+                capabilities: getCompanyCapabilitiesPayload(companyUser.company.plan),
                 availableUntil: companyUser.company.availableUntil,
                 default_language: defaultLanguage,
             }

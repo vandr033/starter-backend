@@ -10,6 +10,7 @@ import {
     renderBrandedEmail,
     type NotificationBranding,
 } from "./notificationBranding";
+import { getWasenderPersonalAccessToken } from "./env-aliases";
 
 const smtpHost = process.env.MAIL_HOST || "smtp.gmail.com";
 const smtpPort = Number(process.env.MAIL_PORT || 587);
@@ -31,7 +32,7 @@ const emailTransporter = nodemailer.createTransport({
 });
 
 const wasenderApiKey = process.env.WASENDER_API_KEY!;
-const wasenderToken = process.env.WASENDER_PERSONAL_ACCESS_TOKEN!;
+const wasenderToken = getWasenderPersonalAccessToken()!;
 const retryOptions: RetryConfig = { enabled: true, maxRetries: 3 };
 const wasender = createWasender(wasenderApiKey, wasenderToken, undefined, undefined, retryOptions);
 

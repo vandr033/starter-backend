@@ -18,6 +18,11 @@ import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { sendReviewRequestReminder } from '../utils/reviewNotifications';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
+import {
+    hasLegacyNoShowMarker,
+    isNoShowBooking,
+    stripLegacyNoShowMarker,
+} from '../utils/booking-status';
 
 interface AdminBookingResult extends MensajeApi {
     data?: any;
@@ -25,7 +30,6 @@ interface AdminBookingResult extends MensajeApi {
 
 const REMINDER_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
-const NO_SHOW_NOTE_MARKER = '[NO_SHOW]';
 
 const reminderSentAtCache = new Map<string, number>();
 
@@ -187,10 +191,6 @@ function resolveChannel(contact: {
 
 function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
     return aStart < bEnd && aEnd > bStart;
-}
-
-function isNoShowMarked(notes?: string | null): boolean {
-    return (notes || '').includes(NO_SHOW_NOTE_MARKER);
 }
 
 function buildCustomerName(user?: {
@@ -771,10 +771,11 @@ export async function updateBooking(
         // Validate status transitions
         if (updates.status) {
             const validTransitions: Record<BookingStatus, BookingStatus[]> = {
-                [BookingStatus.PENDING]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED],
-                [BookingStatus.CONFIRMED]: [BookingStatus.COMPLETED, BookingStatus.CANCELLED],
+                [BookingStatus.PENDING]: [BookingStatus.CONFIRMED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW],
+                [BookingStatus.CONFIRMED]: [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.NO_SHOW],
                 [BookingStatus.COMPLETED]: [], // No transitions from completed
                 [BookingStatus.CANCELLED]: [], // No transitions from cancelled
+                [BookingStatus.NO_SHOW]: [], // No transitions from no-show
             };
 
             if (!validTransitions[existingBooking.status].includes(updates.status)) {
@@ -926,6 +927,13 @@ export async function updateBooking(
             );
         }
 
+        const sanitizedNotes =
+            updates.notes !== undefined
+                ? stripLegacyNoShowMarker(updates.notes)
+                : hasLegacyNoShowMarker(existingBooking.notes)
+                    ? stripLegacyNoShowMarker(existingBooking.notes)
+                    : undefined;
+
         // Update status
         if (updates.status) {
             await AdminBookingRepo.updateBookingStatus(
@@ -937,11 +945,11 @@ export async function updateBooking(
         }
 
         // Update notes
-        if (updates.notes !== undefined) {
+        if (sanitizedNotes !== undefined) {
             await AdminBookingRepo.updateBookingNotes(
                 bookingId,
                 companyId,
-                updates.notes,
+                sanitizedNotes,
                 updatedByUserId
             );
         }
@@ -1005,7 +1013,7 @@ export async function updateBooking(
                 // Manual confirmation — send the booking confirmed notification
                 void notifyBookingCreated({ ...notificationData, internalAudience: 'none' });
                 void notifyBookingConfirmedForStaff(notificationData);
-            } else if (updates.status === BookingStatus.CANCELLED && !isNoShowMarked(updatedBooking.notes)) {
+            } else if (updates.status === BookingStatus.CANCELLED) {
                 void notifyBookingCancelled(notificationData);
             } else if (updates.start_at || updates.staff_id || updates.service_ids) {
                 void notifyBookingUpdated(notificationData);
@@ -1379,8 +1387,7 @@ export async function sendNoShowNotificationForBooking(
             };
         }
 
-        const isMarkedAsNoShow = booking.status === BookingStatus.CANCELLED && isNoShowMarked(booking.notes);
-        if (!isMarkedAsNoShow) {
+        if (!isNoShowBooking(booking.status, booking.notes)) {
             return {
                 code: 400,
                 message: 'Booking must be marked as no-show before sending this notification',

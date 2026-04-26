@@ -7,6 +7,22 @@ import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { prisma } from '../prisma/client';
 import sanitizeHtml from 'sanitize-html';
 let mensaje: MensajeApi;
+const SANITIZE_HTML_OPTIONS = {
+    allowedTags: ['p', 'br', 'strong', 'em', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+    allowedAttributes: {},
+};
+
+function sanitizeOptionalRichText(value: string | null | undefined): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    return sanitizeHtml(value, SANITIZE_HTML_OPTIONS);
+}
+
+function parsePositiveCompanyId(rawId: unknown): number | null {
+    const parsed = Number(rawId);
+    if (!Number.isInteger(parsed) || parsed < 1) return null;
+    return parsed;
+}
 
 function normalizeCurrencyInput(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -107,9 +123,29 @@ export const createCompany = async (req: Request, res: Response) => {
 
 export const updateCompany = async (req: Request, res: Response) => {
     try {
-        const id = Number(req.params.id);
-        if ((req.body as any).currency !== undefined) {
-            const normalizedCurrency = normalizeCurrencyInput((req.body as any).currency);
+        const id = parsePositiveCompanyId(req.params.id);
+        if (!id) {
+            return res.status(400).json({
+                code: 400,
+                message: 'Invalid company ID',
+                error: true,
+            });
+        }
+
+        const authReq = req as AuthenticatedRequest;
+        const isSuperAdmin = Boolean(authReq.authUser?.is_super_admin);
+        const userCompanyId = Number((req as any).companyID);
+        if (!isSuperAdmin && userCompanyId !== id) {
+            return res.status(403).json({
+                code: 403,
+                message: 'Access denied',
+                error: true,
+            });
+        }
+
+        const payload = (req as any).validated ?? req.body;
+        if ((payload as any).currency !== undefined) {
+            const normalizedCurrency = normalizeCurrencyInput((payload as any).currency);
             if (!normalizedCurrency) {
                 return res.status(400).json({
                     code: 400,
@@ -117,9 +153,9 @@ export const updateCompany = async (req: Request, res: Response) => {
                     error: true,
                 });
             }
-            (req.body as any).currency = normalizedCurrency;
+            (payload as any).currency = normalizedCurrency;
         }
-        mensaje = await CompanyService.updateCompany(id, req.body);
+        mensaje = await CompanyService.updateCompany(id, payload);
         res.status(200).json(mensaje);
     } catch (error) {
         logger.error("Error al actualizar la empresa");
@@ -175,8 +211,8 @@ export const getCompanyStatus = async (req: Request, res: Response) => {
 
 export const updateCompanyContent = async (req: AuthenticatedRequest, res: Response) => {
     try {
-        const { id } = req.params;
-        const companyId = parseInt(Array.isArray(id) ? id[0] : id);
+        const companyId = parsePositiveCompanyId(req.params.id);
+        const payload = (req as any).validated ?? req.body;
         const {
             about_us_text,
             our_story_text,
@@ -187,9 +223,9 @@ export const updateCompanyContent = async (req: AuthenticatedRequest, res: Respo
             about_image_1_url,
             about_image_2_url,
             about_image_3_url,
-        } = req.body;
+        } = payload;
 
-        if (isNaN(companyId)) {
+        if (!companyId) {
             return res.status(400).json({
                 code: 400,
                 error: true,
@@ -198,8 +234,9 @@ export const updateCompanyContent = async (req: AuthenticatedRequest, res: Respo
         }
 
         // Check if user has admin access to this company
-        const userCompanyId = (req as any).companyID;
-        if (userCompanyId && userCompanyId !== companyId) {
+        const isSuperAdmin = Boolean(req.authUser?.is_super_admin);
+        const userCompanyId = Number((req as any).companyID);
+        if (!isSuperAdmin && userCompanyId !== companyId) {
             return res.status(403).json({
                 code: 403,
                 error: true,
@@ -224,25 +261,15 @@ export const updateCompanyContent = async (req: AuthenticatedRequest, res: Respo
         const updateData: any = {};
 
         if (about_us_text !== undefined) {
-            // Sanitize HTML - allow basic formatting tags
-            updateData.about_us_text = sanitizeHtml(about_us_text, {
-                allowedTags: ['p', 'br', 'strong', 'em', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-                allowedAttributes: {},
-            });
+            updateData.about_us_text = sanitizeOptionalRichText(about_us_text);
         }
 
         if (our_story_text !== undefined) {
-            updateData.our_story_text = sanitizeHtml(our_story_text, {
-                allowedTags: ['p', 'br', 'strong', 'em', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-                allowedAttributes: {},
-            });
+            updateData.our_story_text = sanitizeOptionalRichText(our_story_text);
         }
 
         if (about_us_hero_text !== undefined) {
-            updateData.about_us_hero_text = sanitizeHtml(about_us_hero_text, {
-                allowedTags: ['p', 'br', 'strong', 'em', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-                allowedAttributes: {},
-            });
+            updateData.about_us_hero_text = sanitizeOptionalRichText(about_us_hero_text);
         }
 
         // Handle image URL fields

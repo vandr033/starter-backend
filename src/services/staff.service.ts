@@ -27,29 +27,33 @@ export interface UpdateMyStaffProfileInput {
     phone_prefix?: string;
 }
 
+function serializeStaff(staff: any) {
+    return {
+        id: staff.id,
+        display_name: staff.display_name,
+        bio: staff.bio ?? '',
+        image_url: staff.image_url,
+        is_bookable: staff.is_bookable,
+        resource_type: staff.resource_type ?? 'PERSON',
+        status: staff.status,
+        start_date: staff.start_date,
+        end_date: staff.end_date,
+        created_at: staff.created_at,
+        updated_at: staff.updated_at,
+        user: staff.user,
+        services: Array.isArray(staff.staff_services)
+            ? staff.staff_services.map((staffService: { service_id: number }) => staffService.service_id)
+            : [],
+    };
+}
+
 /**
  * List all staff for a company
  */
 export async function listStaff(companyId: number): Promise<StaffResult> {
     try {
         const staff = await StaffRepo.getStaffByCompany(companyId);
-        
-        // Transform staff data to include services array
-        const transformedStaff = staff.map(s => ({
-            id: s.id,
-            display_name: s.display_name,
-            bio: s.bio ?? '',
-            image_url: s.image_url,
-            is_bookable: s.is_bookable,
-            resource_type: (s as any).resource_type ?? 'PERSON',
-            status: s.status,
-            start_date: s.start_date,
-            end_date: s.end_date,
-            created_at: s.created_at,
-            updated_at: s.updated_at,
-            user: s.user,
-            services: s.staff_services.map(ss => ss.service_id),
-        }));
+        const transformedStaff = staff.map(serializeStaff);
 
         return {
             code: 200,
@@ -59,6 +63,38 @@ export async function listStaff(companyId: number): Promise<StaffResult> {
         };
     } catch (error: any) {
         console.error('Error listing staff:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+/**
+ * Get a single staff profile for a company
+ */
+export async function getStaff(companyId: number, staffId: number): Promise<StaffResult> {
+    try {
+        const staff = await StaffRepo.getStaffById(staffId, companyId);
+
+        if (!staff) {
+            return {
+                code: 404,
+                message: 'Staff not found',
+                error: true,
+            };
+        }
+
+        return {
+            code: 200,
+            message: 'Staff retrieved successfully',
+            error: false,
+            data: serializeStaff(staff),
+        };
+    } catch (error: any) {
+        console.error('Error retrieving staff:', error);
         return {
             code: 500,
             message: 'Internal server error',

@@ -6,6 +6,7 @@ import {
 import * as CompanyRepo from '../repositories/company.repo';
 import { MensajeApi } from '../types/MensajeApi';
 import { Prisma } from '../prisma/client';
+import { getCompanyCapabilitiesPayload } from '../config/plan-capabilities';
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const FALLBACK_DEFAULT_LANGUAGE = 'es';
@@ -211,7 +212,10 @@ export const getCompanyPublicPage = async (slug: string) => {
       : DEFAULT_THEME;
 
     const responseData = {
-      company,
+      company: {
+        ...company,
+        capabilities: getCompanyCapabilitiesPayload(company.plan),
+      },
       categories,
       services,
       staff: staff_profiles,

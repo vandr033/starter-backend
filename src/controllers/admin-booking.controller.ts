@@ -4,13 +4,14 @@ import * as AdminBookingService from '../services/admin-booking.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { BookingStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { getBookingLifecycleStatus } from '../utils/booking-status';
 
 let mensaje: MensajeApi;
 
 function transformAdminBooking(booking: any) {
     return {
         id: booking.id,
-        status: booking.status,
+        status: getBookingLifecycleStatus(booking.status, booking.notes),
         start_at: booking.start_at,
         end_at: booking.end_at,
         customer: booking.customer ? {

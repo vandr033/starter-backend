@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { CompanyUserRole } from '@prisma/client';
+import { validate } from '../middlewares/validate';
 import { updateCompanyContent, getCompanyContent } from '../controllers/company.controller';
+import { updateCompanyContentSchema } from '../schemas/company.schema';
 
 const router = Router();
 
@@ -20,6 +22,7 @@ router.put(
   '/:id/content',
   requireAuth,
   requireCompanyRole(adminRoles),
+  validate(updateCompanyContentSchema),
   updateCompanyContent
 );
 

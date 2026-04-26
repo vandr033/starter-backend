@@ -1,7 +1,8 @@
 import { prisma } from '../prisma/client';
 import { BookingSource, BookingStatus } from '@prisma/client';
+import { INACTIVE_BOOKING_STATUSES } from '../utils/booking-status';
 
-const NON_CANCELLED = { status: { not: BookingStatus.CANCELLED } };
+const NON_CANCELLED = { status: { notIn: [...INACTIVE_BOOKING_STATUSES] } };
 
 export type DashboardRangePreset = 'today' | '7d' | '30d';
 
@@ -178,7 +179,7 @@ export async function getTopServices(limit = 5) {
     const results = await prisma.bookingService.groupBy({
         by: ['service_id'],
         where: {
-            booking: { status: { not: BookingStatus.CANCELLED }, deleted_at: null },
+            booking: { status: { notIn: [...INACTIVE_BOOKING_STATUSES] }, deleted_at: null },
         },
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
@@ -223,7 +224,7 @@ export async function getBookingsBySource(start: Date, end: Date) {
         where: {
             deleted_at: null,
             created_at: { gte: start, lte: end },
-            status: { not: BookingStatus.CANCELLED },
+            status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
         },
         _count: { id: true },
     });

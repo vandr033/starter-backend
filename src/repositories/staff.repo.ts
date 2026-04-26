@@ -59,6 +59,14 @@ export async function getStaffById(id: number, companyId: number) {
                     phone_prefix: true,
                 },
             },
+            staff_services: {
+                where: {
+                    is_active: true,
+                },
+                select: {
+                    service_id: true,
+                },
+            },
         },
     });
 }

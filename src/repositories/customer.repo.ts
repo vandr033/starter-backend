@@ -1,9 +1,8 @@
 import { BookingSource, BookingStatus } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { getBookingLifecycleStatus, isNoShowBooking } from '../utils/booking-status';
 
-const NO_SHOW_NOTE_MARKER = '[NO_SHOW]';
-
-type BookingStatusWithNoShow = BookingStatus | 'NO_SHOW';
+type BookingStatusWithNoShow = BookingStatus;
 
 export interface CustomerWithStats {
     id: number;
@@ -127,15 +126,8 @@ export function buildCustomerKey(params: {
     return `guest:${fallback}`;
 }
 
-function isNoShowBooking(status: BookingStatus, notes?: string | null): boolean {
-    return status === BookingStatus.CANCELLED && (notes || '').includes(NO_SHOW_NOTE_MARKER);
-}
-
 function getBookingStatusWithNoShow(status: BookingStatus, notes?: string | null): BookingStatusWithNoShow {
-    if (isNoShowBooking(status, notes)) {
-        return 'NO_SHOW';
-    }
-    return status;
+    return getBookingLifecycleStatus(status, notes);
 }
 
 function incrementCounter(counter: Map<string, number>, key: string | null | undefined) {
@@ -422,14 +414,15 @@ export async function getCustomersWithBookingStats(
             current.completedBookings += 1;
         }
 
-        if (booking.status === BookingStatus.CANCELLED) {
+        if (booking.status === BookingStatus.CANCELLED && !isNoShowBooking(booking.status, booking.notes)) {
             current.cancelledBookings += 1;
-            if (isNoShowBooking(booking.status, booking.notes)) {
-                current.noShowBookings += 1;
-            }
         }
 
-        if (booking.status !== BookingStatus.CANCELLED) {
+        if (isNoShowBooking(booking.status, booking.notes)) {
+            current.noShowBookings += 1;
+        }
+
+        if (booking.status !== BookingStatus.CANCELLED && !isNoShowBooking(booking.status, booking.notes)) {
             current.totalSpentCents += booking.total_price_cents;
             current.spendEligibleBookings += 1;
         }

@@ -1,5 +1,10 @@
 import { prisma } from '../prisma/client';
 import { BookingStatus, PaymentStatus } from '@prisma/client';
+import {
+    INACTIVE_BOOKING_STATUSES,
+    LEGACY_NO_SHOW_NOTE_MARKER,
+    getBookingLifecycleStatus,
+} from '../utils/booking-status';
 
 interface GetAllBookingsOptions {
     shopId?: number;
@@ -19,7 +24,17 @@ export async function getAllBookings(options: GetAllBookingsOptions) {
 
     if (shopId) where.company_id = shopId;
     if (status && Object.values(BookingStatus).includes(status as BookingStatus)) {
-        where.status = status;
+        if (status === BookingStatus.NO_SHOW) {
+            where.OR = [
+                { status: BookingStatus.NO_SHOW },
+                { status: BookingStatus.CANCELLED, notes: { contains: LEGACY_NO_SHOW_NOTE_MARKER } },
+            ];
+        } else if (status === BookingStatus.CANCELLED) {
+            where.status = BookingStatus.CANCELLED;
+            where.NOT = { notes: { contains: LEGACY_NO_SHOW_NOTE_MARKER } };
+        } else {
+            where.status = status;
+        }
     }
     if (paymentStatus && Object.values(PaymentStatus).includes(paymentStatus as PaymentStatus)) {
         where.payment_status = paymentStatus;
@@ -68,7 +83,7 @@ export async function getAllBookings(options: GetAllBookingsOptions) {
             clientPhonePrefix: b.customer?.user?.phone_prefix || b.client_phone_prefix || null,
             startAt: b.start_at.toISOString(),
             endAt: b.end_at.toISOString(),
-            status: b.status,
+            status: getBookingLifecycleStatus(b.status, b.notes),
             paymentStatus: b.payment_status,
             paymentMethod: b.payment_method,
             totalPriceCents: b.total_price_cents,
@@ -99,7 +114,7 @@ export async function getTodayBookingsCount() {
         where: {
             deleted_at: null,
             start_at: { gte: todayStart, lte: todayEnd },
-            status: { not: BookingStatus.CANCELLED },
+            status: { notIn: [...INACTIVE_BOOKING_STATUSES] },
         },
     });
 }

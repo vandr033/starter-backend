@@ -17,6 +17,9 @@ router.put('/me', requireAuth, requireCompanyRole(staffOnlyRoles), AdminStaffCon
 // GET /api/admin/staff - List all staff profiles for the admin's company
 router.get('/', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.listStaff);
 
+// GET /api/admin/staff/:id - Get a single staff profile
+router.get('/:id', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.getStaff);
+
 // POST /api/admin/staff - Create a new staff profile
 router.post('/', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.createStaff);
 

@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, BookingType } from '@prisma/client';
+import { LEGACY_NO_SHOW_NOTE_MARKER } from '../utils/booking-status';
 
 /**
  * Get bookings with filters
@@ -27,7 +28,17 @@ export async function getBookingsWithFilters(params: {
         where.start_at = { lt: endDate };
     }
     if (status) {
-        where.status = status;
+        if (status === BookingStatus.NO_SHOW) {
+            where.OR = [
+                { status: BookingStatus.NO_SHOW },
+                { status: BookingStatus.CANCELLED, notes: { contains: LEGACY_NO_SHOW_NOTE_MARKER } },
+            ];
+        } else if (status === BookingStatus.CANCELLED) {
+            where.status = BookingStatus.CANCELLED;
+            where.NOT = { notes: { contains: LEGACY_NO_SHOW_NOTE_MARKER } };
+        } else {
+            where.status = status;
+        }
     }
     if (staffId) {
         where.staff_id = staffId;
