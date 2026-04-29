@@ -1,5 +1,6 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { ensureBusinessPricingDefaults } from "../src/services/business-pricing.service";
 
 const prisma = new PrismaClient();
 
@@ -101,6 +102,8 @@ async function main() {
     const now = new Date();
     const normalizedEmail = SUPER_ADMIN_EMAIL.trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(SUPER_ADMIN_PASSWORD, 10);
+
+    await ensureBusinessPricingDefaults(prisma as any);
 
     // Upsert user by unique email
     const user = await prisma.user.upsert({

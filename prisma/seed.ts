@@ -16,6 +16,7 @@ import {
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { seedAndBackfillProductSubscriptions } from "./product-subscriptions.seed";
+import { ensureBusinessPricingDefaults } from "../src/services/business-pricing.service";
 
 const prisma = new PrismaClient();
 
@@ -158,6 +159,7 @@ async function main() {
   await prisma.globalServiceType.createMany({ data: globalServiceTypes, skipDuplicates: true });
   await prisma.types.createMany({ data: typesRows, skipDuplicates: true });
   await prisma.frequentlyAskedQuestion.createMany({ data: faqs, skipDuplicates: true });
+  await ensureBusinessPricingDefaults(prisma as any);
 
   /**
    * 2) USERS

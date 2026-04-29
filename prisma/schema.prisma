@@ -357,6 +357,49 @@ model ProductAccessRequest {
   @@map("product_access_request")
 }
 
+model BusinessPricingProduct {
+  id             Int                       @id @default(autoincrement())
+  productKey     BusinessPricingProductKey @unique @map("product_key")
+  type           BusinessPricingProductType
+  displayName    String                    @map("display_name") @db.VarChar(120)
+  description    String?                   @db.Text
+  monthlyPriceBs Decimal                   @map("monthly_price_bs") @db.Decimal(10, 2)
+  isActive       Boolean                   @default(true) @map("is_active")
+  isComingSoon   Boolean                   @default(false) @map("is_coming_soon")
+  sortOrder      Int                       @default(0) @map("sort_order")
+  metadata       Json?
+  createdAt      DateTime                  @default(now()) @map("created_at")
+  updatedAt      DateTime                  @updatedAt @map("updated_at")
+
+  @@index([type, sortOrder], map: "business_pricing_product_type_sort_order_idx")
+  @@index([isActive, isComingSoon], map: "business_pricing_product_active_coming_soon_idx")
+  @@map("business_pricing_product")
+}
+
+model BusinessPricingBundleDiscountTier {
+  id               Int      @id @default(autoincrement())
+  minSelectedItems Int      @map("min_selected_items")
+  discountPercent  Decimal  @map("discount_percent") @db.Decimal(5, 2)
+  label            String   @db.VarChar(120)
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive, minSelectedItems], map: "business_pricing_bundle_discount_active_min_items_idx")
+  @@map("business_pricing_bundle_discount_tier")
+}
+
+model BusinessPricingSettings {
+  id                    Int      @id
+  annualDiscountPercent Decimal  @map("annual_discount_percent") @db.Decimal(5, 2)
+  trialLengthDays       Int      @map("trial_length_days")
+  firstMonthFree        Boolean  @default(true) @map("first_month_free")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("business_pricing_settings")
+}
+
 model CompanyUser {
   id                 Int             @id @default(autoincrement())
   company_id         Int
@@ -958,6 +1001,22 @@ enum ShopPlan {
 enum BillingCycle {
   MONTHLY
   YEARLY
+}
+
+enum BusinessPricingProductKey {
+  RESERVAS
+  EVENTOS
+  CLASES
+  TIENDA
+  PERSONALIZACION_PRO
+  METRICAS
+  MENSAJERIA_PRO
+  CRM_PRO
+}
+
+enum BusinessPricingProductType {
+  CORE
+  ADDON
 }
 
 enum ProductCode {

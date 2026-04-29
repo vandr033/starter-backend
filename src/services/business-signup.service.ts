@@ -8,7 +8,6 @@ import { getAuth } from '../config/auth';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 import { signInAdmin } from './admin-auth.service';
 import {
-    getTrialEndsAt,
     isSelectableCoreProduct,
     isSupportedAddOn,
     mapAddOnsToCommercialProducts,
@@ -20,6 +19,10 @@ import type { BusinessSignupInput } from '../schemas/business-signup.schema';
 import { createCompanyWithDefaults, assignOwnerToCompany } from './company-provisioning.service';
 import { syncCompanyProducts } from './super-admin-shops.service';
 import { normalizeCommercialConfiguration } from './super-admin-shop-commercial.service';
+import {
+    calculateTrialEndsAtFromDays,
+    getPublicSelectablePricingState,
+} from './business-pricing.service';
 
 function toSlug(value: string): string {
     return value
@@ -241,7 +244,8 @@ export async function signUpBusiness(
         throw buildSpanishSignupError('Ese slug ya está en uso. Probá con otro.');
     }
 
-    const trialEndsAt = getTrialEndsAt(new Date());
+    const pricingState = await getPublicSelectablePricingState();
+    const trialEndsAt = calculateTrialEndsAtFromDays(pricingState.trialLengthDays, new Date());
     const ownerSignup = await createOwnerUser({
         email: normalizedEmail,
         password: input.password,
@@ -252,6 +256,32 @@ export async function signUpBusiness(
 
     const selectableCoreProducts = input.coreProducts.filter(isSelectableCoreProduct);
     const supportedAddOns = (input.addOns ?? []).filter(isSupportedAddOn);
+
+    const invalidInactiveCoreProduct = selectableCoreProducts.find(
+        (product) => !pricingState.selectableCoreProducts.has(product),
+    );
+
+    if (invalidInactiveCoreProduct) {
+        const productName =
+            pricingState.productsByKey.get(invalidInactiveCoreProduct)?.displayName ??
+            invalidInactiveCoreProduct;
+        throw buildSpanishSignupError(
+            `${productName} no está disponible para activarse en este momento.`,
+        );
+    }
+
+    const invalidInactiveAddOn = supportedAddOns.find(
+        (addOn) => !pricingState.selectableAddOns.has(addOn),
+    );
+
+    if (invalidInactiveAddOn) {
+        const productName =
+            pricingState.productsByKey.get(invalidInactiveAddOn)?.displayName ??
+            invalidInactiveAddOn;
+        throw buildSpanishSignupError(
+            `${productName} no está disponible para activarse en este momento.`,
+        );
+    }
 
     const activeProducts = [
         ...mapCoreProductsToCommercialProducts(selectableCoreProducts, trialEndsAt),
@@ -329,7 +359,7 @@ export async function signUpBusiness(
                     previousMarketplaceVisible: null,
                     newMarketplaceVisible: true,
                     changedByUserId: ownerSignup.user.id,
-                    note: 'Alta self-service con prueba gratis de 30 días',
+                    note: `Alta self-service con prueba gratis de ${pricingState.trialLengthDays} días`,
                 },
             });
 
