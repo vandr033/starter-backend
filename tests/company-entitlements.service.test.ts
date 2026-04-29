@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ProductTierCode, ShopPlan } from '@prisma/client';
+import {
+  CompanyProductSubscriptionStatus,
+  ProductTierCode,
+  ShopPlan,
+} from '@prisma/client';
 import {
   getProductTierDefinition,
   isCoreProductCode,
@@ -16,6 +20,7 @@ function activeSubscription(tierCode: ProductTierCode) {
   return {
     productCode: tier.productCode,
     tierCode,
+    status: CompanyProductSubscriptionStatus.ACTIVE,
     isCoreProduct: isCoreProductCode(tier.productCode),
     capabilityCodes: [...tier.includedCapabilities],
   };
@@ -46,6 +51,7 @@ test('legacy fallback preserves STARTER, BUSINESS, and PRO plan access when no m
 test('company with Reservas Base gets booking capability', () => {
   const entitlements = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [activeSubscription(ProductTierCode.RESERVAS_BASE)],
     capabilityOverrides: [],
   });
@@ -60,6 +66,7 @@ test('company with Reservas Base gets booking capability', () => {
 test('company with Eventos Pro gets EVENTOS_BASE and EVENTOS_PRO', () => {
   const entitlements = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [activeSubscription(ProductTierCode.EVENTOS_PRO)],
     capabilityOverrides: [],
   });
@@ -73,6 +80,7 @@ test('company with Eventos Pro gets EVENTOS_BASE and EVENTOS_PRO', () => {
 test('company with Clases Base does not get Clases Pro', () => {
   const entitlements = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [activeSubscription(ProductTierCode.CLASES_BASE)],
     capabilityOverrides: [],
   });
@@ -86,6 +94,7 @@ test('company with Clases Base does not get Clases Pro', () => {
 test('company with CRM Pro gets CRM_BASE and CRM_PRO', () => {
   const entitlements = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [
       activeSubscription(ProductTierCode.RESERVAS_BASE),
       activeSubscription(ProductTierCode.CRM_PRO),
@@ -101,6 +110,7 @@ test('company with CRM Pro gets CRM_BASE and CRM_PRO', () => {
 test('company with Personalizacion Plus gets advanced storefront capabilities', () => {
   const entitlements = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [
       activeSubscription(ProductTierCode.RESERVAS_BASE),
       activeSubscription(ProductTierCode.PERSONALIZACION_PLUS),
@@ -119,6 +129,7 @@ test('company with Personalizacion Plus gets advanced storefront capabilities', 
 test('capability overrides can add Mensajeria Pro reminders without enabling review requests', () => {
   const entitlements = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.BUSINESS,
+    hasModularSubscriptions: true,
     activeSubscriptions: [
       activeSubscription(ProductTierCode.RESERVAS_PRO),
       activeSubscription(ProductTierCode.EVENTOS_BASE),
@@ -142,6 +153,7 @@ test('capability overrides can add Mensajeria Pro reminders without enabling rev
 test('reactivation tools require both CRM Pro and Mensajeria Pro capabilities', () => {
   const withoutMessaging = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [
       activeSubscription(ProductTierCode.RESERVAS_BASE),
       activeSubscription(ProductTierCode.CRM_PRO),
@@ -151,6 +163,7 @@ test('reactivation tools require both CRM Pro and Mensajeria Pro capabilities', 
 
   const withMessaging = resolveCompanyEntitlementsFromState({
     plan: ShopPlan.STARTER,
+    hasModularSubscriptions: true,
     activeSubscriptions: [
       activeSubscription(ProductTierCode.RESERVAS_BASE),
       activeSubscription(ProductTierCode.CRM_PRO),
@@ -168,9 +181,27 @@ test('company must have at least one core product active', () => {
     () =>
       resolveCompanyEntitlementsFromState({
         plan: ShopPlan.STARTER,
+        hasModularSubscriptions: true,
         activeSubscriptions: [activeSubscription(ProductTierCode.CRM_PRO)],
         capabilityOverrides: [],
       }),
     /at least one active core product/i,
   );
+});
+
+test('expired modular subscriptions do not fall back to legacy plan capabilities', () => {
+  const entitlements = resolveCompanyEntitlementsFromState({
+    plan: ShopPlan.PRO,
+    hasModularSubscriptions: true,
+    activeSubscriptions: [],
+    capabilityOverrides: [],
+  });
+
+  assert.equal(entitlements.source, 'modular');
+  assert.equal(entitlements.products.length, 0);
+  assert.equal(entitlements.activeCoreProducts.length, 0);
+  assert.equal(entitlements.activeAddOns.length, 0);
+  assert.equal(entitlements.features.GROUP_EVENTS, false);
+  assert.equal(entitlements.productCapabilities.RESERVAS_BASE, false);
+  assert.equal(entitlements.productCapabilities.CRM_BASE, false);
 });

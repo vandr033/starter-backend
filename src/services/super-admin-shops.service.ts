@@ -11,7 +11,6 @@ import { getAuth } from '../config/auth';
 import bcrypt from 'bcryptjs';
 import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
 import * as StaffService from './staff.service';
-import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
 import {
     buildStaffLimitReachedMessage,
     getStaffSeatUsageForCompany,
@@ -29,11 +28,11 @@ import {
     type RequestedProductInput,
 } from './super-admin-shop-commercial.service';
 import { recordCompanyProductHistory } from './company-product-history.service';
-
-const DEFAULT_LANGUAGE_KEY = 'default_language';
-const DEFAULT_LANGUAGE_VALUE: 'es' | 'en' = 'es';
-const DEFAULT_LANGUAGE_LABEL = 'Default Language';
-const DEFAULT_LANGUAGE_DESCRIPTION = 'Default language for customer communications';
+import {
+    assignOwnerToCompany,
+    createCompanyWithDefaults,
+} from './company-provisioning.service';
+import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
 
 /**
  * Generate a URL-friendly slug from a string
@@ -187,6 +186,7 @@ export async function syncCompanyProducts(params: {
     actorUserId?: string;
     source?: string;
     note?: string;
+    subscriptionStatus?: CompanyProductSubscriptionStatus;
 }) {
     const normalizedCommercialConfig = normalizeCommercialConfiguration({
         activeProducts: params.activeProducts,
@@ -256,6 +256,9 @@ export async function syncCompanyProducts(params: {
 
     const productChanges = diffActiveProducts(currentActiveProducts, nextProducts);
 
+    const subscriptionStatus =
+        params.subscriptionStatus ?? CompanyProductSubscriptionStatus.ACTIVE;
+
     for (const nextProduct of nextProducts) {
         const tierRow = tierByCode.get(nextProduct.tierCode);
         if (!tierRow) {
@@ -269,7 +272,7 @@ export async function syncCompanyProducts(params: {
                 data: {
                     productId: tierRow.productId,
                     productTierId: tierRow.id,
-                    status: CompanyProductSubscriptionStatus.ACTIVE,
+                    status: subscriptionStatus,
                     billingCycle: nextProduct.billingCycle,
                     pricePaid: nextProduct.pricePaid,
                     currency: nextProduct.currency,
@@ -283,7 +286,7 @@ export async function syncCompanyProducts(params: {
                     companyId: params.companyId,
                     productId: tierRow.productId,
                     productTierId: tierRow.id,
-                    status: CompanyProductSubscriptionStatus.ACTIVE,
+                    status: subscriptionStatus,
                     billingCycle: nextProduct.billingCycle,
                     pricePaid: nextProduct.pricePaid,
                     currency: nextProduct.currency,
@@ -754,7 +757,8 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
         }
 
         const result = await prisma.$transaction(async (tx) => {
-            const shop = await tx.company.create({
+            const shop = await createCompanyWithDefaults({
+                tx,
                 data: {
                     name: normalizedName,
                     slug,
@@ -775,71 +779,6 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     pricePaid: normalizedPricePaid ?? null,
                     availableUntil: normalizedAvailableUntil,
                     isMarketplaceVisible: data.isMarketplaceVisible,
-                    // Create default CompanySettings
-                    company_settings: {
-                        create: {
-                            booking_buffer_minutes: 10,
-                            booking_time_granularity_minutes: 5,
-                            cancel_limit_minutes: 120,
-                            reschedule_limit_minutes: 120,
-                            allow_qr_payment: true,
-                            allow_cash_payment: true,
-                            send_email_notifications: true,
-                            send_whatsapp_notifications: false
-                        }
-                    },
-                    // Create default ThemeConfig
-                    theme_config: {
-                        create: {
-                            brand_color: '#000000',
-                            page_background_color: '#ffffff',
-                            page_background_preset: 'light',
-                            cards_elevated: true,
-                            corner_radius: 'md'
-                        }
-                    }
-                },
-                include: {
-                    company_type: {
-                        select: {
-                            id: true,
-                            name: true,
-                            name_i18n: true
-                        }
-                    }
-                }
-            });
-
-            const defaultHours = [];
-            for (let day = 0; day < 7; day++) {
-                defaultHours.push({
-                    company_id: shop.id,
-                    day_of_week: day,
-                    is_closed: true
-                });
-            }
-            await tx.hours.createMany({
-                data: defaultHours
-            });
-
-            await tx.configMessage.upsert({
-                where: {
-                    company_id_key: {
-                        company_id: shop.id,
-                        key: DEFAULT_LANGUAGE_KEY,
-                    },
-                },
-                update: {
-                    value: DEFAULT_LANGUAGE_VALUE,
-                    name: DEFAULT_LANGUAGE_LABEL,
-                    description: DEFAULT_LANGUAGE_DESCRIPTION,
-                },
-                create: {
-                    company_id: shop.id,
-                    key: DEFAULT_LANGUAGE_KEY,
-                    value: DEFAULT_LANGUAGE_VALUE,
-                    name: DEFAULT_LANGUAGE_LABEL,
-                    description: DEFAULT_LANGUAGE_DESCRIPTION,
                 },
             });
 
@@ -1076,70 +1015,19 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     };
                 }
 
-                const ownerCompanyUser = await tx.companyUser.upsert({
-                    where: {
-                        company_id_user_id_role: {
-                            company_id: shop.id,
-                            user_id: ownerUser.id,
-                            role: CompanyUserRole.OWNER
-                        }
-                    },
-                    update: {
-                        deleted_at: null,
-                        is_primary_contact: true
-                    },
-                    create: {
-                        company_id: shop.id,
-                        user_id: ownerUser.id,
-                        role: CompanyUserRole.OWNER,
-                        is_primary_contact: true
-                    }
-                });
-
-                const existingOwnerStaffProfile = await tx.staffProfile.findFirst({
-                    where: {
-                        company_id: shop.id,
-                        user_id: ownerUser.id
-                    }
-                });
-
-                let ownerStaffProfileId: number;
-
-                if (existingOwnerStaffProfile) {
-                    const updatedOwnerStaffProfile = await tx.staffProfile.update({
-                        where: { id: existingOwnerStaffProfile.id },
-                        data: {
-                            deleted_at: null,
-                            status: 'ACTIVE',
-                            display_name: ownerDisplayName,
-                            is_bookable: ownerInput.is_bookable ?? false
-                        }
-                    });
-                    ownerStaffProfileId = updatedOwnerStaffProfile.id;
-                } else {
-                    const createdOwnerStaffProfile = await tx.staffProfile.create({
-                        data: {
-                            company_id: shop.id,
-                            user_id: ownerUser.id,
-                            display_name: ownerDisplayName,
-                            is_bookable: ownerInput.is_bookable ?? false,
-                            status: 'ACTIVE'
-                        }
-                    });
-                    ownerStaffProfileId = createdOwnerStaffProfile.id;
-                }
-
-                await ensureDefaultStaffAvailabilityFromCompanyHours({
+                const ownerAssignment = await assignOwnerToCompany({
+                    tx,
                     companyId: shop.id,
-                    staffId: ownerStaffProfileId,
-                    db: tx,
+                    userId: ownerUser.id,
+                    displayName: ownerDisplayName,
+                    isBookable: ownerInput.is_bookable ?? false,
                 });
 
                 ownerSummary = {
-                    company_user_id: ownerCompanyUser.id,
+                    company_user_id: ownerAssignment.companyUser.id,
                     user_id: ownerUser.id,
                     email: ownerUser.email,
-                    role: ownerCompanyUser.role
+                    role: ownerAssignment.companyUser.role
                 };
             }
 

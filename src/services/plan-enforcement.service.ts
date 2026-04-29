@@ -75,10 +75,10 @@ export async function getStaffSeatUsageForCompany(
 
 export function buildFeatureNotAvailableMessage(requiredPlan: ShopPlan): string {
     return requiredPlan === ShopPlan.PRO
-        ? 'Available on the Pro plan'
-        : 'Available on the Business plan';
+        ? 'Esta función requiere un plan más alto para activarse.'
+        : 'Esta función requiere un plan activo para seguir usándola.';
 }
 
 export function buildStaffLimitReachedMessage(): string {
-    return 'Staff limit reached for your plan';
+    return 'Llegaste al límite de personas de tu plan.';
 }

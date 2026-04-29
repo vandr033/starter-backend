@@ -14,7 +14,7 @@ const SHOP_UNAVAILABLE_COPY = {
     en: 'This shop is not active at the moment.',
   },
   adminBanner: {
-    es: 'Tu plan venció el {date}. Contacta soporte o renueva para reactivar la tienda.',
+    es: 'Tu prueba o plan terminó el {date}. Activá tu plan para volver a operar.',
     en: 'Your plan expired on {date}. Contact support or renew to reactivate the shop.',
   },
 } as const;
@@ -33,7 +33,7 @@ export function buildShopUnavailablePayload(availableUntil: Date, message?: stri
     code: 403,
     error: true,
     reason: 'SHOP_EXPIRED',
-    message: message || SHOP_UNAVAILABLE_COPY.title.en,
+    message: message || SHOP_UNAVAILABLE_COPY.title.es,
     data: {
       availableUntil: availableUntil.toISOString(),
       ...SHOP_UNAVAILABLE_COPY,

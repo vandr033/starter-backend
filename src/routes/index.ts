@@ -35,6 +35,7 @@ import adminGroupEventRoutes from './admin-group-event.routes';
 import adminGroupClassRoutes from './admin-group-class.routes';
 import adminGroupBookingRoutes from './admin-group-booking.routes';
 import publicGroupRoutes from './public-group.routes';
+import businessSignupRoutes from './business-signup.routes';
 import { requireAuth, requireSuperAdmin } from '../middlewares/requireAuth';
 import {
     superAdminListInterestedHandler,
@@ -44,6 +45,7 @@ import {
 export const router = Router();
 router.use('/v1/auth', authRoutes);
 router.use('/v1/auth', profileRoutes);
+router.use('/business-signup', businessSignupRoutes);
 // router.use('/user', userRoutes);
 router.use('/company', companyRoutes);
 router.use('/test', testRoutes);

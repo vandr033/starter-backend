@@ -31,14 +31,14 @@ const PRODUCT_REQUEST_LABELS: Record<ProductTierCode, string> = {
     EVENTOS_PRO: 'Eventos Pro',
     CLASES_BASE: 'Clases',
     CLASES_PRO: 'Clases Pro',
-    PERSONALIZACION_BASE: 'Personalizacion',
-    PERSONALIZACION_PLUS: 'Personalizacion Plus',
+    PERSONALIZACION_BASE: 'Personalización Base',
+    PERSONALIZACION_PLUS: 'Personalización Pro',
     CRM_BASE: 'CRM',
     CRM_PRO: 'CRM Pro',
-    MENSAJERIA_BASE: 'Mensajeria',
-    MENSAJERIA_PRO: 'Mensajeria Pro',
-    METRICAS_BASE: 'Metricas',
-    METRICAS_PRO: 'Metricas Pro',
+    MENSAJERIA_BASE: 'Mensajería Base',
+    MENSAJERIA_PRO: 'Mensajería Pro',
+    METRICAS_BASE: 'Métricas Base',
+    METRICAS_PRO: 'Métricas',
     MARKETPLACE_PLUS: 'Marketplace Plus',
 };
 
@@ -236,8 +236,8 @@ function buildRecommendation(definition: ProductAccessDefinition): ProductAccess
         tierName: requestLabel,
         requestLabel,
         ctaLabel: `Solicitar ${requestLabel}`,
-        title: 'Este modulo no esta activo para tu empresa.',
-        description: `Solicita activar ${requestLabel} y nuestro equipo revisara tu solicitud.`,
+        title: 'Este módulo no está activo para tu empresa.',
+        description: `Solicitá activar ${requestLabel} y nuestro equipo va a revisar tu pedido.`,
         requiresLabel: `Requiere ${requestLabel}`,
     };
 }

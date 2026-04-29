@@ -306,7 +306,10 @@ export function requireCompanyRole(allowedRoles: CompanyUserRole[]) {
       if (!companyUser.company || !isCompanyAvailableNow(companyUser.company)) {
         const availableUntil = companyUser.company?.availableUntil ?? new Date(0);
         return res.status(403).json(
-          buildShopUnavailablePayload(availableUntil, "Shop subscription expired"),
+          buildShopUnavailablePayload(
+            availableUntil,
+            "Tu prueba gratis terminó. Activá tu plan para seguir usando esta función.",
+          ),
         );
       }
 

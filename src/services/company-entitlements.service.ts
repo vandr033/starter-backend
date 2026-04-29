@@ -31,6 +31,7 @@ type DbClient = typeof prisma | Prisma.TransactionClient;
 type ActiveCompanyProductSubscription = {
     productCode: ProductCode;
     tierCode: ProductTierCode;
+    status: CompanyProductSubscriptionStatus;
     isCoreProduct: boolean;
     capabilityCodes: ProductCapability[];
 };
@@ -42,6 +43,7 @@ type CapabilityOverrideRecord = {
 
 type CompanyEntitlementState = {
     plan: ShopPlan;
+    hasModularSubscriptions: boolean;
     activeSubscriptions: ActiveCompanyProductSubscription[];
     capabilityOverrides: CapabilityOverrideRecord[];
 };
@@ -52,10 +54,20 @@ function buildActiveProductLists(products: EffectiveCompanyProduct[]): {
 } {
     return {
         activeCoreProducts: products
-            .filter((product) => product.isCore)
+            .filter(
+                (product) =>
+                    product.isCore &&
+                    (product.status === CompanyProductSubscriptionStatus.ACTIVE ||
+                        product.status === CompanyProductSubscriptionStatus.TRIALING),
+            )
             .map((product) => product.tierCode),
         activeAddOns: products
-            .filter((product) => !product.isCore)
+            .filter(
+                (product) =>
+                    !product.isCore &&
+                    (product.status === CompanyProductSubscriptionStatus.ACTIVE ||
+                        product.status === CompanyProductSubscriptionStatus.TRIALING),
+            )
             .map((product) => product.tierCode),
     };
 }
@@ -140,7 +152,7 @@ function getActiveModularProducts(
         .map((subscription) => ({
             productCode: subscription.productCode,
             tierCode: subscription.tierCode,
-            status: CompanyProductSubscriptionStatus.ACTIVE,
+            status: subscription.status,
             isCore: subscription.isCoreProduct,
             includedByDefault: false,
         }))
@@ -185,6 +197,15 @@ export function resolveCompanyEntitlementsFromState(
     state: CompanyEntitlementState,
 ): CompanyEntitlementPayload {
     if (state.activeSubscriptions.length === 0) {
+        if (state.hasModularSubscriptions) {
+            return buildEntitlementPayload({
+                plan: state.plan,
+                source: 'modular',
+                products: [],
+                productCapabilities: getDefaultProductCapabilities(),
+            });
+        }
+
         return getLegacyPlanFallbackEntitlements(state.plan, state.capabilityOverrides);
     }
 
@@ -231,6 +252,8 @@ async function getCompanyEntitlementState(
                     ],
                 },
                 select: {
+                    status: true,
+                    availableUntil: true,
                     product: {
                         select: {
                             code: true,
@@ -279,14 +302,30 @@ async function getCompanyEntitlementState(
 
     return {
         plan: company.plan,
-        activeSubscriptions: company.product_subscriptions.map((subscription) => ({
-            productCode: subscription.product.code,
-            tierCode: subscription.productTier.code,
-            isCoreProduct: subscription.product.isCoreProduct,
-            capabilityCodes: subscription.productTier.capabilities.map(
-                (capability) => capability.capability,
-            ),
-        })),
+        hasModularSubscriptions: company.product_subscriptions.length > 0,
+        activeSubscriptions: company.product_subscriptions
+            .filter((subscription) => {
+                if (
+                    subscription.status !== CompanyProductSubscriptionStatus.ACTIVE &&
+                    subscription.status !== CompanyProductSubscriptionStatus.TRIALING
+                ) {
+                    return false;
+                }
+
+                return (
+                    subscription.availableUntil === null ||
+                    subscription.availableUntil.getTime() > Date.now()
+                );
+            })
+            .map((subscription) => ({
+                productCode: subscription.product.code,
+                tierCode: subscription.productTier.code,
+                status: subscription.status,
+                isCoreProduct: subscription.product.isCoreProduct,
+                capabilityCodes: subscription.productTier.capabilities.map(
+                    (capability) => capability.capability,
+                ),
+            })),
         capabilityOverrides: [...overrideMap.entries()].map(([capability, value]) => ({
             capability,
             value,
@@ -322,7 +361,11 @@ export async function companyHasCoreProduct(
 
     const entitlements = await getCompanyEntitlements(companyId, db);
     return entitlements.products.some(
-        (product) => product.isCore && product.productCode === productCode,
+        (product) =>
+            product.isCore &&
+            product.productCode === productCode &&
+            (product.status === CompanyProductSubscriptionStatus.ACTIVE ||
+                product.status === CompanyProductSubscriptionStatus.TRIALING),
     );
 }
 
