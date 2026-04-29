@@ -11,7 +11,7 @@ import {
     isSelectableCoreProduct,
     isSupportedAddOn,
     mapAddOnsToCommercialProducts,
-    mapCoreProductsToCommercialProducts,
+    mapCoreSelectionsToCommercialProducts,
     SELF_SERVICE_DEFAULT_CURRENCY,
     SELF_SERVICE_REDIRECT_PATH,
 } from '../config/business-products';
@@ -22,6 +22,7 @@ import { normalizeCommercialConfiguration } from './super-admin-shop-commercial.
 import {
     calculateTrialEndsAtFromDays,
     getPublicSelectablePricingState,
+    sanitizeCoreTierSelections,
 } from './business-pricing.service';
 
 function toSlug(value: string): string {
@@ -220,7 +221,9 @@ export async function signUpBusiness(
         );
     }
 
-    const invalidCoreProduct = input.coreProducts.find((product) => !isSelectableCoreProduct(product));
+    const invalidCoreProduct = input.coreSelections.find(
+        (selection) => !isSelectableCoreProduct(selection.productKey),
+    );
     if (invalidCoreProduct) {
         throw buildSpanishSignupError(
             'Solo podés elegir Reservas, Eventos o Clases como productos principales.',
@@ -254,17 +257,19 @@ export async function signUpBusiness(
         headers,
     });
 
-    const selectableCoreProducts = input.coreProducts.filter(isSelectableCoreProduct);
+    const selectableCoreSelections = sanitizeCoreTierSelections(input.coreSelections);
     const supportedAddOns = (input.addOns ?? []).filter(isSupportedAddOn);
 
-    const invalidInactiveCoreProduct = selectableCoreProducts.find(
-        (product) => !pricingState.selectableCoreProducts.has(product),
+    const invalidInactiveCoreSelection = selectableCoreSelections.find(
+        (selection) =>
+            !pricingState.selectableCoreProducts.has(selection.productKey) ||
+            !pricingState.selectableCoreTiers.get(selection.productKey)?.has(selection.tierKey),
     );
 
-    if (invalidInactiveCoreProduct) {
+    if (invalidInactiveCoreSelection) {
         const productName =
-            pricingState.productsByKey.get(invalidInactiveCoreProduct)?.displayName ??
-            invalidInactiveCoreProduct;
+            pricingState.productsByKey.get(invalidInactiveCoreSelection.productKey)?.displayName ??
+            invalidInactiveCoreSelection.productKey;
         throw buildSpanishSignupError(
             `${productName} no está disponible para activarse en este momento.`,
         );
@@ -284,7 +289,7 @@ export async function signUpBusiness(
     }
 
     const activeProducts = [
-        ...mapCoreProductsToCommercialProducts(selectableCoreProducts, trialEndsAt),
+        ...mapCoreSelectionsToCommercialProducts(selectableCoreSelections, trialEndsAt),
         ...mapAddOnsToCommercialProducts(supportedAddOns, trialEndsAt),
     ];
     const normalizedCommercialConfig = normalizeCommercialConfiguration({

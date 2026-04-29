@@ -112,7 +112,7 @@ export async function getAvailableSlots(req: Request, res: Response) {
  * - days: number (optional, defaults to 14)
  */
 export async function getAvailableDates(req: Request, res: Response) {
-    const { company_id, start_date, days } = req.query;
+    const { company_id, start_date, days, ignore_max_advance } = req.query;
 
     // Validate required params
     if (!company_id) {
@@ -164,13 +164,19 @@ export async function getAvailableDates(req: Request, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    const ignoreMaxAdvance =
+        ignore_max_advance === '1' ||
+        ignore_max_advance === 'true';
+
     // Cap by max_advance_booking_days if configured
-    const companySettings = await prisma.companySettings.findUnique({
-        where: { company_id: companyId },
-        select: { max_advance_booking_days: true },
-    });
-    if (companySettings?.max_advance_booking_days != null) {
-        numberOfDays = Math.min(numberOfDays, companySettings.max_advance_booking_days);
+    if (!ignoreMaxAdvance) {
+        const companySettings = await prisma.companySettings.findUnique({
+            where: { company_id: companyId },
+            select: { max_advance_booking_days: true },
+        });
+        if (companySettings?.max_advance_booking_days != null) {
+            numberOfDays = Math.min(numberOfDays, companySettings.max_advance_booking_days);
+        }
     }
 
     const result = await BookingService.getAvailableDates({

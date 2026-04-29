@@ -94,6 +94,9 @@ export interface CreateServiceData {
     description?: string;
     price_cents: number;
     duration_minutes: number;
+    is_multi_session?: boolean;
+    session_count?: number | null;
+    session_duration_minutes?: number | null;
     position?: number;
     global_type_id?: number;
 }
@@ -107,6 +110,9 @@ export async function createService(data: CreateServiceData) {
             description: data.description,
             price_cents: data.price_cents,
             duration_minutes: data.duration_minutes,
+            is_multi_session: data.is_multi_session ?? false,
+            session_count: data.session_count ?? null,
+            session_duration_minutes: data.session_duration_minutes ?? null,
             position: data.position ?? 0,
             global_type_id: data.global_type_id,
         },
@@ -130,6 +136,9 @@ export interface UpdateServiceData {
     description?: string;
     price_cents?: number;
     duration_minutes?: number;
+    is_multi_session?: boolean;
+    session_count?: number | null;
+    session_duration_minutes?: number | null;
     position?: number;
     is_active?: boolean;
     category_id?: number;

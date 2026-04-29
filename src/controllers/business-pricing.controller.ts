@@ -3,12 +3,15 @@ import {
     businessPricingProductKeySchema,
     updateBusinessPricingDiscountsSchema,
     updateBusinessPricingProductSchema,
+    updateBusinessPricingSettingsSchema,
 } from '../schemas/business-pricing.schema';
 import {
     getPublicBusinessPricing,
     getSuperAdminBusinessPricing,
+    getSuperAdminProductFeatures,
     updateBusinessPricingDiscounts,
     updateBusinessPricingProduct,
+    updateBusinessPricingSettings,
 } from '../services/business-pricing.service';
 
 function validationErrorResponse(res: Response, message: string, errors: unknown) {
@@ -55,6 +58,23 @@ export async function getSuperAdminPricing(_req: Request, res: Response) {
             res,
             error,
             'No pudimos cargar la configuración de precios.',
+        );
+    }
+}
+
+export async function getSuperAdminFeatures(_req: Request, res: Response) {
+    try {
+        const data = await getSuperAdminProductFeatures();
+        return res.status(200).json({
+            code: 200,
+            error: false,
+            data,
+        });
+    } catch (error) {
+        return unknownErrorResponse(
+            res,
+            error,
+            'No pudimos cargar las funciones por producto.',
         );
     }
 }
@@ -117,7 +137,34 @@ export async function updateSuperAdminDiscountPricing(req: Request, res: Respons
         return unknownErrorResponse(
             res,
             error,
-            'No pudimos actualizar la configuración de descuentos.',
+            'No pudimos actualizar los descuentos por combo.',
+        );
+    }
+}
+
+export async function updateSuperAdminPricingSettings(req: Request, res: Response) {
+    const parsedBody = updateBusinessPricingSettingsSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+        return validationErrorResponse(
+            res,
+            'Revisá la configuración anual y de prueba gratis.',
+            parsedBody.error.flatten(),
+        );
+    }
+
+    try {
+        const data = await updateBusinessPricingSettings(parsedBody.data);
+        return res.status(200).json({
+            code: 200,
+            error: false,
+            message: 'Precios actualizados',
+            data,
+        });
+    } catch (error) {
+        return unknownErrorResponse(
+            res,
+            error,
+            'No pudimos actualizar la configuración anual y de prueba.',
         );
     }
 }

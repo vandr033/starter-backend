@@ -96,6 +96,9 @@ export async function getServicesByIds(serviceIds: number[], companyId: number) 
             name: true,
             duration_minutes: true,
             price_cents: true,
+            is_multi_session: true,
+            session_count: true,
+            session_duration_minutes: true,
         },
     });
 }
@@ -103,7 +106,11 @@ export async function getServicesByIds(serviceIds: number[], companyId: number) 
 /**
  * Get bookable staff for a company
  */
-export async function getBookableStaff(companyId: number, staffId?: number) {
+export async function getBookableStaff(
+    companyId: number,
+    staffId?: number,
+    serviceIds: number[] = [],
+) {
     const where: any = {
         company_id: companyId,
         is_bookable: true,
@@ -112,6 +119,17 @@ export async function getBookableStaff(companyId: number, staffId?: number) {
 
     if (staffId) {
         where.id = staffId;
+    }
+
+    if (serviceIds.length > 0) {
+        where.AND = serviceIds.map((serviceId) => ({
+            staff_services: {
+                some: {
+                    service_id: serviceId,
+                    is_active: true,
+                },
+            },
+        }));
     }
 
     return prisma.staffProfile.findMany({
@@ -290,6 +308,35 @@ export async function checkSlotConflict(
     });
 
     return conflicting;
+}
+
+/**
+ * Check if a customer already has another booking overlapping the requested slot.
+ */
+export async function checkCustomerSlotConflict(
+    companyId: number,
+    customerId: number,
+    startAt: Date,
+    endAt: Date,
+) {
+    return prisma.booking.findFirst({
+        where: {
+            company_id: companyId,
+            customer_id: customerId,
+            status: { in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+            deleted_at: null,
+            AND: [
+                { start_at: { lt: endAt } },
+                { end_at: { gt: startAt } },
+            ],
+        },
+        select: {
+            id: true,
+            start_at: true,
+            end_at: true,
+            staff_id: true,
+        },
+    });
 }
 
 export type GroupStaffCommitment = {

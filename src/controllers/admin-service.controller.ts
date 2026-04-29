@@ -15,7 +15,7 @@ export async function listServices(req: AuthenticatedRequest, res: Response) {
     if (!companyId) {
         mensaje = {
             code: 400,
-            message: 'Company context not found',
+            message: 'No encontramos el contexto de la empresa.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -41,13 +41,25 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { category_id, name, description, price_cents, duration_minutes, position, global_type_id, required_resource_ids } = req.body;
+    const {
+        category_id,
+        name,
+        description,
+        price_cents,
+        duration_minutes,
+        is_multi_session,
+        session_count,
+        session_duration_minutes,
+        position,
+        global_type_id,
+        required_resource_ids,
+    } = req.body;
 
     // Validate required fields
     if (!category_id || typeof category_id !== 'number') {
         mensaje = {
             code: 400,
-            message: 'category_id is required and must be a number',
+            message: 'category_id es obligatorio y debe ser numérico.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -56,7 +68,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
     if (!name || typeof name !== 'string') {
         mensaje = {
             code: 400,
-            message: 'name is required',
+            message: 'El nombre es obligatorio.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -65,7 +77,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
     if (price_cents === undefined || typeof price_cents !== 'number') {
         mensaje = {
             code: 400,
-            message: 'price_cents is required and must be a number',
+            message: 'price_cents es obligatorio y debe ser numérico.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -74,7 +86,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
     if (duration_minutes === undefined || typeof duration_minutes !== 'number') {
         mensaje = {
             code: 400,
-            message: 'duration_minutes is required and must be a number',
+            message: 'duration_minutes es obligatorio y debe ser numérico.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -86,6 +98,12 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         description,
         price_cents,
         duration_minutes,
+        is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
+        session_count: typeof session_count === 'number' ? session_count : undefined,
+        session_duration_minutes:
+            typeof session_duration_minutes === 'number'
+                ? session_duration_minutes
+                : undefined,
         position,
         global_type_id,
         required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
@@ -105,7 +123,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
     if (!companyId) {
         mensaje = {
             code: 400,
-            message: 'Company context not found',
+            message: 'No encontramos el contexto de la empresa.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -114,19 +132,38 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
     if (isNaN(serviceId)) {
         mensaje = {
             code: 400,
-            message: 'Invalid service ID',
+            message: 'El ID del servicio no es válido.',
             error: true,
         };
         return res.status(400).json(mensaje);
     }
 
-    const { name, description, price_cents, duration_minutes, position, is_active, category_id, global_type_id, required_resource_ids } = req.body;
+    const {
+        name,
+        description,
+        price_cents,
+        duration_minutes,
+        is_multi_session,
+        session_count,
+        session_duration_minutes,
+        position,
+        is_active,
+        category_id,
+        global_type_id,
+        required_resource_ids,
+    } = req.body;
 
     const result = await ServiceService.updateService(companyId, serviceId, {
         name,
         description,
         price_cents,
         duration_minutes,
+        is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
+        session_count: typeof session_count === 'number' ? session_count : undefined,
+        session_duration_minutes:
+            typeof session_duration_minutes === 'number'
+                ? session_duration_minutes
+                : undefined,
         position,
         is_active,
         category_id,
@@ -148,7 +185,7 @@ export async function deleteService(req: AuthenticatedRequest, res: Response) {
     if (!companyId) {
         mensaje = {
             code: 400,
-            message: 'Company context not found',
+            message: 'No encontramos el contexto de la empresa.',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -157,7 +194,7 @@ export async function deleteService(req: AuthenticatedRequest, res: Response) {
     if (isNaN(serviceId)) {
         mensaje = {
             code: 400,
-            message: 'Invalid service ID',
+            message: 'El ID del servicio no es válido.',
             error: true,
         };
         return res.status(400).json(mensaje);

@@ -80,6 +80,7 @@ model Company {
   group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
   service_required_resources            ServiceRequiredResource[]
   installment_reminder_logs             InstallmentReminderLog[]
+  booking_groups                        BookingGroup[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -382,10 +383,12 @@ model BusinessPricingBundleDiscountTier {
   discountPercent  Decimal  @map("discount_percent") @db.Decimal(5, 2)
   label            String   @db.VarChar(120)
   isActive         Boolean  @default(true) @map("is_active")
+  sortOrder        Int      @default(0) @map("sort_order")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@index([isActive, minSelectedItems], map: "business_pricing_bundle_discount_active_min_items_idx")
+  @@index([isActive, sortOrder], map: "business_pricing_bundle_discount_active_sort_order_idx")
   @@map("business_pricing_bundle_discount_tier")
 }
 
@@ -470,6 +473,7 @@ model CustomerProfile {
   group_session_attendances GroupSessionAttendance[]
   group_event_interests     GroupEventInterest[]
   group_class_interests     GroupClassInterest[]
+  booking_groups            BookingGroup[]
 
   @@unique([company_id, user_id])
   @@index([preferred_staff_id])
@@ -506,6 +510,9 @@ model Service {
   description        String?                   @db.Text
   price_cents        Int
   duration_minutes   Int
+  is_multi_session   Boolean                   @default(false)
+  session_count      Int?
+  session_duration_minutes Int?
   position           Int                       @default(0)
   is_active          Boolean                   @default(true)
   created_at         DateTime                  @default(now())
@@ -546,6 +553,7 @@ model Hours {
 model Booking {
   id                  Int               @id @default(autoincrement())
   company_id          Int
+  booking_group_id    String?           @db.VarChar(191)
   staff_id            Int
   secondary_staff_id  Int?
   customer_id         Int?
@@ -563,6 +571,8 @@ model Booking {
   qr_proof_image_url  String?           @db.VarChar(512)
   rejection_reason    String?           @db.VarChar(500)
   total_price_cents   Int               @default(0)
+  session_index       Int?
+  session_count       Int?
   notes               String?           @db.Text
   created_by_user_id  String?
   updated_by_user_id  String?
@@ -570,6 +580,7 @@ model Booking {
   updated_at          DateTime          @updatedAt
   deleted_at          DateTime?
   company             Company           @relation(fields: [company_id], references: [id])
+  booking_group       BookingGroup?     @relation(fields: [booking_group_id], references: [id])
   created_by          User?             @relation("BookingCreatedBy", fields: [created_by_user_id], references: [id])
   customer            CustomerProfile?  @relation(fields: [customer_id], references: [id])
   staff               StaffProfile      @relation("BookingPrimaryStaff", fields: [staff_id], references: [id])
@@ -581,6 +592,7 @@ model Booking {
 
   @@index([company_id, staff_id, start_at, status])
   @@index([company_id, customer_id, start_at])
+  @@index([booking_group_id], map: "booking_booking_group_id_idx")
   @@index([booking_source, created_at], map: "booking_source_created_at_idx")
   @@index([staff_id, start_at, end_at, status])
   @@index([secondary_staff_id, start_at, end_at, status])
@@ -588,6 +600,24 @@ model Booking {
   @@index([customer_id], map: "booking_customer_id_fkey")
   @@index([updated_by_user_id], map: "booking_updated_by_user_id_fkey")
   @@map("booking")
+}
+
+model BookingGroup {
+  id          String            @id @default(cuid())
+  company_id  Int
+  customer_id Int?
+  group_type  String            @db.VarChar(64)
+  status      String            @default("ACTIVE") @db.VarChar(32)
+  metadata    Json?
+  created_at  DateTime          @default(now())
+  updated_at  DateTime          @updatedAt
+  bookings    Booking[]
+  company     Company           @relation(fields: [company_id], references: [id])
+  customer    CustomerProfile?  @relation(fields: [customer_id], references: [id])
+
+  @@index([company_id, group_type], map: "booking_group_company_type_idx")
+  @@index([customer_id], map: "booking_group_customer_id_idx")
+  @@map("booking_group")
 }
 
 model MarketplaceEvent {

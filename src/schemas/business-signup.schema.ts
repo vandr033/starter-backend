@@ -2,7 +2,11 @@ import { z } from 'zod';
 import {
     PUBLIC_ADD_ON_KEYS,
     PUBLIC_CORE_PRODUCT_KEYS,
+    PUBLIC_CORE_TIER_KEYS,
     SELECTABLE_CORE_PRODUCT_KEYS,
+    getDefaultTierForCoreProduct,
+    isTierValidForCoreProduct,
+    type SelectableCoreProductKey,
 } from '../config/business-products';
 
 const coreProductSchema = z.enum(PUBLIC_CORE_PRODUCT_KEYS, {
@@ -11,6 +15,15 @@ const coreProductSchema = z.enum(PUBLIC_CORE_PRODUCT_KEYS, {
 
 const addOnSchema = z.enum(PUBLIC_ADD_ON_KEYS, {
     error: 'Add-on invalido.',
+});
+
+const coreSelectionSchema = z.object({
+    productKey: z.enum(SELECTABLE_CORE_PRODUCT_KEYS, {
+        error: 'Producto principal invalido.',
+    }),
+    tierKey: z.enum(PUBLIC_CORE_TIER_KEYS, {
+        error: 'Tier inválido.',
+    }),
 });
 
 const slugSchema = z
@@ -33,17 +46,45 @@ export const businessSignupSchema = z
         slug: slugSchema.optional(),
         coreProducts: z
             .array(coreProductSchema)
-            .min(1, 'Elegí al menos un producto principal.'),
+            .optional()
+            .default([]),
+        coreSelections: z
+            .array(coreSelectionSchema)
+            .optional()
+            .default([]),
         addOns: z.array(addOnSchema).optional().default([]),
     })
+    .transform((data) => {
+        const fallbackSelections = data.coreProducts
+            .filter((product): product is SelectableCoreProductKey =>
+                SELECTABLE_CORE_PRODUCT_KEYS.includes(product as SelectableCoreProductKey),
+            )
+            .map((productKey) => ({
+                productKey,
+                tierKey: getDefaultTierForCoreProduct(productKey),
+            }));
+
+        return {
+            ...data,
+            coreSelections: data.coreSelections.length > 0 ? data.coreSelections : fallbackSelections,
+        };
+    })
     .superRefine((data, ctx) => {
-        const uniqueCoreProducts = new Set(data.coreProducts);
+        const uniqueCoreProducts = new Set(data.coreSelections.map((selection) => selection.productKey));
         const uniqueAddOns = new Set(data.addOns);
 
-        if (uniqueCoreProducts.size !== data.coreProducts.length) {
+        if (data.coreSelections.length === 0) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                path: ['coreProducts'],
+                path: ['coreSelections'],
+                message: 'Elegí al menos un producto principal.',
+            });
+        }
+
+        if (uniqueCoreProducts.size !== data.coreSelections.length) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['coreSelections'],
                 message: 'No repitas productos principales.',
             });
         }
@@ -64,17 +105,15 @@ export const businessSignupSchema = z
             });
         }
 
-        const invalidCoreProduct = data.coreProducts.find(
-            (product) => !SELECTABLE_CORE_PRODUCT_KEYS.includes(product as (typeof SELECTABLE_CORE_PRODUCT_KEYS)[number]),
-        );
-
-        if (invalidCoreProduct) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ['coreProducts'],
-                message: 'Solo podés elegir Reservas, Eventos o Clases como productos principales.',
-            });
-        }
+        data.coreSelections.forEach((selection, index) => {
+            if (!isTierValidForCoreProduct(selection.productKey, selection.tierKey)) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['coreSelections', index, 'tierKey'],
+                    message: 'Ese tier no corresponde al producto elegido.',
+                });
+            }
+        });
     });
 
 export type BusinessSignupInput = z.infer<typeof businessSignupSchema>;

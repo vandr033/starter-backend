@@ -34,9 +34,11 @@ export function requirePlanFeature(feature: PlanFeatureKey) {
                 return res.status(403).json({
                     code: 403,
                     error: true,
+                    reason: 'CAPABILITY_REQUIRED',
                     message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(access.requiredPlan),
                     data: {
                         feature,
+                        capability: productAccess?.missingCapability ?? null,
                         currentPlan: access.currentPlan,
                         requiredPlan: access.requiredPlan,
                         ...productAccess,
@@ -79,9 +81,11 @@ export function requirePlanFeatures(features: PlanFeatureKey[]) {
                     return res.status(403).json({
                         code: 403,
                         error: true,
+                        reason: 'CAPABILITY_REQUIRED',
                         message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(access.requiredPlan),
                         data: {
                             feature,
+                            capability: productAccess?.missingCapability ?? null,
                             currentPlan: access.currentPlan,
                             requiredPlan: access.requiredPlan,
                             ...productAccess,

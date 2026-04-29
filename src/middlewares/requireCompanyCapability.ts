@@ -4,36 +4,36 @@ import type { ProductCapability } from '../config/product-entitlements';
 import { companyHasCapability } from '../services/company-entitlements.service';
 
 const DEFAULT_PUBLIC_MESSAGES: Record<ProductCapability, string> = {
-  RESERVAS_BASE: 'Bookings are not available for this business',
-  RESERVAS_PRO: 'This booking feature is not available for this business',
-  EVENTOS_BASE: 'Events are not available for this business',
-  EVENTOS_PRO: 'This event feature is not available for this business',
-  CLASES_BASE: 'Classes are not available for this business',
-  CLASES_PRO: 'This class feature is not available for this business',
-  CRM_BASE: 'This feature is not available for this business',
-  CRM_PRO: 'This feature is not available for this business',
-  CRM_IMPORT_EXPORT: 'This feature is not available for this business',
-  CRM_SEGMENTATION: 'This feature is not available for this business',
-  CRM_REACTIVATION: 'This feature is not available for this business',
-  MENSAJERIA_BASE: 'This feature is not available for this business',
-  MENSAJERIA_PRO: 'This feature is not available for this business',
-  MENSAJERIA_REMINDERS: 'This feature is not available for this business',
-  MENSAJERIA_BULK_WHATSAPP: 'This feature is not available for this business',
-  MENSAJERIA_REVIEW_REQUESTS: 'This feature is not available for this business',
-  MENSAJERIA_CAMPAIGNS: 'This feature is not available for this business',
-  PERSONALIZACION_BASE: 'This storefront feature is not available for this business',
-  PERSONALIZACION_PLUS: 'This storefront feature is not available for this business',
-  STOREFRONT_ADVANCED_CTA: 'This storefront feature is not available for this business',
-  STOREFRONT_SECTION_ORDER: 'This storefront feature is not available for this business',
-  STOREFRONT_FOOTER_CUSTOMIZATION: 'This storefront feature is not available for this business',
-  STOREFRONT_ANNOUNCEMENT_BANNERS: 'This storefront feature is not available for this business',
-  METRICAS_BASE: 'This feature is not available for this business',
-  METRICAS_PRO: 'This feature is not available for this business',
-  METRICAS_OPERATIONAL_DASHBOARD: 'This feature is not available for this business',
-  METRICAS_GROUP_ANALYTICS: 'This feature is not available for this business',
-  METRICAS_REVIEW_ANALYTICS: 'This feature is not available for this business',
-  MARKETPLACE_LISTING: 'This marketplace feature is not available for this business',
-  MARKETPLACE_PLUS: 'This marketplace feature is not available for this business',
+  RESERVAS_BASE: 'Este negocio no tiene Reservas activas.',
+  RESERVAS_PRO: 'Requiere Reservas Pro.',
+  EVENTOS_BASE: 'Este negocio no tiene Eventos activos.',
+  EVENTOS_PRO: 'Requiere Eventos Pro.',
+  CLASES_BASE: 'Este negocio no tiene Clases activas.',
+  CLASES_PRO: 'Requiere Clases Pro.',
+  CRM_BASE: 'Esta función no está activa para este negocio.',
+  CRM_PRO: 'Requiere CRM Pro.',
+  CRM_IMPORT_EXPORT: 'Requiere CRM Pro.',
+  CRM_SEGMENTATION: 'Requiere CRM Pro.',
+  CRM_REACTIVATION: 'Requiere CRM Pro.',
+  MENSAJERIA_BASE: 'Esta función no está activa para este negocio.',
+  MENSAJERIA_PRO: 'Requiere Mensajería Pro.',
+  MENSAJERIA_REMINDERS: 'Requiere Mensajería Pro.',
+  MENSAJERIA_BULK_WHATSAPP: 'Requiere Mensajería Pro.',
+  MENSAJERIA_REVIEW_REQUESTS: 'Requiere Mensajería Pro.',
+  MENSAJERIA_CAMPAIGNS: 'Requiere Mensajería Pro.',
+  PERSONALIZACION_BASE: 'Esta función de página pública no está activa para este negocio.',
+  PERSONALIZACION_PLUS: 'Requiere Personalización Pro.',
+  STOREFRONT_ADVANCED_CTA: 'Requiere Personalización Pro.',
+  STOREFRONT_SECTION_ORDER: 'Requiere Personalización Pro.',
+  STOREFRONT_FOOTER_CUSTOMIZATION: 'Requiere Personalización Pro.',
+  STOREFRONT_ANNOUNCEMENT_BANNERS: 'Requiere Personalización Pro.',
+  METRICAS_BASE: 'Esta función no está activa para este negocio.',
+  METRICAS_PRO: 'Requiere Métricas.',
+  METRICAS_OPERATIONAL_DASHBOARD: 'Requiere Métricas.',
+  METRICAS_GROUP_ANALYTICS: 'Requiere Métricas.',
+  METRICAS_REVIEW_ANALYTICS: 'Requiere Métricas.',
+  MARKETPLACE_LISTING: 'Esta función de marketplace no está activa para este negocio.',
+  MARKETPLACE_PLUS: 'Esta función de marketplace no está activa para este negocio.',
 };
 
 export const requireCompanyCapabilityDependencies = {
@@ -53,7 +53,7 @@ export function requireCompanyCapability(
         return res.status(400).json({
           code: 400,
           error: true,
-          message: 'Company context not found',
+          message: 'No encontramos el contexto de la empresa.',
         });
       }
 
@@ -80,7 +80,7 @@ export function requireCompanyCapability(
       return res.status(500).json({
         code: 500,
         error: true,
-        message: 'Internal server error',
+        message: 'No pudimos validar el acceso al producto.',
       });
     }
   };
