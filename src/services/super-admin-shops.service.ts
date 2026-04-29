@@ -1,6 +1,12 @@
 import { prisma } from '../prisma/client';
 import { MensajeApi } from '../types/MensajeApi';
-import { BillingCycle, CompanyUserRole, Prisma, ShopPlan } from '@prisma/client';
+import {
+    BillingCycle,
+    CompanyProductSubscriptionStatus,
+    CompanyUserRole,
+    Prisma,
+    ShopPlan,
+} from '@prisma/client';
 import { getAuth } from '../config/auth';
 import bcrypt from 'bcryptjs';
 import { sendAdminTempPasswordInviteEmail } from '../utils/sendEmail';
@@ -9,9 +15,20 @@ import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availabi
 import {
     buildStaffLimitReachedMessage,
     getStaffSeatUsageForCompany,
+    isFeatureEnabledForCompany,
 } from './plan-enforcement.service';
-import { isPlanFeatureEnabled } from '../config/plan-capabilities';
 import { getCompanySubscriptionHistoryPayload } from './company-subscription-history.service';
+import {
+    buildActiveProductSnapshot,
+    type CommercialProductInput,
+    diffActiveProducts,
+    mapLegacyPlanCompatibility,
+    normalizeCommercialConfiguration,
+    parseRequestedProductsSnapshot,
+    serializeRequestedProductsSnapshot,
+    type RequestedProductInput,
+} from './super-admin-shop-commercial.service';
+import { recordCompanyProductHistory } from './company-product-history.service';
 
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const DEFAULT_LANGUAGE_VALUE: 'es' | 'en' = 'es';
@@ -54,11 +71,14 @@ interface CreateShopData {
     latitude?: number | null;
     longitude?: number | null;
     company_type_id: number;
-    plan: ShopPlan;
+    plan?: ShopPlan;
     billingCycle: BillingCycle;
     availableUntil: string;
     pricePaid?: number | null;
     isMarketplaceVisible: boolean;
+    activeProducts?: CommercialProductInput[];
+    requestedProducts?: RequestedProductInput[];
+    note?: string;
     owner: {
         existingUserId?: string | null;
         email?: string | null;
@@ -93,6 +113,8 @@ interface UpdateShopData {
     availableUntil?: string;
     pricePaid?: number | null;
     isMarketplaceVisible?: boolean;
+    activeProducts?: CommercialProductInput[];
+    requestedProducts?: RequestedProductInput[];
     note?: string;
 }
 
@@ -144,6 +166,189 @@ function normalizePricePaid(value: number | null | undefined): number | null | u
 function decimalLikeToString(value: Prisma.Decimal | number | null | undefined): string | null {
     if (value === null || value === undefined) return null;
     return value.toString();
+}
+
+function decimalLikeToNumber(value: Prisma.Decimal | number | null | undefined): number | null {
+    if (value === null || value === undefined) return null;
+    const parsed = Number(value.toString());
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+export async function syncCompanyProducts(params: {
+    tx: Prisma.TransactionClient;
+    companyId: number;
+    activeProducts: CommercialProductInput[];
+    requestedProducts: RequestedProductInput[];
+    companyBillingCycle: BillingCycle;
+    companyPricePaid: number | null;
+    companyCurrency: string;
+    companyAvailableUntil: Date;
+    legacyPlan?: ShopPlan;
+    actorUserId?: string;
+    source?: string;
+    note?: string;
+}) {
+    const normalizedCommercialConfig = normalizeCommercialConfiguration({
+        activeProducts: params.activeProducts,
+        requestedProducts: params.requestedProducts,
+        legacyPlan: params.legacyPlan,
+        companyBillingCycle: params.companyBillingCycle,
+        companyPricePaid: params.companyPricePaid,
+        companyCurrency: params.companyCurrency,
+        companyAvailableUntil: params.companyAvailableUntil,
+    });
+
+    const nextProducts = normalizedCommercialConfig.activeProducts;
+    const existingSubscriptions = await params.tx.companyProductSubscription.findMany({
+        where: {
+            companyId: params.companyId,
+        },
+        include: {
+            product: {
+                select: {
+                    code: true,
+                },
+            },
+            productTier: {
+                select: {
+                    code: true,
+                },
+            },
+        },
+    });
+
+    const tierCodes = nextProducts.map((product) => product.tierCode);
+    const tierRows = await params.tx.productTier.findMany({
+        where: {
+            code: { in: tierCodes },
+        },
+        include: {
+            product: {
+                select: {
+                    code: true,
+                },
+            },
+        },
+    });
+
+    const tierByCode = new Map(tierRows.map((tier) => [tier.code, tier]));
+    const existingByProductCode = new Map(
+        existingSubscriptions.map((subscription) => [subscription.product.code, subscription]),
+    );
+
+    const currentActiveProducts = existingSubscriptions
+        .filter((subscription) =>
+            subscription.status === CompanyProductSubscriptionStatus.ACTIVE ||
+            subscription.status === CompanyProductSubscriptionStatus.TRIALING,
+        )
+        .map((subscription) => ({
+            id: subscription.id,
+            productCode: subscription.product.code,
+            productTierCode: subscription.productTier.code,
+            billingCycle: subscription.billingCycle,
+            pricePaid: subscription.pricePaid,
+            currency: subscription.currency,
+            availableUntil: subscription.availableUntil,
+            startsAt: subscription.startsAt,
+            cancelledAt: subscription.cancelledAt,
+            status: subscription.status,
+        }));
+
+    const productChanges = diffActiveProducts(currentActiveProducts, nextProducts);
+
+    for (const nextProduct of nextProducts) {
+        const tierRow = tierByCode.get(nextProduct.tierCode);
+        if (!tierRow) {
+            throw new Error(`Missing product tier catalog row for ${nextProduct.tierCode}.`);
+        }
+
+        const existingSubscription = existingByProductCode.get(nextProduct.productCode);
+        if (existingSubscription) {
+            await params.tx.companyProductSubscription.update({
+                where: { id: existingSubscription.id },
+                data: {
+                    productId: tierRow.productId,
+                    productTierId: tierRow.id,
+                    status: CompanyProductSubscriptionStatus.ACTIVE,
+                    billingCycle: nextProduct.billingCycle,
+                    pricePaid: nextProduct.pricePaid,
+                    currency: nextProduct.currency,
+                    availableUntil: nextProduct.availableUntil,
+                    cancelledAt: null,
+                },
+            });
+        } else {
+            await params.tx.companyProductSubscription.create({
+                data: {
+                    companyId: params.companyId,
+                    productId: tierRow.productId,
+                    productTierId: tierRow.id,
+                    status: CompanyProductSubscriptionStatus.ACTIVE,
+                    billingCycle: nextProduct.billingCycle,
+                    pricePaid: nextProduct.pricePaid,
+                    currency: nextProduct.currency,
+                    availableUntil: nextProduct.availableUntil,
+                },
+            });
+        }
+    }
+
+    const nextProductCodes = new Set(nextProducts.map((product) => product.productCode));
+    for (const existingSubscription of existingSubscriptions) {
+        if (nextProductCodes.has(existingSubscription.product.code)) continue;
+        if (existingSubscription.status === CompanyProductSubscriptionStatus.CANCELLED) continue;
+
+        await params.tx.companyProductSubscription.update({
+            where: { id: existingSubscription.id },
+            data: {
+                status: CompanyProductSubscriptionStatus.CANCELLED,
+                cancelledAt: new Date(),
+            },
+        });
+    }
+
+    for (const change of productChanges) {
+        await recordCompanyProductHistory({
+            db: params.tx,
+            companyId: params.companyId,
+            action: change.action,
+            previousValue: change.previousValue,
+            newValue: change.newValue,
+            actorUserId: params.actorUserId,
+            source: params.source ?? null,
+            note: params.note,
+        });
+    }
+
+    const latestRequestedSnapshot = await params.tx.companyProductHistory.findFirst({
+        where: {
+            companyId: params.companyId,
+            action: 'REQUESTED_PRODUCTS_SET',
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+
+    const nextRequestedSnapshot = serializeRequestedProductsSnapshot(
+        normalizedCommercialConfig.requestedProducts,
+    );
+    const previousRequestedProducts = parseRequestedProductsSnapshot(latestRequestedSnapshot?.newValue);
+    const nextRequestedProductsJson = JSON.stringify(nextRequestedSnapshot.requestedProducts);
+    const previousRequestedProductsJson = JSON.stringify(previousRequestedProducts);
+
+    if (nextRequestedProductsJson !== previousRequestedProductsJson) {
+        await recordCompanyProductHistory({
+            db: params.tx,
+            companyId: params.companyId,
+            action: 'REQUESTED_PRODUCTS_SET',
+            previousValue: serializeRequestedProductsSnapshot(previousRequestedProducts),
+            newValue: nextRequestedSnapshot,
+            actorUserId: params.actorUserId,
+            source: params.source ?? null,
+            note: params.note,
+        });
+    }
+
+    return normalizedCommercialConfig;
 }
 
 /**
@@ -350,6 +555,8 @@ export async function getShopById(id: number): Promise<MensajeApi> {
             };
         }
 
+        const commercialPayload = await getCompanySubscriptionHistoryPayload(id);
+
         return {
             code: 200,
             error: false,
@@ -379,6 +586,9 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
                 company_type: shop.company_type,
+                activeProducts: commercialPayload?.company.activeProducts ?? [],
+                requestedProducts: commercialPayload?.company.requestedProducts ?? [],
+                legacyPlanCompatibility: commercialPayload?.company.legacyPlanCompatibility ?? shop.plan,
             }
         };
     } catch (error) {
@@ -454,6 +664,25 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 code: 400,
                 error: true,
                 message: 'pricePaid must be a non-negative number',
+            };
+        }
+
+        let normalizedCommercialConfig: ReturnType<typeof normalizeCommercialConfiguration>;
+        try {
+            normalizedCommercialConfig = normalizeCommercialConfiguration({
+                activeProducts: data.activeProducts,
+                requestedProducts: data.requestedProducts,
+                legacyPlan: data.plan,
+                companyBillingCycle: data.billingCycle,
+                companyPricePaid: normalizedPricePaid ?? null,
+                companyCurrency: normalizedCurrency,
+                companyAvailableUntil: normalizedAvailableUntil,
+            });
+        } catch (error) {
+            return {
+                code: 400,
+                error: true,
+                message: error instanceof Error ? error.message : 'Invalid product configuration',
             };
         }
 
@@ -541,7 +770,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     latitude: data.latitude ?? null,
                     longitude: data.longitude ?? null,
                     company_type_id: data.company_type_id,
-                    plan: data.plan,
+                    plan: normalizedCommercialConfig.legacyPlan,
                     billingCycle: data.billingCycle,
                     pricePaid: normalizedPricePaid ?? null,
                     availableUntil: normalizedAvailableUntil,
@@ -614,6 +843,31 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 },
             });
 
+            const syncedCommercialConfig = await syncCompanyProducts({
+                tx,
+                companyId: shop.id,
+                activeProducts: normalizedCommercialConfig.activeProducts.map((product) => ({
+                    productCode: product.productCode,
+                    tierCode: product.tierCode,
+                    billingCycle: product.billingCycle,
+                    pricePaid: product.pricePaid,
+                    currency: product.currency,
+                    availableUntil: product.availableUntil,
+                })),
+                requestedProducts: normalizedCommercialConfig.requestedProducts.map((product) => ({
+                    productCode: product.productCode,
+                    tierCode: product.tierCode,
+                })),
+                companyBillingCycle: data.billingCycle,
+                companyPricePaid: normalizedPricePaid ?? null,
+                companyCurrency: normalizedCurrency,
+                companyAvailableUntil: normalizedAvailableUntil,
+                legacyPlan: normalizedCommercialConfig.legacyPlan,
+                actorUserId: changedByUserId,
+                source: 'SUPER_ADMIN_CREATE_SHOP',
+                note: data.note?.trim() || 'Shop created via super-admin',
+            });
+
             await tx.companySubscriptionHistory.create({
                 data: {
                     companyId: shop.id,
@@ -628,7 +882,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     previousMarketplaceVisible: null,
                     newMarketplaceVisible: shop.isMarketplaceVisible,
                     changedByUserId: changedByUserId ?? null,
-                    note: 'Shop created via super-admin',
+                    note: data.note?.trim() || 'Shop created via super-admin',
                 },
             });
 
@@ -892,7 +1146,8 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
             return {
                 error: false as const,
                 shop,
-                ownerSummary
+                ownerSummary,
+                commercialConfiguration: syncedCommercialConfig,
             };
         });
 
@@ -951,7 +1206,15 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
                 company_type: shop.company_type,
-                owner: result.ownerSummary || undefined
+                owner: result.ownerSummary || undefined,
+                activeProducts: result.commercialConfiguration.activeProducts.map((product) =>
+                    buildActiveProductSnapshot(product),
+                ),
+                requestedProducts: result.commercialConfiguration.requestedProducts,
+                publicUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/shop/${shop.slug}`,
+                adminUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
+                ownerInviteSent:
+                    ownerInviteStatus === null ? useExistingOwner : ownerInviteStatus === 1,
             }
         };
     } catch (error) {
@@ -1037,6 +1300,34 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             };
         }
 
+        const nextBillingCycle = data.billingCycle ?? existingShop.billingCycle;
+        const nextAvailableUntil = normalizedAvailableUntil ?? existingShop.availableUntil;
+        const nextMarketplaceVisible = data.isMarketplaceVisible ?? existingShop.isMarketplaceVisible;
+        const nextPricePaid =
+            data.pricePaid !== undefined ? normalizedPricePaid ?? null : existingShop.pricePaid;
+        const nextCurrency = normalizedCurrency ?? existingShop.currency;
+
+        let normalizedCommercialConfig: ReturnType<typeof normalizeCommercialConfiguration> | null = null;
+        if (data.activeProducts !== undefined) {
+            try {
+                normalizedCommercialConfig = normalizeCommercialConfiguration({
+                    activeProducts: data.activeProducts,
+                    requestedProducts: data.requestedProducts,
+                    legacyPlan: data.plan ?? existingShop.plan,
+                    companyBillingCycle: nextBillingCycle,
+                    companyPricePaid: decimalLikeToNumber(nextPricePaid),
+                    companyCurrency: nextCurrency,
+                    companyAvailableUntil: nextAvailableUntil,
+                });
+            } catch (error) {
+                return {
+                    code: 400,
+                    error: true,
+                    message: error instanceof Error ? error.message : 'Invalid product configuration',
+                };
+            }
+        }
+
         // Generate slug if name is being updated and no slug provided
         const updateData: Prisma.CompanyUncheckedUpdateInput = {};
         if (data.name !== undefined) {
@@ -1062,7 +1353,11 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
         if (data.longitude !== undefined) updateData.longitude = data.longitude;
         if (data.company_type_id !== undefined) updateData.company_type_id = data.company_type_id;
         if (data.is_active !== undefined) updateData.is_active = data.is_active;
-        if (data.plan !== undefined) updateData.plan = data.plan;
+        if (normalizedCommercialConfig) {
+            updateData.plan = normalizedCommercialConfig.legacyPlan;
+        } else if (data.plan !== undefined) {
+            updateData.plan = data.plan;
+        }
         if (data.billingCycle !== undefined) updateData.billingCycle = data.billingCycle;
         if (data.availableUntil !== undefined && normalizedAvailableUntil) {
             updateData.availableUntil = normalizedAvailableUntil;
@@ -1070,11 +1365,7 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
         if (data.pricePaid !== undefined) updateData.pricePaid = normalizedPricePaid;
         if (data.isMarketplaceVisible !== undefined) updateData.isMarketplaceVisible = data.isMarketplaceVisible;
 
-        const nextPlan = data.plan ?? existingShop.plan;
-        const nextBillingCycle = data.billingCycle ?? existingShop.billingCycle;
-        const nextAvailableUntil = normalizedAvailableUntil ?? existingShop.availableUntil;
-        const nextMarketplaceVisible = data.isMarketplaceVisible ?? existingShop.isMarketplaceVisible;
-        const nextPricePaid = data.pricePaid !== undefined ? normalizedPricePaid ?? null : existingShop.pricePaid;
+        const nextPlan = normalizedCommercialConfig?.legacyPlan ?? data.plan ?? existingShop.plan;
 
         const planChanged = nextPlan !== existingShop.plan;
         const billingCycleChanged = nextBillingCycle !== existingShop.billingCycle;
@@ -1105,6 +1396,34 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
                 }
             });
 
+            let syncedCommercialConfiguration = normalizedCommercialConfig;
+            if (normalizedCommercialConfig) {
+                syncedCommercialConfiguration = await syncCompanyProducts({
+                    tx,
+                    companyId: updatedShop.id,
+                    activeProducts: normalizedCommercialConfig.activeProducts.map((product) => ({
+                        productCode: product.productCode,
+                        tierCode: product.tierCode,
+                        billingCycle: product.billingCycle,
+                        pricePaid: product.pricePaid,
+                        currency: product.currency,
+                        availableUntil: product.availableUntil,
+                    })),
+                    requestedProducts: normalizedCommercialConfig.requestedProducts.map((product) => ({
+                        productCode: product.productCode,
+                        tierCode: product.tierCode,
+                    })),
+                    companyBillingCycle: updatedShop.billingCycle,
+                    companyPricePaid: decimalLikeToNumber(updatedShop.pricePaid),
+                    companyCurrency: updatedShop.currency,
+                    companyAvailableUntil: updatedShop.availableUntil,
+                    legacyPlan: normalizedCommercialConfig.legacyPlan,
+                    actorUserId: changedByUserId,
+                    source: 'SUPER_ADMIN_SHOP_EDIT',
+                    note: data.note?.trim() || 'Updated via super-admin shop edit',
+                });
+            }
+
             if (subscriptionFieldsChanged) {
                 await tx.companySubscriptionHistory.create({
                     data: {
@@ -1125,7 +1444,10 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
                 });
             }
 
-            return updatedShop;
+            return {
+                shop: updatedShop,
+                commercialConfiguration: syncedCommercialConfiguration,
+            };
         });
 
         return {
@@ -1133,30 +1455,34 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             error: false,
             message: 'Shop updated successfully',
             data: {
-                id: shop.id,
-                slug: shop.slug,
-                name: shop.name,
-                address: shop.address,
-                phone_prefix: shop.phone_prefix,
-                phone: shop.phone,
-                email: shop.email,
-                city: shop.city,
-                state: shop.state,
-                country_code: shop.country_code,
-                timezone: shop.timezone,
-                currency: shop.currency,
-                latitude: shop.latitude,
-                longitude: shop.longitude,
-                is_active: shop.is_active,
-                plan: shop.plan,
-                billingCycle: shop.billingCycle,
-                pricePaid: shop.pricePaid,
-                availableUntil: shop.availableUntil,
-                isMarketplaceVisible: shop.isMarketplaceVisible,
-                company_type_id: shop.company_type_id,
-                created_at: shop.created_at,
-                updated_at: shop.updated_at,
-                company_type: shop.company_type
+                id: shop.shop.id,
+                slug: shop.shop.slug,
+                name: shop.shop.name,
+                address: shop.shop.address,
+                phone_prefix: shop.shop.phone_prefix,
+                phone: shop.shop.phone,
+                email: shop.shop.email,
+                city: shop.shop.city,
+                state: shop.shop.state,
+                country_code: shop.shop.country_code,
+                timezone: shop.shop.timezone,
+                currency: shop.shop.currency,
+                latitude: shop.shop.latitude,
+                longitude: shop.shop.longitude,
+                is_active: shop.shop.is_active,
+                plan: shop.shop.plan,
+                billingCycle: shop.shop.billingCycle,
+                pricePaid: shop.shop.pricePaid,
+                availableUntil: shop.shop.availableUntil,
+                isMarketplaceVisible: shop.shop.isMarketplaceVisible,
+                company_type_id: shop.shop.company_type_id,
+                created_at: shop.shop.created_at,
+                updated_at: shop.shop.updated_at,
+                company_type: shop.shop.company_type,
+                activeProducts: shop.commercialConfiguration?.activeProducts.map((product) =>
+                    buildActiveProductSnapshot(product),
+                ) ?? undefined,
+                requestedProducts: shop.commercialConfiguration?.requestedProducts ?? undefined,
             }
         };
     } catch (error) {
@@ -1343,12 +1669,9 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
 
         if (isStaffSeatRole) {
             const seatUsage = await getStaffSeatUsageForCompany(shopId);
+            const canUseRolesPermissions = await isFeatureEnabledForCompany(shopId, 'ROLES_PERMISSIONS');
 
-            if (
-                seatUsage.currentPlan &&
-                !isPlanFeatureEnabled(seatUsage.currentPlan, 'ROLES_PERMISSIONS') &&
-                data.role !== CompanyUserRole.STAFF
-            ) {
+            if (!canUseRolesPermissions && data.role !== CompanyUserRole.STAFF) {
                 return {
                     code: 403,
                     error: true,
@@ -1609,12 +1932,12 @@ export async function updateUserRoleInShop(companyUserId: number, role: CompanyU
 
         if (targetIsStaffSeat) {
             const seatUsage = await getStaffSeatUsageForCompany(companyUser.company_id);
+            const canUseRolesPermissions = await isFeatureEnabledForCompany(
+                companyUser.company_id,
+                'ROLES_PERMISSIONS',
+            );
 
-            if (
-                seatUsage.currentPlan &&
-                !isPlanFeatureEnabled(seatUsage.currentPlan, 'ROLES_PERMISSIONS') &&
-                role !== CompanyUserRole.STAFF
-            ) {
+            if (!canUseRolesPermissions && role !== CompanyUserRole.STAFF) {
                 return {
                     code: 403,
                     error: true,

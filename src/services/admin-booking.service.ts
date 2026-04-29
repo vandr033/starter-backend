@@ -1315,7 +1315,7 @@ export async function sendNoShowNotificationForBooking(
         if (!hasTransactionalNotifications) {
             return {
                 code: 403,
-                message: 'Available on the Business plan',
+                message: 'Requiere Mensajería básica',
                 error: true,
             };
         }
@@ -1485,7 +1485,7 @@ export async function getTodayReminderPreview(companyId: number): Promise<AdminB
         if (!hasBookingReminders) {
             return {
                 code: 403,
-                message: 'Available on the Business plan',
+                message: 'Requiere Mensajería Pro',
                 error: true,
             };
         }
@@ -1563,7 +1563,7 @@ export async function sendTodayReminderForBooking(companyId: number, bookingId: 
         if (!hasBookingReminders) {
             return {
                 code: 403,
-                message: 'Available on the Business plan',
+                message: 'Requiere Mensajería Pro',
                 error: true,
             };
         }

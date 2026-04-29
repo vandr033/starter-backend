@@ -5,6 +5,7 @@ import * as GroupPaymentsRepo from '../repositories/group-payments.repo';
 import { MensajeApi } from '../types/MensajeApi';
 import { sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
+import { companyHasCapability } from './company-entitlements.service';
 
 type ServiceResult = MensajeApi & { data?: any };
 type ReminderChannel = 'WHATSAPP' | 'EMAIL';
@@ -13,6 +14,15 @@ type PaymentRowType = 'EVENT_PAYMENT' | 'CLASS_PAYMENT' | 'INSTALLMENT';
 
 const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const WHATSAPP_MIN_INTERVAL_MS = 350;
+
+async function canSendInstallmentReminders(companyId: number): Promise<boolean> {
+    const [hasClassesPro, hasMessagingPro] = await Promise.all([
+        companyHasCapability(companyId, 'CLASES_PRO'),
+        companyHasCapability(companyId, 'MENSAJERIA_PRO'),
+    ]);
+
+    return hasClassesPro && hasMessagingPro;
+}
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -537,6 +547,15 @@ export async function getEnrollmentInstallmentPlan(
     enrollmentId: number,
     userId?: string,
 ): Promise<ServiceResult> {
+    const canUsePaymentPlans = await companyHasCapability(companyId, 'CLASES_PRO');
+    if (!canUsePaymentPlans) {
+        return {
+            code: 403,
+            error: true,
+            message: 'Payment plans are not available for this business',
+        };
+    }
+
     const enrollment = await GroupPaymentsRepo.getEnrollmentInstallmentPlan({
         companyId,
         enrollmentId,
@@ -561,11 +580,19 @@ export async function getEnrollmentInstallmentPlan(
 
 export async function listMyPaymentPlans(userId: string): Promise<ServiceResult> {
     const enrollments = await GroupPaymentsRepo.listFullCoursePaymentPlansForUser(userId);
+    const visiblePlans = [];
+
+    for (const enrollment of enrollments) {
+        if (await companyHasCapability(enrollment.company_id, 'CLASES_PRO')) {
+            visiblePlans.push(enrollment);
+        }
+    }
+
     return {
         code: 200,
         error: false,
         message: 'Payment plans retrieved',
-        data: enrollments.map(serializePaymentPlan),
+        data: visiblePlans.map(serializePaymentPlan),
     };
 }
 
@@ -665,6 +692,14 @@ export async function sendInstallmentReminder(
     installmentId: number,
     adminUserId: string,
 ): Promise<ServiceResult> {
+    if (!await canSendInstallmentReminders(companyId)) {
+        return {
+            code: 403,
+            error: true,
+            message: 'Requiere Clases Pro y Mensajería Pro',
+        };
+    }
+
     const installment = await GroupPaymentsRepo.getInstallmentReminderTarget(companyId, installmentId);
     if (!installment) {
         return { code: 404, error: true, message: 'Installment not found' };
@@ -755,6 +790,14 @@ export async function bulkSendInstallmentReminders(
         customer_key?: string;
     },
 ): Promise<ServiceResult> {
+    if (!await canSendInstallmentReminders(companyId)) {
+        return {
+            code: 403,
+            error: true,
+            message: 'Requiere Clases Pro y Mensajería Pro',
+        };
+    }
+
     const installmentIds = Array.isArray(payload.installment_ids)
         ? payload.installment_ids.map((value) => Number.parseInt(String(value), 10)).filter((value) => Number.isInteger(value) && value > 0)
         : [];

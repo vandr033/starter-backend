@@ -3,9 +3,9 @@ import { prisma } from '../prisma/client';
 import {
     getFeatureRequiredPlan,
     getPlanStaffLimit,
-    isPlanFeatureEnabled,
     type PlanFeatureKey,
 } from '../config/plan-capabilities';
+import { getCompanyEntitlements } from './company-entitlements.service';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
@@ -23,9 +23,8 @@ export async function isFeatureEnabledForCompany(
     feature: PlanFeatureKey,
     db: DbClient = prisma,
 ): Promise<boolean> {
-    const plan = await getCompanyPlan(companyId, db);
-    if (!plan) return false;
-    return isPlanFeatureEnabled(plan, feature);
+    const entitlements = await getCompanyEntitlements(companyId, db);
+    return entitlements.features[feature] === true;
 }
 
 export async function resolveFeatureAccessForCompany(
@@ -37,12 +36,12 @@ export async function resolveFeatureAccessForCompany(
     currentPlan: ShopPlan | null;
     requiredPlan: ShopPlan;
 }> {
-    const currentPlan = await getCompanyPlan(companyId, db);
+    const entitlements = await getCompanyEntitlements(companyId, db);
     const requiredPlan = getFeatureRequiredPlan(feature);
 
     return {
-        allowed: currentPlan ? isPlanFeatureEnabled(currentPlan, feature) : false,
-        currentPlan,
+        allowed: entitlements.features[feature] === true,
+        currentPlan: entitlements.currentPlan,
         requiredPlan,
     };
 }

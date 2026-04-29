@@ -23,7 +23,15 @@ router.get('/:eventId/interests', AdminGroupEventController.listEventInterests);
 router.get('/:eventId/attendance', AdminGroupEventController.listEventAttendance);
 
 router.get('/:eventId/whatsapp-groups', AdminGroupEventController.listWhatsappGroups);
-router.post('/:eventId/whatsapp-groups', AdminGroupEventController.createEventWhatsappGroup);
-router.post('/:eventId/whatsapp-groups/:groupId/message', AdminGroupEventController.sendMessageToWhatsappGroup);
+router.post(
+    '/:eventId/whatsapp-groups',
+    requirePlanFeature('BULK_WHATSAPP_MESSAGING'),
+    AdminGroupEventController.createEventWhatsappGroup,
+);
+router.post(
+    '/:eventId/whatsapp-groups/:groupId/message',
+    requirePlanFeature('BULK_WHATSAPP_MESSAGING'),
+    AdminGroupEventController.sendMessageToWhatsappGroup,
+);
 
 export default router;

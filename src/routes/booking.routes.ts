@@ -4,6 +4,7 @@ import { createPublicBooking } from '../controllers/public-booking.controller';
 import { createCustomerBooking } from '../controllers/customer-booking.controller';
 import { requireAuth, AuthenticatedRequest } from '../middlewares/requireAuth';
 import { requireActiveCompany } from '../middlewares/requireActiveCompany';
+import { requireCompanyCapability } from '../middlewares/requireCompanyCapability';
 import * as CustomerAppointments from '../services/customer-appointments.service';
 import { Request, Response } from 'express';
 
@@ -22,6 +23,7 @@ router.get('/my', requireAuth, async (req: Request, res: Response) => {
 router.get(
     '/slots',
     requireActiveCompany({ source: 'query', key: 'company_id' }),
+    requireCompanyCapability('RESERVAS_BASE'),
     BookingController.getAvailableSlots,
 );
 
@@ -29,6 +31,7 @@ router.get(
 router.get(
     '/available-dates',
     requireActiveCompany({ source: 'query', key: 'company_id' }),
+    requireCompanyCapability('RESERVAS_BASE'),
     BookingController.getAvailableDates,
 );
 
@@ -37,6 +40,7 @@ router.post(
     '/',
     requireAuth,
     requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requireCompanyCapability('RESERVAS_BASE'),
     BookingController.createBooking,
 );
 
@@ -44,6 +48,7 @@ router.post(
 router.post(
     '/public',
     requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requireCompanyCapability('RESERVAS_BASE'),
     createPublicBooking,
 );
 
@@ -52,6 +57,7 @@ router.post(
     '/customer',
     requireAuth,
     requireActiveCompany({ source: 'body', key: 'company_id' }),
+    requireCompanyCapability('RESERVAS_BASE'),
     createCustomerBooking,
 );
 

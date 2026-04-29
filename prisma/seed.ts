@@ -15,6 +15,7 @@ import {
   VerificationPurpose,
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { seedAndBackfillProductSubscriptions } from "./product-subscriptions.seed";
 
 const prisma = new PrismaClient();
 
@@ -390,6 +391,7 @@ async function main() {
   ];
 
   await prisma.company.createMany({ data: companies, skipDuplicates: true });
+  await seedAndBackfillProductSubscriptions(prisma);
 
   /**
    * 4) THEME CONFIG / COMPANY SETTINGS

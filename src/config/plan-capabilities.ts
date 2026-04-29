@@ -1,5 +1,10 @@
 import { ShopPlan } from '@prisma/client';
 
+// Legacy fixed-plan matrix kept for backwards compatibility.
+// New commercial logic should resolve through `company-entitlements.service.ts`,
+// which uses modular product subscriptions when present and falls back to
+// `Company.plan` until that column can be fully deprecated.
+
 export type PlanFeatureKey =
     | 'ROLES_PERMISSIONS'
     | 'STAFF_AVAILABILITY'
@@ -66,8 +71,8 @@ const BUSINESS_FEATURES: Record<PlanFeatureKey, boolean> = {
     ROLES_PERMISSIONS: true,
     STAFF_AVAILABILITY: true,
     TRANSACTIONAL_BOOKING_NOTIFICATIONS: true,
-    BOOKING_REMINDERS: true,
-    CUSTOMER_IMPORT_EXPORT: true,
+    BOOKING_REMINDERS: false,
+    CUSTOMER_IMPORT_EXPORT: false,
     OPERATIONAL_DASHBOARD: true,
     REVIEW_MANAGEMENT: true,
     REVIEW_ANALYTICS: true,
@@ -131,8 +136,8 @@ export const FEATURE_REQUIRED_PLAN: Record<PlanFeatureKey, ShopPlan> = {
     ROLES_PERMISSIONS: ShopPlan.BUSINESS,
     STAFF_AVAILABILITY: ShopPlan.BUSINESS,
     TRANSACTIONAL_BOOKING_NOTIFICATIONS: ShopPlan.BUSINESS,
-    BOOKING_REMINDERS: ShopPlan.BUSINESS,
-    CUSTOMER_IMPORT_EXPORT: ShopPlan.BUSINESS,
+    BOOKING_REMINDERS: ShopPlan.PRO,
+    CUSTOMER_IMPORT_EXPORT: ShopPlan.PRO,
     OPERATIONAL_DASHBOARD: ShopPlan.BUSINESS,
     REVIEW_MANAGEMENT: ShopPlan.BUSINESS,
     REVIEW_ANALYTICS: ShopPlan.BUSINESS,

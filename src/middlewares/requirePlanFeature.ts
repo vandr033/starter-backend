@@ -5,6 +5,12 @@ import {
     buildFeatureNotAvailableMessage,
     resolveFeatureAccessForCompany,
 } from '../services/plan-enforcement.service';
+import { buildProductAccessForbiddenData } from '../services/product-access-requests.service';
+
+export const requirePlanFeatureDependencies = {
+    resolveFeatureAccessForCompany,
+    buildProductAccessForbiddenData,
+};
 
 export function requirePlanFeature(feature: PlanFeatureKey) {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -18,16 +24,22 @@ export function requirePlanFeature(feature: PlanFeatureKey) {
                 });
             }
 
-            const access = await resolveFeatureAccessForCompany(companyId, feature);
+            const access = await requirePlanFeatureDependencies.resolveFeatureAccessForCompany(companyId, feature);
             if (!access.allowed) {
+                const productAccess = await requirePlanFeatureDependencies.buildProductAccessForbiddenData({
+                    companyId,
+                    feature,
+                });
+
                 return res.status(403).json({
                     code: 403,
                     error: true,
-                    message: buildFeatureNotAvailableMessage(access.requiredPlan),
+                    message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(access.requiredPlan),
                     data: {
                         feature,
                         currentPlan: access.currentPlan,
                         requiredPlan: access.requiredPlan,
+                        ...productAccess,
                     },
                 });
             }
@@ -57,16 +69,22 @@ export function requirePlanFeatures(features: PlanFeatureKey[]) {
             }
 
             for (const feature of features) {
-                const access = await resolveFeatureAccessForCompany(companyId, feature);
+                const access = await requirePlanFeatureDependencies.resolveFeatureAccessForCompany(companyId, feature);
                 if (!access.allowed) {
+                    const productAccess = await requirePlanFeatureDependencies.buildProductAccessForbiddenData({
+                        companyId,
+                        feature,
+                    });
+
                     return res.status(403).json({
                         code: 403,
                         error: true,
-                        message: buildFeatureNotAvailableMessage(access.requiredPlan),
+                        message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(access.requiredPlan),
                         data: {
                             feature,
                             currentPlan: access.currentPlan,
                             requiredPlan: access.requiredPlan,
+                            ...productAccess,
                         },
                     });
                 }

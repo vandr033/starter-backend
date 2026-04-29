@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { CompanyUserRole } from '@prisma/client';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
+import { requireCompanyCapability } from '../middlewares/requireCompanyCapability';
 import { validate } from '../middlewares/validate';
 import * as AdminGroupBookingController from '../controllers/admin-group-booking.controller';
 import {
@@ -226,6 +227,8 @@ router.get(
     requireAuth,
     requireCompanyRole(adminRoles),
     requirePlanFeature('GROUP_CLASSES'),
+    requireCompanyCapability('CLASES_PRO'),
+    requireCompanyCapability('MENSAJERIA_PRO'),
     AdminGroupBookingController.listInstallmentReminders,
 );
 router.post(
@@ -233,6 +236,8 @@ router.post(
     requireAuth,
     requireCompanyRole(adminRoles),
     requirePlanFeature('GROUP_CLASSES'),
+    requireCompanyCapability('CLASES_PRO'),
+    requireCompanyCapability('MENSAJERIA_PRO'),
     AdminGroupBookingController.sendInstallmentReminder,
 );
 router.post(
@@ -240,6 +245,8 @@ router.post(
     requireAuth,
     requireCompanyRole(adminRoles),
     requirePlanFeature('GROUP_CLASSES'),
+    requireCompanyCapability('CLASES_PRO'),
+    requireCompanyCapability('MENSAJERIA_PRO'),
     AdminGroupBookingController.bulkSendInstallmentReminders,
 );
 

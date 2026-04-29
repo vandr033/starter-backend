@@ -9,6 +9,7 @@ import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
 import { MensajeApi } from '../types/MensajeApi';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
+import { companyHasCapability } from './company-entitlements.service';
 import {
     cancelTicketsForClassEnrollment,
     cancelTicketsForEventBooking,
@@ -1307,9 +1308,9 @@ export async function cancelEventBooking(companyId: number, bookingId: number): 
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function joinWaitlist(companyId: number, userId: string, eventId: number): Promise<ServiceResult> {
-    const canUse = await isFeatureEnabledForCompany(companyId, 'GROUP_ADVANCED');
+    const canUse = await companyHasCapability(companyId, 'EVENTOS_PRO');
     if (!canUse) {
-        return { code: 403, error: true, message: 'Waitlist requires Pro plan' };
+        return { code: 403, error: true, message: 'Waitlist is not available for this business' };
     }
 
     const event = await prisma.groupEvent.findFirst({
@@ -1370,9 +1371,9 @@ export async function joinWaitlist(companyId: number, userId: string, eventId: n
 }
 
 export async function leaveWaitlist(companyId: number, userId: string, eventId: number): Promise<ServiceResult> {
-    const canUse = await isFeatureEnabledForCompany(companyId, 'GROUP_ADVANCED');
+    const canUse = await companyHasCapability(companyId, 'EVENTOS_PRO');
     if (!canUse) {
-        return { code: 403, error: true, message: 'Waitlist requires Pro plan' };
+        return { code: 403, error: true, message: 'Waitlist is not available for this business' };
     }
 
     const waitlistEntry = await prisma.groupEventBooking.findFirst({
@@ -1401,7 +1402,7 @@ export async function leaveWaitlist(companyId: number, userId: string, eventId: 
  */
 async function notifyWaitlistOfOpenSpot(companyId: number, eventId: number): Promise<void> {
     try {
-        const canUse = await isFeatureEnabledForCompany(companyId, 'GROUP_ADVANCED');
+        const canUse = await companyHasCapability(companyId, 'EVENTOS_PRO');
         if (!canUse) return;
 
         const event = await prisma.groupEvent.findFirst({
@@ -1670,10 +1671,11 @@ export async function createClassEnrollment(
 ): Promise<ServiceResult> {
     const canUse = await isFeatureEnabledForCompany(companyId, 'GROUP_CLASSES');
     if (!canUse) {
-        return { code: 403, error: true, message: 'Group classes require Pro plan' };
+        return { code: 403, error: true, message: 'Classes are not available for this business' };
     }
 
     const canCustomize = await isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
+    const canUseClassAdvanced = await companyHasCapability(companyId, 'CLASES_PRO');
 
     const result = await prisma.$transaction(async (tx) => {
         await lockClassRow(tx, companyId, input.group_class_id);
@@ -1752,6 +1754,13 @@ export async function createClassEnrollment(
         } else if (gc.pricing_mode === 'WEEKLY_PASS') {
             validUntil = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
         } else if (gc.pricing_mode === 'FULL_COURSE') {
+            if (!canUseClassAdvanced) {
+                return {
+                    code: 403,
+                    error: true,
+                    message: 'Payment plans are not available for this business',
+                } as ServiceResult;
+            }
             if (!gc.recurrence_end_date) {
                 return { code: 400, error: true, message: 'This class does not have an end date configured' } as ServiceResult;
             }

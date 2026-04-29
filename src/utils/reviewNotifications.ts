@@ -3,8 +3,11 @@ import { logger } from '../config/logger';
 import { CompanyUserRole } from '@prisma/client';
 import { sendWhatsappText } from './whatsappSender';
 import { sendGenericEmail } from './sendEmail';
-import { isPlanFeatureEnabled } from '../config/plan-capabilities';
-import type { ShopPlan } from '@prisma/client';
+import { companyHasCapability } from '../services/company-entitlements.service';
+
+export const reviewNotificationDependencies = {
+  companyHasCapability,
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,13 +50,15 @@ function isDuplicate(key: string): boolean {
   return false;
 }
 
-// Periodically clean old entries
-setInterval(() => {
+// Periodically clean old entries without keeping the process alive on its own.
+const sentKeyCleanupTimer = setInterval(() => {
   const cutoff = Date.now() - DEDUP_WINDOW_MS;
   for (const [key, ts] of sentKeys) {
     if (ts < cutoff) sentKeys.delete(key);
   }
 }, 60 * 60 * 1000); // every hour
+
+sentKeyCleanupTimer.unref?.();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -194,16 +199,13 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
   }
 
   try {
-    // Check plan allows review request reminders (umbrella check)
-    const company = await prisma.company.findUnique({
-      where: { id: data.companyId },
-      select: { plan: true },
-    });
-    if (!company || !isPlanFeatureEnabled(company.plan as ShopPlan, 'REVIEW_REQUEST_REMINDERS')) {
+    const canSendReviewRequests = await reviewNotificationDependencies.companyHasCapability(
+      data.companyId,
+      'MENSAJERIA_REVIEW_REQUESTS',
+    );
+    if (!canSendReviewRequests) {
       return { sent: false, reason: 'Feature not available on current plan' };
     }
-
-    const plan = company.plan as ShopPlan;
 
     // Check the booking hasn't been reviewed yet
     const existingReview = await prisma.review.findUnique({
@@ -219,7 +221,7 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
     const locale = data.locale || 'es';
 
     // Try WhatsApp first (if plan allows), then email
-    if (isPlanFeatureEnabled(plan, 'REVIEW_REQUEST_WHATSAPP') && settings.sendWhatsapp && data.customerPhone) {
+    if (settings.sendWhatsapp && data.customerPhone) {
       const fullPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
       if (fullPhone) {
         const text =
@@ -242,7 +244,7 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
       }
     }
 
-    if (isPlanFeatureEnabled(plan, 'REVIEW_REQUEST_EMAIL') && settings.sendEmail && data.customerEmail) {
+    if (settings.sendEmail && data.customerEmail) {
       const subject =
         locale === 'en'
           ? `How was your experience at ${data.companyName}?`

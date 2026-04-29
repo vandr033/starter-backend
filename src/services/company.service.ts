@@ -6,7 +6,12 @@ import {
 import * as CompanyRepo from '../repositories/company.repo';
 import { MensajeApi } from '../types/MensajeApi';
 import { Prisma } from '../prisma/client';
-import { getCompanyCapabilitiesPayload } from '../config/plan-capabilities';
+import { getCompanyEntitlements } from './company-entitlements.service';
+import {
+  buildPublicEntitlementSummary,
+  buildPublicStorefrontVisibility,
+  sanitizePublicThemeConfig,
+} from '../utils/public-storefront';
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const FALLBACK_DEFAULT_LANGUAGE = 'es';
@@ -138,7 +143,7 @@ export const getCompanyPublicPage = async (slug: string) => {
     const companyData = await CompanyRepo.getCompanyPublicPageBySlug(slug);
 
     if (!companyData) {
-      return buildNotFoundResponse('Company', 'Company not found or inactive');
+      return buildNotFoundResponse('Company', 'Company not found');
     }
 
     // Extract company base fields (without relations)
@@ -152,6 +157,21 @@ export const getCompanyPublicPage = async (slug: string) => {
       reviews,
       ...company
     } = companyData;
+
+    const entitlements = await getCompanyEntitlements(company.id);
+    const publicFeatures = buildPublicStorefrontVisibility({
+      entitlements,
+      availability: {
+        availableUntil: company.availableUntil,
+        is_active: company.is_active,
+        deleted_at: company.deleted_at,
+      },
+      isMarketplaceVisible: (company as any).is_marketplace_visible,
+    });
+    const publicEntitlements = buildPublicEntitlementSummary(
+      entitlements,
+      publicFeatures,
+    );
 
     const defaultLanguage =
       config_messages?.find((item: { key: string; value: string }) => item.key === DEFAULT_LANGUAGE_KEY)?.value?.trim().toLowerCase() ||
@@ -193,7 +213,7 @@ export const getCompanyPublicPage = async (slug: string) => {
       };
 
     // Apply theme defaults if no config exists
-    const theme = theme_config
+    const rawTheme = theme_config
       ? {
         brand_color: theme_config.brand_color,
         page_background_color: theme_config.page_background_color,
@@ -210,15 +230,21 @@ export const getCompanyPublicPage = async (slug: string) => {
         announcement_banners: (theme_config as any).announcement_banners ?? null,
       }
       : DEFAULT_THEME;
+    const theme = sanitizePublicThemeConfig(rawTheme, publicFeatures);
+
+    const exposeReservasContent =
+      publicFeatures.storefrontEnabled && publicFeatures.servicesVisible;
 
     const responseData = {
       company: {
         ...company,
-        capabilities: getCompanyCapabilitiesPayload(company.plan),
+        capabilities: entitlements,
+        entitlements: publicEntitlements,
+        public_features: publicFeatures,
       },
-      categories,
-      services,
-      staff: staff_profiles,
+      categories: exposeReservasContent ? categories : [],
+      services: exposeReservasContent ? services : [],
+      staff: exposeReservasContent ? staff_profiles : [],
       settings,
       theme,
       reviewStats: {

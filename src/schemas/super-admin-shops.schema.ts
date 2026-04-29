@@ -2,6 +2,33 @@ import { z } from 'zod';
 
 const shopPlanSchema = z.enum(['STARTER', 'BUSINESS', 'PRO']);
 const billingCycleSchema = z.enum(['MONTHLY', 'YEARLY']);
+const productCodeSchema = z.enum([
+  'RESERVAS',
+  'EVENTOS',
+  'CLASES',
+  'PERSONALIZACION',
+  'CRM',
+  'MENSAJERIA',
+  'METRICAS',
+  'MARKETPLACE',
+]);
+const productTierCodeSchema = z.enum([
+  'RESERVAS_BASE',
+  'RESERVAS_PRO',
+  'EVENTOS_BASE',
+  'EVENTOS_PRO',
+  'CLASES_BASE',
+  'CLASES_PRO',
+  'PERSONALIZACION_BASE',
+  'PERSONALIZACION_PLUS',
+  'CRM_BASE',
+  'CRM_PRO',
+  'MENSAJERIA_BASE',
+  'MENSAJERIA_PRO',
+  'METRICAS_BASE',
+  'METRICAS_PRO',
+  'MARKETPLACE_PLUS',
+]);
 
 const optionalTextSchema = z
   .string()
@@ -28,6 +55,113 @@ const currencySchema = z
   .trim()
   .min(1, 'currency is required')
   .max(3, 'currency must be at most 3 characters');
+
+const activeProductSchema = z.object({
+  productCode: productCodeSchema,
+  tierCode: productTierCodeSchema,
+  billingCycle: billingCycleSchema.optional().nullable(),
+  availableUntil: availableUntilSchema.optional().nullable(),
+  pricePaid: z.number().min(0).nullable().optional(),
+  currency: currencySchema.optional().nullable(),
+});
+
+const requestedProductSchema = z.object({
+  productCode: productCodeSchema,
+  tierCode: productTierCodeSchema,
+});
+
+function tierBelongsToProduct(
+  productCode: z.infer<typeof productCodeSchema>,
+  tierCode: z.infer<typeof productTierCodeSchema>,
+): boolean {
+  if (productCode === 'RESERVAS') return tierCode === 'RESERVAS_BASE' || tierCode === 'RESERVAS_PRO';
+  if (productCode === 'EVENTOS') return tierCode === 'EVENTOS_BASE' || tierCode === 'EVENTOS_PRO';
+  if (productCode === 'CLASES') return tierCode === 'CLASES_BASE' || tierCode === 'CLASES_PRO';
+  if (productCode === 'PERSONALIZACION') {
+    return tierCode === 'PERSONALIZACION_BASE' || tierCode === 'PERSONALIZACION_PLUS';
+  }
+  if (productCode === 'CRM') return tierCode === 'CRM_BASE' || tierCode === 'CRM_PRO';
+  if (productCode === 'MENSAJERIA') {
+    return tierCode === 'MENSAJERIA_BASE' || tierCode === 'MENSAJERIA_PRO';
+  }
+  if (productCode === 'METRICAS') return tierCode === 'METRICAS_BASE' || tierCode === 'METRICAS_PRO';
+  if (productCode === 'MARKETPLACE') return tierCode === 'MARKETPLACE_PLUS';
+  return false;
+}
+
+function isCoreProduct(productCode: z.infer<typeof productCodeSchema>): boolean {
+  return productCode === 'RESERVAS' || productCode === 'EVENTOS' || productCode === 'CLASES';
+}
+
+function validateProductConfiguration(
+  data: {
+    activeProducts?: Array<z.infer<typeof activeProductSchema>>;
+    requestedProducts?: Array<z.infer<typeof requestedProductSchema>>;
+  },
+  ctx: z.RefinementCtx,
+) {
+  const activeProducts = data.activeProducts ?? [];
+  const requestedProducts = data.requestedProducts ?? [];
+
+  const seenActive = new Set<string>();
+  for (const [index, product] of activeProducts.entries()) {
+    if (!tierBelongsToProduct(product.productCode, product.tierCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['activeProducts', index, 'tierCode'],
+        message: 'product tier must belong to selected product',
+      });
+    }
+
+    if (seenActive.has(product.productCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['activeProducts', index, 'productCode'],
+        message: 'active products cannot be duplicated',
+      });
+    }
+    seenActive.add(product.productCode);
+  }
+
+  const seenRequested = new Set<string>();
+  for (const [index, product] of requestedProducts.entries()) {
+    if (!tierBelongsToProduct(product.productCode, product.tierCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['requestedProducts', index, 'tierCode'],
+        message: 'product tier must belong to selected product',
+      });
+    }
+
+    if (seenRequested.has(product.productCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['requestedProducts', index, 'productCode'],
+        message: 'requested products cannot be duplicated',
+      });
+    }
+    seenRequested.add(product.productCode);
+
+    if (seenActive.has(product.productCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['requestedProducts', index, 'productCode'],
+        message: 'a product cannot be both active and requested',
+      });
+    }
+  }
+
+  if (data.activeProducts !== undefined) {
+    const activeCoreCount = activeProducts.filter((product) => isCoreProduct(product.productCode)).length;
+    if (activeCoreCount === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['activeProducts'],
+        message: 'at least one core product is required',
+      });
+    }
+  }
+}
 
 const ownerSchema = z
   .object({
@@ -87,13 +221,17 @@ export const createSuperAdminShopSchema = z
     latitude: optionalCoordinateSchema,
     longitude: optionalCoordinateSchema,
     company_type_id: z.number().int().positive(),
-    plan: shopPlanSchema,
+    plan: shopPlanSchema.optional(),
     billingCycle: billingCycleSchema,
     availableUntil: availableUntilSchema,
     pricePaid: z.number().min(0).nullable().optional(),
     isMarketplaceVisible: z.boolean(),
+    activeProducts: z.array(activeProductSchema).optional(),
+    requestedProducts: z.array(requestedProductSchema).optional(),
+    note: z.string().trim().max(500).optional(),
     owner: ownerSchema,
   })
+  .superRefine((data, ctx) => validateProductConfiguration(data, ctx))
   .strict();
 
 export const updateSuperAdminShopSchema = z
@@ -118,8 +256,11 @@ export const updateSuperAdminShopSchema = z
     availableUntil: availableUntilSchema.optional(),
     pricePaid: z.number().min(0).nullable().optional(),
     isMarketplaceVisible: z.boolean().optional(),
+    activeProducts: z.array(activeProductSchema).optional(),
+    requestedProducts: z.array(requestedProductSchema).optional(),
     note: z.string().trim().max(500).optional(),
   })
+  .superRefine((data, ctx) => validateProductConfiguration(data, ctx))
   .strict()
   .refine((data) => Object.keys(data).length > 0, 'At least one field is required');
 

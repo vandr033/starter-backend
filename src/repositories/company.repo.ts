@@ -411,8 +411,11 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
 }
 
 export const getCompanyPublicPageBySlug = async (slug: string) => {
-  return await prisma.company.findUnique({
-    where: { slug, is_active: true },
+  return await prisma.company.findFirst({
+    where: {
+      slug,
+      deleted_at: null,
+    },
     include: {
       config_messages: {
         where: { key: 'default_language' },

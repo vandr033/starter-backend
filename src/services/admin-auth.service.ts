@@ -6,7 +6,10 @@ import { VerificationChannel, VerificationPurpose } from '../types/verification-
 import bcrypt from 'bcryptjs';
 import { generateNumericCode } from '../utils/otp';
 import { sendEmailCode } from '../utils/sendEmail';
-import { getCompanyCapabilitiesPayload, type CompanyCapabilitiesPayload } from '../config/plan-capabilities';
+import {
+    getCompanyEntitlements,
+} from './company-entitlements.service';
+import type { CompanyEntitlementPayload } from '../config/product-entitlements';
 
 export type AdminCompanyUserSummary = {
     id: number;
@@ -19,7 +22,7 @@ export type AdminCompanyUserSummary = {
         slug: string;
         currency: string;
         plan: ShopPlan;
-        capabilities: CompanyCapabilitiesPayload;
+        capabilities: CompanyEntitlementPayload;
         availableUntil: Date;
         default_language: string;
     };
@@ -84,7 +87,9 @@ async function getAdminCompanyUsers(userId: string) {
     });
 }
 
-function toAdminCompanyUserSummary(companyUser: Awaited<ReturnType<typeof getAdminCompanyUsers>>[number]): AdminCompanyUserSummary {
+async function toAdminCompanyUserSummary(
+    companyUser: Awaited<ReturnType<typeof getAdminCompanyUsers>>[number],
+): Promise<AdminCompanyUserSummary> {
     const defaultLanguage =
         companyUser.company?.config_messages?.[0]?.value?.trim().toLowerCase() || FALLBACK_DEFAULT_LANGUAGE;
 
@@ -100,7 +105,7 @@ function toAdminCompanyUserSummary(companyUser: Awaited<ReturnType<typeof getAdm
                 slug: companyUser.company.slug,
                 currency: companyUser.company.currency,
                 plan: companyUser.company.plan,
-                capabilities: getCompanyCapabilitiesPayload(companyUser.company.plan),
+                capabilities: await getCompanyEntitlements(companyUser.company.id),
                 availableUntil: companyUser.company.availableUntil,
                 default_language: defaultLanguage,
             }
@@ -240,7 +245,9 @@ export async function signInAdmin(
         }
 
         // 4. Resolve memberships (multi-shop support)
-        const companyUsers = (await getAdminCompanyUsers(session.user.id)).map(toAdminCompanyUserSummary);
+        const companyUsers = await Promise.all(
+            (await getAdminCompanyUsers(session.user.id)).map(toAdminCompanyUserSummary),
+        );
 
         if (companyUsers.length === 0 && !user.is_super_admin) {
             return {
@@ -318,7 +325,9 @@ export async function getAdminSessionData(
         }
 
         // Resolve memberships (multi-shop support)
-        const companyUsers = (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary);
+        const companyUsers = await Promise.all(
+            (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary),
+        );
         const activeCompanyUser = resolveActiveCompanyUser(companyUsers, preferredCompanyId);
 
         if (companyUsers.length === 0 && !user.is_super_admin) {
@@ -354,7 +363,9 @@ export async function getAdminSessionData(
 
 export async function switchActiveShop(userId: string, companyId: number): Promise<MensajeApi> {
     try {
-        const companyUsers = (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary);
+        const companyUsers = await Promise.all(
+            (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary),
+        );
 
         const selected = companyUsers.find((companyUser) => companyUser.company_id === companyId);
         if (!selected) {

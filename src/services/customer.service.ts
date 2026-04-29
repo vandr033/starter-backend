@@ -42,12 +42,21 @@ interface ImportSummary {
 interface SendMassCustomerMessageInput {
     message: string;
     search?: string;
+    segment?: CustomerSegmentKey;
 }
 
 interface CustomerExportOptions {
     search?: string;
+    segment?: CustomerSegmentKey;
     requestedByUserId?: string;
 }
+
+export type CustomerSegmentKey =
+    | 'ALL'
+    | 'RETURNING'
+    | 'INACTIVE_90_DAYS'
+    | 'UPCOMING'
+    | 'HIGH_VALUE';
 
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const WHATSAPP_MIN_INTERVAL_MS = 350;
@@ -78,6 +87,52 @@ function buildFullPhone(prefix?: string | null, phone?: string | null): string |
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function normalizeCustomerSegment(value?: string | null): CustomerSegmentKey {
+    if (value === 'RETURNING') return 'RETURNING';
+    if (value === 'INACTIVE_90_DAYS') return 'INACTIVE_90_DAYS';
+    if (value === 'UPCOMING') return 'UPCOMING';
+    if (value === 'HIGH_VALUE') return 'HIGH_VALUE';
+    return 'ALL';
+}
+
+function isCustomerInactiveFor90Days(customer: CustomerWithStats): boolean {
+    if (customer.nextBookingAt) return false;
+    if (!customer.lastBookingAt) return true;
+
+    const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
+    return customer.lastBookingAt.getTime() < ninetyDaysAgo;
+}
+
+function matchesCustomerSegment(
+    customer: CustomerWithStats,
+    segment: CustomerSegmentKey,
+): boolean {
+    switch (segment) {
+        case 'RETURNING':
+            return customer.completedBookings >= 2;
+        case 'INACTIVE_90_DAYS':
+            return isCustomerInactiveFor90Days(customer);
+        case 'UPCOMING':
+            return Boolean(customer.nextBookingAt);
+        case 'HIGH_VALUE':
+            return customer.totalSpentCents >= 50_000;
+        case 'ALL':
+        default:
+            return true;
+    }
+}
+
+function applyCustomerSegment(
+    customers: CustomerWithStats[],
+    segment: CustomerSegmentKey,
+): CustomerWithStats[] {
+    if (segment === 'ALL') {
+        return customers;
+    }
+
+    return customers.filter((customer) => matchesCustomerSegment(customer, segment));
 }
 
 function getCellValue(row: Record<string, any>, keys: string[]): string {
@@ -193,6 +248,7 @@ async function triggerCustomerExportWebhook(params: {
     companyName: string;
     requestedByUserId?: string;
     search?: string;
+    segment?: CustomerSegmentKey;
     customers: CustomerWithStats[];
 }) {
     if (!N8N_CUSTOMER_EXPORT_WEBHOOK_URL) {
@@ -209,6 +265,7 @@ async function triggerCustomerExportWebhook(params: {
         },
         filters: {
             search: params.search || null,
+            segment: params.segment || null,
         },
         exportedAt: new Date().toISOString(),
         customers: params.customers.map((customer) => ({
@@ -261,8 +318,13 @@ async function ensureUniqueTempEmail(basePhone: string): Promise<string> {
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export async function listCustomers(companyId: number, search?: string) {
-    return getCustomersWithBookingStats(companyId, search);
+export async function listCustomers(
+    companyId: number,
+    search?: string,
+    segment: CustomerSegmentKey = 'ALL',
+) {
+    const customers = await getCustomersWithBookingStats(companyId, search);
+    return applyCustomerSegment(customers, segment);
 }
 
 export async function listInterestCaptureLeads(companyId: number) {
@@ -497,7 +559,10 @@ export async function exportCustomers(
         };
     }
 
-    const customers = await getCustomersWithBookingStats(companyId, options.search || undefined);
+    const customers = applyCustomerSegment(
+        await getCustomersWithBookingStats(companyId, options.search || undefined),
+        normalizeCustomerSegment(options.segment),
+    );
     const csv = buildCustomersCsv(customers);
 
     try {
@@ -506,6 +571,7 @@ export async function exportCustomers(
             companyName: company.name,
             requestedByUserId: options.requestedByUserId,
             search: options.search,
+            segment: normalizeCustomerSegment(options.segment),
             customers,
         });
 
@@ -546,6 +612,7 @@ export async function sendMassCustomerMessage(
 ) {
     const message = (payload.message || '').trim();
     const search = (payload.search || '').trim();
+    const segment = normalizeCustomerSegment(payload.segment);
 
     if (!message) {
         return {
@@ -587,7 +654,10 @@ export async function sendMassCustomerMessage(
     });
     const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
 
-    const customers = await getCustomersWithBookingStats(companyId, search || undefined);
+    const customers = applyCustomerSegment(
+        await getCustomersWithBookingStats(companyId, search || undefined),
+        segment,
+    );
     const seenWhatsappTargets = new Set<string>();
     const seenEmailTargets = new Set<string>();
 
@@ -662,6 +732,7 @@ export async function sendMassCustomerMessage(
             companyName: company.name,
             locale,
             search: search || null,
+            segment,
             totalCustomers: customers.length,
             totalSent,
             whatsappSent,

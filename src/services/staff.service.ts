@@ -11,8 +11,8 @@ import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availabi
 import {
     buildStaffLimitReachedMessage,
     getStaffSeatUsageForCompany,
+    isFeatureEnabledForCompany,
 } from './plan-enforcement.service';
-import { isPlanFeatureEnabled } from '../config/plan-capabilities';
 
 interface StaffResult extends MensajeApi {
     data?: any;
@@ -308,6 +308,7 @@ export async function createStaff(
         const cleanPhonePrefix = (input.phone_prefix || '591').replace(/\D/g, '') || '591';
         const role = input.role ?? CompanyUserRole.STAFF;
         const seatUsage = await getStaffSeatUsageForCompany(companyId);
+        const canUseRolesPermissions = await isFeatureEnabledForCompany(companyId, 'ROLES_PERMISSIONS');
 
         if (!normalizedEmail) {
             return {
@@ -329,11 +330,7 @@ export async function createStaff(
             };
         }
 
-        if (
-            seatUsage.currentPlan &&
-            !isPlanFeatureEnabled(seatUsage.currentPlan, 'ROLES_PERMISSIONS') &&
-            role !== CompanyUserRole.STAFF
-        ) {
+        if (!canUseRolesPermissions && role !== CompanyUserRole.STAFF) {
             return {
                 code: 403,
                 message: 'Available on the Business plan',

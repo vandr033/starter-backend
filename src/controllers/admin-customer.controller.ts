@@ -1,13 +1,38 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import * as CustomerService from '../services/customer.service';
+import { companyHasCapability } from '../services/company-entitlements.service';
+
+function requiresAdvancedCustomerFilters(segment?: string): boolean {
+    return Boolean(segment && segment !== 'ALL');
+}
 
 export async function listCustomers(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
         const search = req.query.search as string | undefined;
+        const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
 
-        const customers = await CustomerService.listCustomers(companyId, search || undefined);
+        if (requiresAdvancedCustomerFilters(segment)) {
+            const hasCrmPro = await companyHasCapability(companyId, 'CRM_PRO');
+            if (!hasCrmPro) {
+                return res.status(403).json({
+                    code: 403,
+                    error: true,
+                    reason: 'PRODUCT_NOT_ACTIVE',
+                    message: 'CRM Pro is required for advanced customer filters',
+                    data: {
+                        capability: 'CRM_PRO',
+                    },
+                });
+            }
+        }
+
+        const customers = await CustomerService.listCustomers(
+            companyId,
+            search || undefined,
+            segment,
+        );
 
         return res.json({ data: customers });
     } catch (error: any) {
@@ -72,10 +97,12 @@ export async function exportCustomers(req: AuthenticatedRequest, res: Response) 
     try {
         const companyId = (req as any).companyID;
         const search = req.query.search as string | undefined;
+        const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
         const requestedByUserId = req.authUser?.id;
 
         const result = await CustomerService.exportCustomers(companyId, {
             search: search || undefined,
+            segment,
             requestedByUserId,
         });
 
@@ -140,7 +167,11 @@ export async function downloadImportTemplate(req: AuthenticatedRequest, res: Res
 export async function sendMassMessage(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
-        const { message, search } = req.body as { message?: string; search?: string };
+        const { message, search, segment } = req.body as {
+            message?: string;
+            search?: string;
+            segment?: string;
+        };
 
         if (!companyId) {
             return res.status(400).json({
@@ -153,6 +184,7 @@ export async function sendMassMessage(req: AuthenticatedRequest, res: Response) 
         const result = await CustomerService.sendMassCustomerMessage(companyId, {
             message: message || '',
             search: search || '',
+            segment: CustomerService.normalizeCustomerSegment(segment),
         });
 
         return res.status(result.code).json(result);
