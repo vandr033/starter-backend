@@ -1,5 +1,6 @@
 import { logger } from "../config/logger";
 import { Prisma, prisma } from "../prisma/client";
+import { BookingStatus } from "@prisma/client";
 import { buildMarketplaceVisibilityWhere } from "./marketplace-visibility";
 
 // ---------------------------------------------------------------------------
@@ -411,7 +412,7 @@ export const getCompletedBookingsWithoutReview = async (userId: string) => {
   return prisma.booking.findMany({
     where: {
       customer: { user_id: userId },
-      status: 'COMPLETED',
+      status: { in: [BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.COMPLETED] },
       deleted_at: null,
       booking_review: null,
     },
@@ -422,11 +423,14 @@ export const getCompletedBookingsWithoutReview = async (userId: string) => {
       start_at: true,
       end_at: true,
       status: true,
+      notes: true,
+      updated_at: true,
       company: { select: { id: true, name: true, slug: true } },
       staff: { select: { id: true, display_name: true } },
       booking_services: {
         select: { service: { select: { id: true, name: true } } },
       },
+      booking_review: { select: { id: true } },
     },
     orderBy: { end_at: 'desc' },
   });

@@ -5,8 +5,61 @@ import { MensajeApi } from '../types/MensajeApi';
 import type { CreateReviewInput } from '../schemas/review.schema';
 import { notifyNewReview } from '../utils/reviewNotifications';
 import { prisma } from '../prisma/client';
+import { BookingStatus } from '@prisma/client';
+import { getBookingLifecycleStatus } from '../utils/booking-status';
 
-const REVIEW_DELAY_MS = 2 * 60 * 60 * 1000; // 2 hours
+const REVIEW_DELAY_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+type ReviewEligibilityBooking = {
+  status: BookingStatus;
+  notes?: string | null;
+  end_at: Date;
+  updated_at: Date;
+  booking_review?: { id: number } | null;
+};
+
+function resolveReviewEligibility(params: {
+  booking: ReviewEligibilityBooking;
+  nowMs?: number;
+}): { eligible: boolean; reason?: string } {
+  const nowMs = params.nowMs ?? Date.now();
+  const booking = params.booking;
+  const lifecycleStatus = getBookingLifecycleStatus(booking.status, booking.notes);
+
+  if (lifecycleStatus === BookingStatus.CANCELLED) {
+    return { eligible: false, reason: 'Cancelled bookings cannot be reviewed' };
+  }
+
+  if (lifecycleStatus === BookingStatus.NO_SHOW) {
+    return { eligible: false, reason: 'No-show bookings cannot be reviewed' };
+  }
+
+  if (booking.booking_review) {
+    return { eligible: false, reason: 'This booking has already been reviewed' };
+  }
+
+  if (lifecycleStatus === BookingStatus.COMPLETED) {
+    const completedAt = new Date(booking.updated_at).getTime();
+    if (nowMs < completedAt + REVIEW_DELAY_MS) {
+      return {
+        eligible: false,
+        reason: 'Reviews can be submitted 12 hours after the appointment is marked as completed',
+      };
+    }
+
+    return { eligible: true };
+  }
+
+  const bookingEnd = new Date(booking.end_at).getTime();
+  if (nowMs < bookingEnd + REVIEW_DELAY_MS) {
+    return {
+      eligible: false,
+      reason: 'Reviews can be submitted 12 hours after the appointment ends',
+    };
+  }
+
+  return { eligible: true };
+}
 
 // ---------------------------------------------------------------------------
 // canUserReviewBooking
@@ -28,11 +81,6 @@ export const canUserReviewBooking = async (
     return { eligible: false, reason: 'Booking not found' };
   }
 
-  // Must be COMPLETED
-  if (booking.status !== 'COMPLETED') {
-    return { eligible: false, reason: 'Booking is not completed' };
-  }
-
   // Must not be soft-deleted
   if (booking.deleted_at) {
     return { eligible: false, reason: 'Booking not found' };
@@ -49,15 +97,9 @@ export const canUserReviewBooking = async (
     return { eligible: false, reason: 'Company members cannot review their own company' };
   }
 
-  // 2-hour delay from booking end time
-  const bookingEnd = new Date(booking.end_at).getTime();
-  if (Date.now() < bookingEnd + REVIEW_DELAY_MS) {
-    return { eligible: false, reason: 'Reviews can be submitted 2 hours after the appointment ends' };
-  }
-
-  // Already reviewed
-  if (booking.booking_review) {
-    return { eligible: false, reason: 'This booking has already been reviewed' };
+  const timingEligibility = resolveReviewEligibility({ booking });
+  if (!timingEligibility.eligible) {
+    return { eligible: false, reason: timingEligibility.reason };
   }
 
   return { eligible: true, booking };
@@ -130,10 +172,9 @@ export const getEligibleBookingsPendingReview = async (
   try {
     const bookings = await reviewsRepo.getCompletedBookingsWithoutReview(userId);
     const now = Date.now();
-    const eligible = bookings.filter((b) => {
-      const endMs = new Date(b.end_at).getTime();
-      return now >= endMs + REVIEW_DELAY_MS;
-    });
+    const eligible = bookings.filter((b) =>
+      resolveReviewEligibility({ booking: b, nowMs: now }).eligible
+    );
     return buildSuccessResponse('Eligible bookings', eligible);
   } catch (error) {
     return buildServiceErrorResponse('review', 'get eligible bookings', error);

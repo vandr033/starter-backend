@@ -4,6 +4,8 @@ import { BookingStatus } from "@prisma/client";
 import { notifyBookingCancelled, notifyBookingUpdated } from "../utils/bookingNotifications";
 import { getBookingLifecycleStatus, isTerminalBookingStatus } from "../utils/booking-status";
 
+const REVIEW_DELAY_MS = 12 * 60 * 60 * 1000;
+
 const bookingInclude = {
     company: {
         select: {
@@ -82,6 +84,15 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
                 lifecycleStatus === BookingStatus.COMPLETED ||
                 lifecycleStatus === BookingStatus.NO_SHOW ||
                 startAt < now;
+            const eligibleReviewAt =
+                lifecycleStatus === BookingStatus.COMPLETED
+                    ? new Date(b.updated_at).getTime() + REVIEW_DELAY_MS
+                    : new Date(b.end_at).getTime() + REVIEW_DELAY_MS;
+            const canReview =
+                !hasReview &&
+                lifecycleStatus !== BookingStatus.CANCELLED &&
+                lifecycleStatus !== BookingStatus.NO_SHOW &&
+                Date.now() >= eligibleReviewAt;
 
             const canCancel =
                 !isPast &&
@@ -122,7 +133,7 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
                 cancelLimitMinutes: cancelLimit,
                 rescheduleLimitMinutes: rescheduleLimit,
                 hasReview,
-                canReview: lifecycleStatus === BookingStatus.COMPLETED && !hasReview,
+                canReview,
             };
         });
 
