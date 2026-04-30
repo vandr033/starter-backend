@@ -261,6 +261,7 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
 export async function createBooking(req: AuthenticatedRequest, res: Response) {
     const companyId = (req as any).companyID;
     const userId = req.authUser?.id;
+    const companyUser = (req as any).companyUser as { role?: CompanyUserRole } | undefined;
 
     if (!companyId) {
         mensaje = {
@@ -308,6 +309,33 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    if (companyUser?.role === CompanyUserRole.STAFF) {
+        const staffProfile = await prisma.staffProfile.findFirst({
+            where: {
+                company_id: companyId,
+                user_id: userId,
+                deleted_at: null,
+            },
+            select: { id: true },
+        });
+
+        if (!staffProfile) {
+            return res.status(403).json({
+                code: 403,
+                message: 'Staff profile not found in this company',
+                error: true,
+            });
+        }
+
+        if (parsedStaffId !== staffProfile.id) {
+            return res.status(403).json({
+                code: 403,
+                message: 'Staff can only create bookings for themselves',
+                error: true,
+            });
+        }
+    }
+
     // Extract customer info if provided
     let client_name, client_email, client_phone;
     if (customer) {
@@ -351,6 +379,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
 export async function createRecurringBookings(req: AuthenticatedRequest, res: Response) {
     const companyId = (req as any).companyID;
     const userId = req.authUser?.id;
+    const companyUser = (req as any).companyUser as { role?: CompanyUserRole } | undefined;
 
     if (!companyId) {
         mensaje = {
@@ -380,6 +409,33 @@ export async function createRecurringBookings(req: AuthenticatedRequest, res: Re
             message: 'Invalid staff_id format',
             error: true,
         });
+    }
+
+    if (companyUser?.role === CompanyUserRole.STAFF) {
+        const staffProfile = await prisma.staffProfile.findFirst({
+            where: {
+                company_id: companyId,
+                user_id: userId,
+                deleted_at: null,
+            },
+            select: { id: true },
+        });
+
+        if (!staffProfile) {
+            return res.status(403).json({
+                code: 403,
+                message: 'Staff profile not found in this company',
+                error: true,
+            });
+        }
+
+        if (parsedStaffId !== staffProfile.id) {
+            return res.status(403).json({
+                code: 403,
+                message: 'Staff can only create bookings for themselves',
+                error: true,
+            });
+        }
     }
 
     if (!Array.isArray(sessions) || sessions.length === 0) {

@@ -26,6 +26,20 @@ interface GetSlotsResult extends MensajeApi {
     data?: TimeSlot[];
 }
 
+function getSlotSearchDurationMinutes(services: Array<{
+    duration_minutes: number;
+    is_multi_session: boolean;
+    session_duration_minutes: number | null;
+}>): number {
+    // Multi-session services are booked one session at a time in checkout,
+    // so slot search must use the per-session duration for that flow.
+    if (services.length === 1 && services[0]?.is_multi_session) {
+        return services[0].session_duration_minutes || services[0].duration_minutes;
+    }
+
+    return services.reduce((sum, service) => sum + service.duration_minutes, 0);
+}
+
 /**
  * Validate that the chosen payment method is allowed by company settings.
  * Returns an error message if not allowed, or null if OK.
@@ -274,7 +288,7 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
             };
         }
 
-        const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
+        const totalDuration = getSlotSearchDurationMinutes(services);
 
         // 3. Get company settings
         const settings = await BookingRepo.getCompanySettings(company_id);

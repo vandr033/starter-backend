@@ -1,6 +1,7 @@
 import {
     BillingCycle,
     CompanyProductSubscriptionStatus,
+    Prisma,
     type CompanyType,
 } from '@prisma/client';
 import { prisma } from '../prisma/client';
@@ -56,10 +57,40 @@ function buildSpanishSignupError(message: string) {
     };
 }
 
-async function getActiveCompanyTypeByKey(key: string): Promise<Pick<CompanyType, 'id' | 'key' | 'name' | 'name_i18n'> | null> {
-    return prisma.companyType.findFirst({
+function normalizeCompanyTypeToken(value: string): string {
+    return value
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function readCompanyTypeTranslations(
+    input: Prisma.JsonValue | null,
+): string[] {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        return [];
+    }
+
+    return Object.values(input as Record<string, unknown>)
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+}
+
+async function getActiveCompanyType(
+    rawInput: string,
+): Promise<Pick<CompanyType, 'id' | 'key' | 'name' | 'name_i18n'> | null> {
+    const normalizedInput = rawInput.trim();
+    if (!normalizedInput) {
+        return null;
+    }
+
+    const directMatch = await prisma.companyType.findFirst({
         where: {
-            key,
+            key: normalizedInput,
             is_active: true,
         },
         select: {
@@ -69,6 +100,39 @@ async function getActiveCompanyTypeByKey(key: string): Promise<Pick<CompanyType,
             name_i18n: true,
         },
     });
+
+    if (directMatch) {
+        return directMatch;
+    }
+
+    const activeTypes = await prisma.companyType.findMany({
+        where: { is_active: true },
+        select: {
+            id: true,
+            key: true,
+            name: true,
+            name_i18n: true,
+        },
+    });
+
+    const comparableInput = normalizeCompanyTypeToken(normalizedInput);
+    const numericId = Number.parseInt(normalizedInput, 10);
+
+    return (
+        activeTypes.find((type) => {
+            if (Number.isInteger(numericId) && type.id === numericId) {
+                return true;
+            }
+
+            const comparableValues = [
+                type.key,
+                type.name,
+                ...readCompanyTypeTranslations(type.name_i18n),
+            ].map(normalizeCompanyTypeToken);
+
+            return comparableValues.includes(comparableInput);
+        }) ?? null
+    );
 }
 
 async function createOwnerUser(params: {
@@ -210,7 +274,7 @@ export async function signUpBusiness(
         throw buildSpanishSignupError('No pudimos generar un slug válido para tu negocio.');
     }
 
-    const companyType = await getActiveCompanyTypeByKey(normalizedBusinessType);
+    const companyType = await getActiveCompanyType(normalizedBusinessType);
     if (!companyType) {
         throw buildSpanishSignupError('Elegí un tipo de negocio válido.');
     }

@@ -45,6 +45,9 @@ interface BookingNotificationData {
     customerPhonePrefix?: string | null;
     customerName?: string | null;
     companyName: string;
+    companyGoogleMapsUrl?: string | null;
+    companyLatitude?: number | null;
+    companyLongitude?: number | null;
     staffName: string;
     serviceNames: string[];
     startAt: Date;
@@ -123,18 +126,24 @@ function formatTime(date: Date, locale: SupportedLocale = "es", timeZone?: strin
 
 async function withCompanyTimeZone<T extends BookingNotificationData>(data: T): Promise<T> {
     const [company, branding] = await Promise.all([
-        data.timeZone
-            ? Promise.resolve(null)
-            : prisma.company.findUnique({
-                where: { id: data.companyId },
-                select: { timezone: true },
-            }),
+        prisma.company.findUnique({
+            where: { id: data.companyId },
+            select: {
+                timezone: true,
+                google_maps_url: true,
+                latitude: true,
+                longitude: true,
+            },
+        }),
         getCompanyNotificationBranding(data.companyId),
     ]);
 
     return {
         ...data,
         timeZone: data.timeZone || company?.timezone || "UTC",
+        companyGoogleMapsUrl: data.companyGoogleMapsUrl ?? company?.google_maps_url ?? null,
+        companyLatitude: data.companyLatitude ?? company?.latitude ?? null,
+        companyLongitude: data.companyLongitude ?? company?.longitude ?? null,
         branding: mergeBranding(branding, {
             ...data.branding,
             companyName: data.companyName,
@@ -156,6 +165,28 @@ function buildFullPhone(prefix?: string | null, phone?: string | null): string |
 function normalizeEmail(email?: string | null): string | null {
     const cleanEmail = (email || "").trim().toLowerCase();
     return cleanEmail || null;
+}
+
+function getCompanyDirectionsUrl(data: BookingNotificationData): string | null {
+    const latitude = Number(data.companyLatitude);
+    const longitude = Number(data.companyLongitude);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${latitude},${longitude}`)}`;
+    }
+
+    const mapsUrl = data.companyGoogleMapsUrl?.trim();
+    return mapsUrl || null;
+}
+
+function buildMapsLine(data: BookingNotificationData, label = "Mapa"): string | null {
+    const directionsUrl = getCompanyDirectionsUrl(data);
+    return directionsUrl ? `🗺️ ${label}: ${directionsUrl}` : null;
+}
+
+function buildLocationHtml(data: BookingNotificationData, label: string, linkLabel: string): string {
+    const directionsUrl = getCompanyDirectionsUrl(data);
+    if (!directionsUrl) return "";
+    return `<p><strong>${label}:</strong> <a href="${escapeHtml(directionsUrl)}">${escapeHtml(linkLabel)}</a></p>`;
 }
 
 function getManageBookingUrl(bookingId: number): string {
@@ -290,6 +321,7 @@ function buildInternalWhatsappText(
     const manageUrl = getManageBookingUrl(data.bookingId);
     const customerPhone =
         buildFullPhone(data.customerPhonePrefix, data.customerPhone) || "No disponible";
+    const mapsLine = buildMapsLine(data);
 
     const intro =
         recipientRole === "staff"
@@ -307,6 +339,7 @@ function buildInternalWhatsappText(
         `Fecha: ${formatDate(data.startAt, "es", data.timeZone)}`,
         `Hora: ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
         `Total: ${formatPrice(data.totalPriceCents)} Bs`,
+        ...(mapsLine ? [mapsLine] : []),
         ``,
         `Gestionar reserva: ${manageUrl}`,
     ].join("\n");
@@ -317,6 +350,7 @@ function buildPendingManagementWhatsappText(data: BookingNotificationData): stri
     const manageUrl = getManageBookingUrl(data.bookingId);
     const customerPhone =
         buildFullPhone(data.customerPhonePrefix, data.customerPhone) || "No disponible";
+    const mapsLine = buildMapsLine(data);
 
     return [
         "⏳ Nueva reserva pendiente de confirmación",
@@ -329,6 +363,7 @@ function buildPendingManagementWhatsappText(data: BookingNotificationData): stri
         `Fecha: ${formatDate(data.startAt, "es", data.timeZone)}`,
         `Hora: ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
         `Total: ${formatPrice(data.totalPriceCents)} Bs`,
+        ...(mapsLine ? [mapsLine] : []),
         ``,
         `Confirmar reserva: ${manageUrl}`,
     ].join("\n");
@@ -337,6 +372,7 @@ function buildPendingManagementWhatsappText(data: BookingNotificationData): stri
 function buildStaffConfirmedWhatsappText(data: BookingNotificationData): string {
     const services = data.serviceNames.join(", ");
     const manageUrl = getManageBookingUrl(data.bookingId);
+    const mapsLine = buildMapsLine(data);
 
     return [
         "✅ Reserva confirmada asignada",
@@ -345,6 +381,7 @@ function buildStaffConfirmedWhatsappText(data: BookingNotificationData): string 
         `Servicios: ${services}`,
         `Fecha: ${formatDate(data.startAt, "es", data.timeZone)}`,
         `Hora: ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
+        ...(mapsLine ? [mapsLine] : []),
         ``,
         `Ver reserva: ${manageUrl}`,
     ].join("\n");
@@ -363,6 +400,7 @@ function bookingInternalEmailHtml(
         recipient.role === "staff" ? "Nueva reserva asignada" : "Nueva reserva en tu tienda"
     );
     const message = options?.message || "Se registró una nueva reserva. Aquí están los datos:";
+    const locationHtml = buildLocationHtml(data, "Ubicación", "Ver en Google Maps");
 
     return `
     <!DOCTYPE html>
@@ -396,6 +434,7 @@ function bookingInternalEmailHtml(
           <p><strong>Servicios:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>Total:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
+          ${locationHtml}
         </div>
         <a class="button" href="${manageUrl}">Gestionar reserva</a>
       </div>
@@ -412,6 +451,7 @@ function bookingEmailHtml(
     accentColor: string
 ): string {
     const serviceList = data.serviceNames.map((s) => `<li>${s}</li>`).join("");
+    const locationHtml = buildLocationHtml(data, "Ubicación", "Ver en Google Maps");
     return `
     <!DOCTYPE html>
     <html>
@@ -442,6 +482,7 @@ function bookingEmailHtml(
           <p><strong>Servicios:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>Total:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
+          ${locationHtml}
         </div>
         <div class="footer"><p>${data.companyName}</p></div>
       </div>
@@ -464,6 +505,8 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
             time: "Time",
             services: "Services",
             total: "Total",
+            location: "Location",
+            locationLink: "Open in Google Maps",
             button: "Manage my appointment",
         }
         : {
@@ -476,8 +519,11 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
             time: "Hora",
             services: "Servicios",
             total: "Total",
+            location: "Ubicación",
+            locationLink: "Ver en Google Maps",
             button: "Gestionar mi cita",
         };
+    const locationHtml = buildLocationHtml(data, content.location, content.locationLink);
 
     return `
     <!DOCTYPE html>
@@ -507,6 +553,7 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
           <p><strong>${content.services}:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>${content.total}:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
+          ${locationHtml}
         </div>
         <a class="button" href="${manageUrl}">${content.button}</a>
       </div>
@@ -564,11 +611,18 @@ function brandEmail(data: BookingNotificationData, title: string, html: string):
 }
 
 function brandWhatsapp(data: BookingNotificationData, text: string): string {
-    return appendCompanyContactLine(text, data.branding);
+    const withContactLine = appendCompanyContactLine(text, data.branding);
+    const directionsUrl = getCompanyDirectionsUrl(data);
+    if (!directionsUrl || withContactLine.includes(directionsUrl)) {
+        return withContactLine;
+    }
+    const mapsLine = buildMapsLine(data, "Ubicación");
+    return mapsLine ? `${withContactLine.trim()}\n${mapsLine}` : withContactLine;
 }
 
 function buildWhatsappText(data: BookingNotificationData, intro: string): string {
     const services = data.serviceNames.join(", ");
+    const mapsLine = buildMapsLine(data, "Mapa");
     return [
         `${intro}`,
         ``,
@@ -578,6 +632,7 @@ function buildWhatsappText(data: BookingNotificationData, intro: string): string
         `🕐 ${formatTime(data.startAt, "es", data.timeZone)} – ${formatTime(data.endAt, "es", data.timeZone)}`,
         `✂️ ${services}`,
         `💰 ${formatPrice(data.totalPriceCents)} Bs`,
+        ...(mapsLine ? [mapsLine] : []),
     ].join("\n");
 }
 
@@ -585,6 +640,7 @@ function buildTodayReminderWhatsappText(data: BookingReminderData): string {
     const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
     const services = data.serviceNames.join(", ");
     const manageUrl = getCustomerManageBookingUrl(data.companySlug);
+    const mapsLine = buildMapsLine(data, locale === "en" ? "Map" : "Mapa");
     if (locale === "en") {
         return [
             `🔔 Hi ${data.customerName || ""}, this is a reminder that your appointment is today.`,
@@ -595,6 +651,7 @@ function buildTodayReminderWhatsappText(data: BookingReminderData): string {
             `🕐 ${formatTime(data.startAt, locale, data.timeZone)} – ${formatTime(data.endAt, locale, data.timeZone)}`,
             `✂️ ${services}`,
             `💰 ${formatPrice(data.totalPriceCents)} Bs`,
+            ...(mapsLine ? [mapsLine] : []),
             ``,
             `Manage your appointment: ${manageUrl}`,
         ].join("\n");
@@ -609,6 +666,7 @@ function buildTodayReminderWhatsappText(data: BookingReminderData): string {
         `🕐 ${formatTime(data.startAt, locale, data.timeZone)} – ${formatTime(data.endAt, locale, data.timeZone)}`,
         `✂️ ${services}`,
         `💰 ${formatPrice(data.totalPriceCents)} Bs`,
+        ...(mapsLine ? [mapsLine] : []),
         ``,
         `Gestiona tu cita: ${manageUrl}`,
     ].join("\n");
@@ -654,6 +712,8 @@ function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: st
             time: "Time",
             services: "Services",
             total: "Total",
+            location: "Location",
+            locationLink: "Open in Google Maps",
         }
         : {
             title: "Aviso de no asistencia",
@@ -664,9 +724,12 @@ function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: st
             time: "Hora",
             services: "Servicios",
             total: "Total",
+            location: "Ubicación",
+            locationLink: "Ver en Google Maps",
         };
 
     const formattedMessage = escapeHtml(message).replace(/\n/g, "<br />");
+    const locationHtml = buildLocationHtml(data, localized.location, localized.locationLink);
 
     return `
     <!DOCTYPE html>
@@ -696,6 +759,7 @@ function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: st
           <p><strong>${localized.services}:</strong></p>
           <ul>${serviceList}</ul>
           <p><strong>${localized.total}:</strong> ${formatPrice(data.totalPriceCents)} Bs</p>
+          ${locationHtml}
         </div>
       </div>
     </body>

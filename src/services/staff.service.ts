@@ -116,6 +116,11 @@ export async function getMyProfile(companyId: number, userId: string): Promise<S
                 deleted_at: null,
             },
             include: {
+                staff_services: {
+                    select: {
+                        service_id: true,
+                    },
+                },
                 user: {
                     select: {
                         id: true,
@@ -143,10 +148,7 @@ export async function getMyProfile(companyId: number, userId: string): Promise<S
             code: 200,
             message: 'Staff profile retrieved successfully',
             error: false,
-            data: {
-                ...profile,
-                bio: profile.bio ?? '',
-            },
+            data: serializeStaff(profile),
         };
     } catch (error: any) {
         console.error('Error retrieving staff self profile:', error);

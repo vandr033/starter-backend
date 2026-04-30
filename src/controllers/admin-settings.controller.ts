@@ -17,6 +17,11 @@ function normalizeDefaultLanguage(value: unknown): 'es' | 'en' {
     return 'es';
 }
 
+function normalizeBookingTimeViewDefault(value: unknown): 'hour' | 'all' {
+    if (typeof value !== 'string') return 'hour';
+    return value.trim().toLowerCase() === 'all' ? 'all' : 'hour';
+}
+
 /**
  * GET /api/admin/settings
  * Get company settings
@@ -53,6 +58,7 @@ export async function getCompanySettings(req: AuthenticatedRequest, res: Respons
             const defaultSettings = {
                 booking_buffer_minutes: 10,
                 booking_time_granularity_minutes: 5,
+                booking_time_view_default: 'hour' as const,
                 cancel_limit_minutes: 120,
                 reschedule_limit_minutes: 120,
                 auto_approve_staff_time_off: false,
@@ -169,6 +175,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
         const {
             booking_buffer_minutes,
             booking_time_granularity_minutes,
+            booking_time_view_default,
             cancel_limit_minutes,
             reschedule_limit_minutes,
             auto_approve_staff_time_off,
@@ -201,6 +208,18 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             mensaje = {
                 code: 400,
                 message: 'booking_time_granularity_minutes must be at least 5',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+
+        if (
+            booking_time_view_default !== undefined &&
+            (typeof booking_time_view_default !== 'string' || !['hour', 'all'].includes(booking_time_view_default.trim().toLowerCase()))
+        ) {
+            mensaje = {
+                code: 400,
+                message: 'booking_time_view_default must be one of: hour, all',
                 error: true,
             };
             return res.status(400).json(mensaje);
@@ -362,6 +381,9 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
             update: {
                 booking_buffer_minutes,
                 booking_time_granularity_minutes,
+                booking_time_view_default: booking_time_view_default !== undefined
+                    ? normalizeBookingTimeViewDefault(booking_time_view_default)
+                    : undefined,
                 cancel_limit_minutes,
                 reschedule_limit_minutes,
                 auto_approve_staff_time_off,
@@ -382,6 +404,7 @@ export async function updateCompanySettings(req: AuthenticatedRequest, res: Resp
                 company_id: companyId,
                 booking_buffer_minutes: booking_buffer_minutes || 10,
                 booking_time_granularity_minutes: booking_time_granularity_minutes || 5,
+                booking_time_view_default: normalizeBookingTimeViewDefault(booking_time_view_default),
                 cancel_limit_minutes: cancel_limit_minutes || 120,
                 reschedule_limit_minutes: reschedule_limit_minutes || 120,
                 auto_approve_staff_time_off: auto_approve_staff_time_off !== undefined ? auto_approve_staff_time_off : false,
@@ -482,6 +505,7 @@ export async function resetCompanySettings(req: AuthenticatedRequest, res: Respo
                 company_id: companyId,
                 booking_buffer_minutes: 10,
                 booking_time_granularity_minutes: 5,
+                booking_time_view_default: 'hour',
                 cancel_limit_minutes: 120,
                 reschedule_limit_minutes: 120,
                 auto_approve_staff_time_off: false,

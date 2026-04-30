@@ -22,10 +22,10 @@ router.get(
 );
 
 // POST /api/admin/bookings - Create booking on behalf of customer
-router.post('/', requireAuth, requireCompanyRole(adminRoles), AdminBookingController.createBooking);
+router.post('/', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.createBooking);
 
 // POST /api/admin/bookings/batch - Create multiple recurring bookings
-router.post('/batch', requireAuth, requireCompanyRole(adminRoles), AdminBookingController.createRecurringBookings);
+router.post('/batch', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.createRecurringBookings);
 
 // POST /api/admin/bookings/:id/reminders/today - Send today's reminder for one booking
 router.post(

@@ -119,6 +119,7 @@ model CompanySettings {
   company_id                       Int      @unique
   booking_buffer_minutes           Int      @default(10)
   booking_time_granularity_minutes Int      @default(5)
+  booking_time_view_default        String   @default("hour") @db.VarChar(16)
   cancel_limit_minutes             Int      @default(120)
   reschedule_limit_minutes         Int      @default(120)
   allow_qr_payment                 Boolean  @default(true)
