@@ -89,6 +89,10 @@ export async function verifyLoginOtpEmail(req: Request, res: Response) {
     return res.status(400).json({ code: 400, message: "Email and code are required", error: true });
   }
   const result = await AuthService.verifyLoginOtpEmail(email, code, req.headers);
+  if (Array.isArray((result as any)?.data?.cookies) && (result as any).data.cookies.length > 0) {
+    res.setHeader("set-cookie", (result as any).data.cookies);
+    delete (result as any).data.cookies;
+  }
   return res.status(result.code).json(result);
 }
 
