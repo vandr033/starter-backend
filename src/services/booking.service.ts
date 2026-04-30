@@ -181,6 +181,12 @@ function getDateKeyAndMinutesInTimeZone(date: Date, timeZone: string): { dateKey
     };
 }
 
+function getDayOfWeekFromDateKey(dateKey: string): number | null {
+    const parts = parseDateOnlyParts(dateKey);
+    if (!parts) return null;
+    return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0)).getUTCDay();
+}
+
 /**
  * Check if a slot conflicts with any existing bookings
  */
@@ -238,23 +244,35 @@ async function isStaffAvailableForInterval(params: {
     staffId: number;
     startAt: Date;
     endAt: Date;
+    timezone?: string | null;
 }): Promise<{ available: boolean; message?: string }> {
-    const { companyId, staffId, startAt, endAt } = params;
+    const { companyId, staffId, startAt, endAt, timezone } = params;
+    const companyTimezone = timezone || 'America/La_Paz';
     const staffList = await BookingRepo.getBookableStaff(companyId, staffId);
     if (staffList.length === 0) {
         return { available: false, message: 'No encontramos el personal o ya no acepta reservas.' };
     }
     const staff = staffList[0];
 
-    const requestDate = normalizeDateOnly(startAt);
-    if (staff.start_date && requestDate < normalizeDateOnly(new Date(staff.start_date))) {
+    const requestDateInfo = getDateKeyAndMinutesInTimeZone(startAt, companyTimezone);
+    const endDateInfo = getDateKeyAndMinutesInTimeZone(endAt, companyTimezone);
+
+    if (
+        staff.start_date &&
+        requestDateInfo.dateKey <
+            getDateKeyAndMinutesInTimeZone(new Date(staff.start_date), companyTimezone).dateKey
+    ) {
         return { available: false, message: 'El personal todavía no está activo para esa fecha.' };
     }
-    if (staff.end_date && requestDate > normalizeDateOnly(new Date(staff.end_date))) {
+    if (
+        staff.end_date &&
+        requestDateInfo.dateKey >
+            getDateKeyAndMinutesInTimeZone(new Date(staff.end_date), companyTimezone).dateKey
+    ) {
         return { available: false, message: 'El personal no está disponible para esa fecha.' };
     }
 
-    const dayOfWeek = requestDate.getDay();
+    const dayOfWeek = getDayOfWeekFromDateKey(requestDateInfo.dateKey) ?? startAt.getUTCDay();
     const companyHours = await BookingRepo.getCompanyHourWindowsForDay(companyId, dayOfWeek);
     const companyWindows = companyHours
         .filter((window) => !window.is_closed && window.open_time && window.close_time)
@@ -263,8 +281,9 @@ async function isStaffAvailableForInterval(params: {
         return { available: false, message: 'El negocio está cerrado ese día.' };
     }
 
-    const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
-    const endMinutes = endAt.getHours() * 60 + endAt.getMinutes();
+    const startMinutes = requestDateInfo.minutes;
+    const endMinutes =
+        endDateInfo.dateKey === requestDateInfo.dateKey ? endDateInfo.minutes : 24 * 60;
     if (!isIntervalWithinWindows(startMinutes, endMinutes, companyWindows)) {
         return { available: false, message: 'Selected time is outside company opening hours' };
     }
@@ -659,6 +678,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             staffId: staff_id,
             startAt,
             endAt,
+            timezone: company.timezone,
         });
         if (!staffAvailability.available) {
             return {
@@ -1544,6 +1564,7 @@ async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Pro
                 staffId: group.staffId,
                 startAt: slot.startAt,
                 endAt: slot.endAt,
+                timezone: params.company.timezone,
             });
             if (!staffAvailability.available) {
                 return {
