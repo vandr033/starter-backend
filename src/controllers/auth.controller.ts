@@ -23,7 +23,7 @@ export async function verifyVerificationCodeEmail(req: Request, res: Response) {
   if (!email || !code) {
     return res.status(400).json({ code: 400, message: "Email and code are required", error: true });
   }
-  const result = await AuthService.verifyVerificationCodeEmail(email, code);
+  const result = await AuthService.verifyVerificationCodeEmail(email, code, req.headers);
   return res.status(result.code).json(result);
 }
 

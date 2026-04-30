@@ -54,6 +54,35 @@ async function ensureOtpResendAllowed(params: {
   };
 }
 
+async function signInExistingEmailUser(
+  user: { id: string; email: string },
+  reqHeaders: any,
+) {
+  const auth = await getAuth();
+  const session = await auth.api.signInEmail({
+    body: {
+      email: user.email,
+      password: "__otp_login__",
+    },
+    headers: reqHeaders,
+  }).catch(() => null);
+
+  if (session) {
+    return session;
+  }
+
+  const tempPassword = crypto.randomBytes(32).toString("hex");
+  await UserRepo.updateUserPassword(user.id, await bcrypt.hash(tempPassword, 10));
+
+  return auth.api.signInEmail({
+    body: {
+      email: user.email,
+      password: tempPassword,
+    },
+    headers: reqHeaders,
+  });
+}
+
 // ────────────────────────────────────────────
 // REGISTRATION — Email OTP flow (no password)
 // ────────────────────────────────────────────
@@ -71,10 +100,6 @@ export async function sendVerificationCodeEmail(email: string) {
       return resendGuard;
     }
 
-    const existing = await UserRepo.getUserByEmail(trimmedEmail);
-    if (existing) {
-      throw new Error("User already exists");
-    }
     const code = generateNumericCode();
     const code_hash = await bcrypt.hash(code, 10);
     const expires_at = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
@@ -107,7 +132,7 @@ export async function sendVerificationCodeEmail(email: string) {
   return mensaje;
 }
 
-export async function verifyVerificationCodeEmail(email: string, code: string) {
+export async function verifyVerificationCodeEmail(email: string, code: string, reqHeaders: any) {
   try {
     const trimmedEmail = email.trim().toLowerCase();
     const verificationCode = await VerificationRepo.getVerificationCode(
@@ -130,18 +155,34 @@ export async function verifyVerificationCodeEmail(email: string, code: string) {
     if (!isValid) {
       throw new Error("Invalid code");
     }
-    const preRegToken = createPreRegToken({
-      channel: VerificationChannel.EMAIL,
-      identifier: trimmedEmail,
-    });
-    mensaje = {
-      code: 200,
-      message: "Codigo de verificacion validado",
-      error: false,
-      data: {
-        preRegToken,
-      },
-    };
+    const existingUser = await UserRepo.getUserByEmail(trimmedEmail);
+    if (existingUser) {
+      const session = await signInExistingEmailUser(existingUser, reqHeaders);
+
+      mensaje = {
+        code: 200,
+        message: "Cuenta existente autenticada correctamente",
+        error: false,
+        data: {
+          existingAccount: true,
+          user: session.user,
+          token: session.token,
+        },
+      };
+    } else {
+      const preRegToken = createPreRegToken({
+        channel: VerificationChannel.EMAIL,
+        identifier: trimmedEmail,
+      });
+      mensaje = {
+        code: 200,
+        message: "Codigo de verificacion validado",
+        error: false,
+        data: {
+          preRegToken,
+        },
+      };
+    }
   } catch (error: any) {
     mensaje = {
       code: 500,
@@ -361,16 +402,6 @@ export async function sendLoginOtpEmail(email: string): Promise<MensajeApi> {
   try {
     const trimmedEmail = email.trim().toLowerCase();
 
-    const user = await UserRepo.getUserByEmail(trimmedEmail);
-    if (!user) {
-      // Don't reveal whether account exists — still return success
-      return {
-        code: 200,
-        message: "Si la cuenta existe, recibirás un código de verificación",
-        error: false,
-      };
-    }
-
     const resendGuard = await ensureOtpResendAllowed({
       channel: VerificationChannel.EMAIL,
       purpose: VerificationPurpose.LOGIN,
@@ -463,61 +494,25 @@ export async function verifyLoginOtpEmail(
       };
     }
 
-    // OTP verified — look up the user
     const user = await UserRepo.getUserByEmail(trimmedEmail);
     if (!user) {
-      return {
-        code: 400,
-        message: "Usuario no encontrado",
-        error: true,
-      };
-    }
-
-    // Sign in via Better Auth using internal password
-    // We need to get the user's account to read the stored password.
-    // Instead, we'll use Better Auth's internal session creation.
-    const auth = await getAuth();
-    const session = await auth.api.signInEmail({
-      body: {
-        email: trimmedEmail,
-        // Use a trick: we don't know the password, so we create a fresh one
-        // Actually, let's just set a new password and sign in with it
-        password: "__otp_login__", // This won't work with the stored hash
-      },
-      headers: reqHeaders,
-    }).catch(() => null);
-
-    // If Better Auth signIn fails (because we don't know the password),
-    // we need to reset the password to a known value and sign in again
-    if (!session) {
-      // Generate a temporary password, set it, then sign in
-      const tempPassword = crypto.randomBytes(32).toString("hex");
-
-      // Update the account password directly in the DB
-      await UserRepo.updateUserPassword(user.id, await bcrypt.hash(tempPassword, 10));
-
-      const retryResult = await auth.api.signInEmail({
-        body: {
-          email: trimmedEmail,
-          password: tempPassword,
-        },
-        headers: reqHeaders,
+      const preRegToken = createPreRegToken({
+        channel: VerificationChannel.EMAIL,
+        identifier: trimmedEmail,
       });
-
-      if (!retryResult || !retryResult.user) {
-        throw new Error("Error al iniciar sesión");
-      }
 
       return {
         code: 200,
-        message: "Inicio de sesión exitoso",
+        message: "Perfil pendiente de completar",
         error: false,
         data: {
-          user: retryResult.user,
-          token: retryResult.token,
+          requiresProfileCompletion: true,
+          preRegToken,
         },
       };
     }
+
+    const session = await signInExistingEmailUser(user, reqHeaders);
 
     return {
       code: 200,
