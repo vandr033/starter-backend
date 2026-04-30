@@ -1,16 +1,33 @@
 import { prisma } from '../prisma/client';
-import { canonicalizePhoneParts } from '../utils/phoneNormalization';
+import { canonicalizePhoneParts, normalizePhoneDigits } from '../utils/phoneNormalization';
 
-export const getUserByPhone = (phoneNumber: string, phonePrefix: string) =>
-  {
-    const canonicalPhone = canonicalizePhoneParts({ phonePrefix, phoneNumber });
-    return prisma.user.findUnique({
-      where: {
-        phoneNumber: canonicalPhone.phoneNumber || '',
-        phone_prefix: canonicalPhone.phonePrefix || '',
-      },
-    });
-  };
+function buildPhoneLookupCandidates(phoneNumber: string, phonePrefix?: string) {
+  const canonicalPhone = canonicalizePhoneParts({ phonePrefix, phoneNumber });
+  const rawDigits = normalizePhoneDigits(phoneNumber);
+
+  return Array.from(
+    new Set(
+      [canonicalPhone.phoneNumber, canonicalPhone.fullPhone, rawDigits]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+export const getUserByPhone = (phoneNumber: string, phonePrefix?: string) => {
+  const phoneCandidates = buildPhoneLookupCandidates(phoneNumber, phonePrefix);
+  if (phoneCandidates.length === 0) {
+    return Promise.resolve(null);
+  }
+
+  return prisma.user.findFirst({
+    where: {
+      deleted_at: null,
+      phoneNumber: { in: phoneCandidates },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+};
 
 export const getUserByEmail = (email: string) =>
   prisma.user.findUnique({
@@ -89,12 +106,30 @@ export const updateUserEmail = (id: string, email: string) => {
   });
 }
 
-export const updateUserPhone = (id: string, phoneNumber: string, phone_prefix?: string) => {
+export const updateUserPhone = async (id: string, phoneNumber: string, phone_prefix?: string) => {
   const canonicalPhone = canonicalizePhoneParts({ phonePrefix: phone_prefix, phoneNumber });
+  const nextPhone = canonicalPhone.phoneNumber || normalizePhoneDigits(phoneNumber) || null;
+  const phoneCandidates = buildPhoneLookupCandidates(phoneNumber, phone_prefix);
+
+  if (nextPhone && phoneCandidates.length > 0) {
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        id: { not: id },
+        deleted_at: null,
+        phoneNumber: { in: phoneCandidates },
+      },
+      select: { id: true },
+    });
+
+    if (existingUser) {
+      throw new Error('Phone number already in use');
+    }
+  }
+
   return prisma.user.update({
     where: { id },
     data: {
-      phoneNumber: canonicalPhone.phoneNumber || phoneNumber,
+      phoneNumber: nextPhone,
       phoneNumberVerified: true,
       ...(canonicalPhone.phonePrefix ? { phone_prefix: canonicalPhone.phonePrefix } : {}),
     },

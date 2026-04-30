@@ -131,6 +131,14 @@ export async function completePhoneProfile(req: Request, res: Response) {
       error: false,
     });
   } catch (error: any) {
+    if (error?.code === 'P2002' || String(error?.message || '').includes('Phone number already in use')) {
+      return res.status(400).json({
+        code: 400,
+        message: "Phone number already in use",
+        error: true,
+      });
+    }
+
     return res.status(500).json({
       code: 500,
       message: "Error completing profile",
