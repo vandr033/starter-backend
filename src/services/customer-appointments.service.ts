@@ -34,6 +34,11 @@ const bookingInclude = {
             },
         },
     },
+    booking_review: {
+        select: {
+            id: true,
+        },
+    },
 };
 
 export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
@@ -67,12 +72,16 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
 
         const enriched = bookings.map((b) => {
             const startAt = new Date(b.start_at);
-            const isPast = startAt < now;
             const minutesUntilStart = (startAt.getTime() - now.getTime()) / 60_000;
             const settings = (b.company as any).company_settings;
             const cancelLimit = settings?.cancel_limit_minutes ?? 120;
             const rescheduleLimit = settings?.reschedule_limit_minutes ?? 120;
             const lifecycleStatus = getBookingLifecycleStatus(b.status, b.notes);
+            const hasReview = Boolean(b.booking_review?.id);
+            const isPast =
+                lifecycleStatus === BookingStatus.COMPLETED ||
+                lifecycleStatus === BookingStatus.NO_SHOW ||
+                startAt < now;
 
             const canCancel =
                 !isPast &&
@@ -112,6 +121,8 @@ export async function getCustomerBookings(userId: string): Promise<MensajeApi> {
                 canModify,
                 cancelLimitMinutes: cancelLimit,
                 rescheduleLimitMinutes: rescheduleLimit,
+                hasReview,
+                canReview: lifecycleStatus === BookingStatus.COMPLETED && !hasReview,
             };
         });
 
