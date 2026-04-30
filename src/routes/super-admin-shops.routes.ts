@@ -32,6 +32,7 @@ router.get('/staff', SuperAdminDataController.getAllStaff);
 
 // Users (platform-wide)
 router.get('/users', SuperAdminDataController.getAllUsers);
+router.delete('/users/:userId', SuperAdminDataController.deleteUser);
 
 // Super admin test notifications
 router.post('/notifications/test/email', SuperAdminNotificationsController.sendTestEmailNotification);

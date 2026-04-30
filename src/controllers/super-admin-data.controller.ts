@@ -106,3 +106,25 @@ export async function getAllUsers(req: AuthenticatedRequest, res: Response) {
         return res.status(500).json({ code: 500, error: true, message: 'Internal server error' });
     }
 }
+
+/**
+ * DELETE /api/super-admin/users/:userId
+ */
+export async function deleteUser(req: AuthenticatedRequest, res: Response) {
+    try {
+        const userId = parseQueryString(req.params.userId);
+        if (!userId) {
+            return res.status(400).json({
+                code: 400,
+                error: true,
+                message: 'User id is required',
+            });
+        }
+
+        const result = await UsersService.deleteUserAccount(userId, req.authUser?.id);
+        return res.status(result.code).json(result);
+    } catch (error) {
+        console.error('Error in deleteUser:', error);
+        return res.status(500).json({ code: 500, error: true, message: 'Internal server error' });
+    }
+}
