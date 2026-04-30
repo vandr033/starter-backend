@@ -58,18 +58,30 @@ async function ensureOtpResendAllowed(params: {
 async function signInExistingEmailUser(
   user: { id: string; email: string },
   reqHeaders: any,
-) {
+): Promise<{ user: unknown; token: unknown; cookies: string[] }> {
   const auth = await getAuth();
-  const session = await auth.api.signInEmail({
+  const sessionResponse = await auth.api.signInEmail({
     body: {
       email: user.email,
       password: "__otp_login__",
     },
     headers: reqHeaders,
+    asResponse: true,
   }).catch(() => null);
 
-  if (session) {
-    return session;
+  if (sessionResponse?.ok) {
+    const payload = await sessionResponse.json() as { user?: unknown; token?: unknown };
+    const cookies = sessionResponse.headers.getSetCookie?.() || [];
+    if (cookies.length === 0) {
+      const singleCookie = sessionResponse.headers.get("set-cookie");
+      if (singleCookie) cookies.push(singleCookie);
+    }
+
+    return {
+      user: payload.user ?? null,
+      token: payload.token ?? null,
+      cookies,
+    };
   }
 
   const tempPassword = crypto.randomBytes(32).toString("hex");
@@ -104,13 +116,40 @@ async function signInExistingEmailUser(
     });
   }
 
-  return auth.api.signInEmail({
+  const fallbackResponse = await auth.api.signInEmail({
     body: {
       email: user.email,
       password: tempPassword,
     },
     headers: reqHeaders,
+    asResponse: true,
   });
+
+  if (!fallbackResponse.ok) {
+    let message = "Could not sign in existing user";
+    try {
+      const payload = await fallbackResponse.json();
+      if (typeof payload?.message === "string" && payload.message.trim().length > 0) {
+        message = payload.message;
+      }
+    } catch {
+      // Keep default message.
+    }
+    throw new Error(message);
+  }
+
+  const payload = await fallbackResponse.json() as { user?: unknown; token?: unknown };
+  const cookies = fallbackResponse.headers.getSetCookie?.() || [];
+  if (cookies.length === 0) {
+    const singleCookie = fallbackResponse.headers.get("set-cookie");
+    if (singleCookie) cookies.push(singleCookie);
+  }
+
+  return {
+    user: payload.user ?? null,
+    token: payload.token ?? null,
+    cookies,
+  };
 }
 
 // ────────────────────────────────────────────

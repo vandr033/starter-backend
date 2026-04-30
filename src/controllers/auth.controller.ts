@@ -24,6 +24,10 @@ export async function verifyVerificationCodeEmail(req: Request, res: Response) {
     return res.status(400).json({ code: 400, message: "Email and code are required", error: true });
   }
   const result = await AuthService.verifyVerificationCodeEmail(email, code, req.headers);
+  if (Array.isArray((result as any)?.data?.cookies) && (result as any).data.cookies.length > 0) {
+    res.setHeader("set-cookie", (result as any).data.cookies);
+    delete (result as any).data.cookies;
+  }
   return res.status(result.code).json(result);
 }
 
@@ -105,6 +109,10 @@ export async function verifyLoginOtpPhone(req: Request, res: Response) {
     return res.status(400).json({ code: 400, message: "Phone number and code are required", error: true });
   }
   const result = await AuthService.verifyLoginOtpPhone(phoneNumber, code, req.headers);
+  if (Array.isArray((result as any)?.data?.cookies) && (result as any).data.cookies.length > 0) {
+    res.setHeader("set-cookie", (result as any).data.cookies);
+    delete (result as any).data.cookies;
+  }
   return res.status(result.code).json(result);
 }
 
