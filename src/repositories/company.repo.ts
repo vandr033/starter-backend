@@ -219,6 +219,20 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
     endAt = new Date(startAt.getTime() + slotMinutes * 60 * 1000);
   }
 
+  const blockingBookingFilter =
+    startAt && endAt
+      ? {
+          status: {
+            in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
+          },
+          deleted_at: null,
+          AND: [
+            { start_at: { lt: endAt } },
+            { end_at: { gt: startAt } },
+          ],
+        }
+      : null;
+
   // 2) Build Company.where dynamically
   const where: Prisma.CompanyWhereInput = buildMarketplaceVisibilityWhere();
 
@@ -275,19 +289,10 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
         },
         staff: {
           is_bookable: true,
-          ...(startAt && endAt
+          ...(blockingBookingFilter
             ? {
-              bookings: {
-                none: {
-                  status: {
-                    in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
-                  },
-                  AND: [
-                    { start_at: { lt: endAt } },  // booking starts before requested slot ends
-                    { end_at: { gt: startAt } },  // booking ends after requested slot starts
-                  ],
-                },
-              },
+              bookings: { none: blockingBookingFilter },
+              secondary_bookings: { none: blockingBookingFilter },
             }
             : {}),
         },
@@ -303,19 +308,10 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
         is_active: true,
         staff: {
           is_bookable: true,
-          ...(startAt && endAt
+          ...(blockingBookingFilter
             ? {
-              bookings: {
-                none: {
-                  status: {
-                    in: [BookingStatus.PENDING, BookingStatus.CONFIRMED],
-                  },
-                  AND: [
-                    { start_at: { lt: endAt } },
-                    { end_at: { gt: startAt } },
-                  ],
-                },
-              },
+              bookings: { none: blockingBookingFilter },
+              secondary_bookings: { none: blockingBookingFilter },
             }
             : {}),
         },

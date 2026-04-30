@@ -13,15 +13,21 @@ export async function getBookingsForDateRange(
     return prisma.booking.findMany({
         where: {
             company_id: companyId,
-            staff_id: { in: staffIds },
-            start_at: { gte: startDate },
-            end_at: { lte: endDate },
             status: { in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
             deleted_at: null,
+            OR: [
+                { staff_id: { in: staffIds } },
+                { secondary_staff_id: { in: staffIds } },
+            ],
+            AND: [
+                { start_at: { lt: endDate } },
+                { end_at: { gt: startDate } },
+            ],
         },
         select: {
             id: true,
             staff_id: true,
+            secondary_staff_id: true,
             start_at: true,
             end_at: true,
             status: true,
@@ -295,9 +301,12 @@ export async function checkSlotConflict(
     const conflicting = await prisma.booking.findFirst({
         where: {
             company_id: companyId,
-            staff_id: staffId,
             status: { in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
             deleted_at: null,
+            OR: [
+                { staff_id: staffId },
+                { secondary_staff_id: staffId },
+            ],
             // Overlap check: existing booking overlaps if existing.start < endWithBuffer AND existing.end > startAt
             AND: [
                 { start_at: { lt: endWithBuffer } },

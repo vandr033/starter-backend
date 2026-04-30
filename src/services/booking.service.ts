@@ -144,6 +144,43 @@ function minutesToTime(minutes: number): string {
     return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
 }
 
+function parseDateOnlyParts(date: string): { year: number; month: number; day: number } | null {
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return {
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3]),
+    };
+}
+
+function addDaysToDateString(date: string, days: number): string {
+    const parts = parseDateOnlyParts(date);
+    if (!parts) return date;
+
+    const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12, 0, 0));
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+}
+
+function getDateKeyAndMinutesInTimeZone(date: Date, timeZone: string): { dateKey: string; minutes: number } {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date);
+
+    const value = (type: string): string => parts.find((part) => part.type === type)?.value || '00';
+
+    return {
+        dateKey: `${value('year')}-${value('month')}-${value('day')}`,
+        minutes: Number(value('hour')) * 60 + Number(value('minute')),
+    };
+}
+
 /**
  * Check if a slot conflicts with any existing bookings
  */
@@ -294,13 +331,19 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
         const settings = await BookingRepo.getCompanySettings(company_id);
         const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
         const granularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+        const companyTimezone = company.timezone || 'America/La_Paz';
+        const dateParts = parseDateOnlyParts(date);
+        if (!dateParts) {
+            return {
+                code: 400,
+                message: 'Formato de fecha inválido.',
+                error: true,
+            };
+        }
 
-        // 4. Parse date and get day of week (0 = Sunday, 6 = Saturday)
-        // IMPORTANT: Use "T00:00:00" suffix to parse as local time, not UTC.
-        // new Date("2026-02-23") parses as UTC midnight, but setHours() 
-        // operates in local time, which can shift the date by a day.
-        const requestedDate = new Date(date + 'T00:00:00');
-        const dayOfWeek = requestedDate.getDay();
+        // 4. Resolve the requested business date in the company's timezone.
+        const requestedDate = new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 12, 0, 0));
+        const dayOfWeek = requestedDate.getUTCDay();
 
         // 5. Get company opening windows for that day
         const dayHours = await BookingRepo.getCompanyHourWindowsForDay(company_id, dayOfWeek);
@@ -355,8 +398,9 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
         const staffIds = eligibleStaff.map(s => s.id);
 
         // 7. Get existing bookings for the date
-        const dateStart = new Date(date + 'T00:00:00');
-        const dateEnd = new Date(date + 'T23:59:59.999');
+        const dateStart = parseDateTimeInTimeZone(`${date}T00:00:00`, companyTimezone);
+        const nextDate = addDaysToDateString(date, 1);
+        const dateEnd = parseDateTimeInTimeZone(`${nextDate}T00:00:00`, companyTimezone);
 
         // Include secondary resource ID in bookings query so we can check its conflicts too
         const allResourceIds = secondary_staff_id ? [...staffIds, secondary_staff_id] : staffIds;
@@ -371,13 +415,19 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
         // Group bookings by staff_id
         const bookingsByStaff = new Map<number, Array<{ start_at: Date; end_at: Date }>>();
         for (const booking of existingBookings) {
-            if (!bookingsByStaff.has(booking.staff_id)) {
-                bookingsByStaff.set(booking.staff_id, []);
+            const blockingIds = [booking.staff_id, booking.secondary_staff_id].filter(
+                (resourceId): resourceId is number => typeof resourceId === 'number'
+            );
+
+            for (const resourceId of new Set(blockingIds)) {
+                if (!bookingsByStaff.has(resourceId)) {
+                    bookingsByStaff.set(resourceId, []);
+                }
+                bookingsByStaff.get(resourceId)!.push({
+                    start_at: booking.start_at,
+                    end_at: booking.end_at,
+                });
             }
-            bookingsByStaff.get(booking.staff_id)!.push({
-                start_at: booking.start_at,
-                end_at: booking.end_at,
-            });
         }
 
         const [availabilityCounts, dayAvailability, timeOff, groupCommitments] = await Promise.all([
@@ -426,13 +476,9 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
         }
 
         // Determine current time in company timezone to filter past slots
-        const companyTimezone = company.timezone || 'America/La_Paz';
-        const nowInCompanyTz = new Date(new Date().toLocaleString('en-US', { timeZone: companyTimezone }));
-        const todayStr = nowInCompanyTz.toISOString().split('T')[0];
-        const isToday = date === todayStr;
-        const currentMinutes = isToday
-            ? nowInCompanyTz.getHours() * 60 + nowInCompanyTz.getMinutes()
-            : -1; // -1 means don't filter
+        const currentInCompanyTz = getDateKeyAndMinutesInTimeZone(new Date(), companyTimezone);
+        const isToday = date === currentInCompanyTz.dateKey;
+        const currentMinutes = isToday ? currentInCompanyTz.minutes : -1;
 
         const slots: TimeSlot[] = [];
 
@@ -450,8 +496,10 @@ export async function getAvailableSlots(params: GetSlotsParams): Promise<GetSlot
                 const slotTime = minutesToTime(slotMinutes);
 
                 // Create slot start and end times (using local-time parsing)
-                const slotStart = new Date(date + 'T00:00:00');
-                slotStart.setHours(Math.floor(slotMinutes / 60), slotMinutes % 60, 0, 0);
+                const slotStart = parseDateTimeInTimeZone(
+                    `${date}T${slotTime}:00`,
+                    companyTimezone,
+                );
 
                 const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
 
