@@ -15,6 +15,7 @@ import { sendWhatsappCode } from "../utils/whatsappSender";
 import { canonicalizePhoneParts } from "../utils/phoneNormalization";
 import { sendEmailCode } from "../utils/sendEmail";
 import { getAuth } from "../config/auth";
+import { prisma } from "../prisma/client";
 import { logger } from "../config/logger";
 
 let mensaje: MensajeApi;
@@ -72,7 +73,36 @@ async function signInExistingEmailUser(
   }
 
   const tempPassword = crypto.randomBytes(32).toString("hex");
-  await UserRepo.updateUserPassword(user.id, await bcrypt.hash(tempPassword, 10));
+  const hashedPassword = await bcrypt.hash(tempPassword, 10);
+  const credentialAccount = await prisma.account.findFirst({
+    where: {
+      userId: user.id,
+      providerId: { in: ["credential", "credentials"] },
+    },
+    orderBy: {
+      createdAt: "asc",
+    },
+  });
+
+  if (credentialAccount) {
+    await prisma.account.update({
+      where: { id: credentialAccount.id },
+      data: {
+        providerId: "credential",
+        accountId: user.email,
+        password: hashedPassword,
+      },
+    });
+  } else {
+    await prisma.account.create({
+      data: {
+        userId: user.id,
+        providerId: "credential",
+        accountId: user.email,
+        password: hashedPassword,
+      },
+    });
+  }
 
   return auth.api.signInEmail({
     body: {
@@ -287,6 +317,11 @@ function normalizePhone(phone: string, phonePrefix: string) {
     phoneNumber: phone,
   });
   return canonicalPhone.fullPhone || `${phonePrefix.trim()}${phone.trim()}`;
+}
+
+function buildTempPhoneEmail(phoneNumber: string) {
+  const digits = phoneNumber.replace(/[^\d]/g, "");
+  return `${digits}@tmppriconpri.com`;
 }
 
 export async function sendVerificationCodePhone(
@@ -568,6 +603,89 @@ export async function verifyLoginOtpPhone(
   reqHeaders: any
 ): Promise<MensajeApi> {
   try {
+    const existingUser =
+      await UserRepo.findActiveUserByPhone({ phoneNumber }) ??
+      await UserRepo.getUserByEmail(buildTempPhoneEmail(phoneNumber));
+
+    if (existingUser && !existingUser.deleted_at) {
+      const verification = await prisma.verification.findFirst({
+        where: {
+          identifier: phoneNumber,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+      if (!verification || verification.expiresAt < new Date()) {
+        if (verification && verification.expiresAt < new Date()) {
+          await prisma.verification.delete({
+            where: { id: verification.id },
+          }).catch(() => null);
+        }
+
+        return {
+          code: 400,
+          message: "Código expirado o no encontrado",
+          error: true,
+        };
+      }
+
+      const [otpValue, attemptsRaw] = verification.value.split(":");
+      const attempts = Number.parseInt(attemptsRaw || "0", 10) || 0;
+      const allowedAttempts = 3;
+
+      if (attempts >= allowedAttempts) {
+        await prisma.verification.delete({
+          where: { id: verification.id },
+        }).catch(() => null);
+
+        return {
+          code: 403,
+          message: "Demasiados intentos",
+          error: true,
+        };
+      }
+
+      if (otpValue !== code) {
+        await prisma.verification.update({
+          where: { id: verification.id },
+          data: {
+            value: `${otpValue}:${attempts + 1}`,
+          },
+        });
+
+        return {
+          code: 400,
+          message: "Código inválido",
+          error: true,
+        };
+      }
+
+      await prisma.verification.delete({
+        where: { id: verification.id },
+      });
+
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          phoneNumberVerified: true,
+        },
+      });
+
+      const session = await signInExistingEmailUser(
+        { id: existingUser.id, email: existingUser.email },
+        reqHeaders,
+      );
+
+      return {
+        code: 200,
+        message: "Inicio de sesión exitoso",
+        error: false,
+        data: session,
+      };
+    }
+
     const auth = await getAuth();
     const result = await auth.api.verifyPhoneNumber({
       body: { phoneNumber, code },
