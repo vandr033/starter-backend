@@ -8,6 +8,7 @@ import { VerificationChannel, VerificationPurpose } from '../types/verification-
 import { generateNumericCode } from '../utils/verification';
 import { sendStaffInviteEmail } from '../utils/sendEmail';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
+import { buildPhoneLookupCandidates } from '../repositories/user.repo';
 import {
     buildStaffLimitReachedMessage,
     getStaffSeatUsageForCompany,
@@ -241,10 +242,16 @@ export async function updateMyProfile(
                 }
 
                 if (nextPhone) {
-                    const existingPhoneUser = await tx.user.findUnique({
-                        where: { phoneNumber: nextPhone },
-                        select: { id: true },
-                    });
+                    const phoneCandidates = buildPhoneLookupCandidates(nextPhone, nextPhonePrefix || undefined);
+                    const existingPhoneUser = phoneCandidates.length > 0
+                        ? await tx.user.findFirst({
+                            where: {
+                                deleted_at: null,
+                                phoneNumber: { in: phoneCandidates },
+                            },
+                            select: { id: true },
+                        })
+                        : null;
                     if (existingPhoneUser && existingPhoneUser.id !== existing.user_id) {
                         throw new Error('Phone number is already in use');
                     }

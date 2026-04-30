@@ -33,6 +33,7 @@ import {
     createCompanyWithDefaults,
 } from './company-provisioning.service';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
+import { buildPhoneLookupCandidates } from '../repositories/user.repo';
 
 /**
  * Generate a URL-friendly slug from a string
@@ -874,12 +875,17 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                         ownerUser.name?.trim() ||
                         ownerUser.email.split('@')[0];
                 } else {
-                    const existingUserByPhone = await tx.user.findFirst({
-                        where: {
-                            phoneNumber: ownerPhone,
-                            deleted_at: null
-                        }
-                    });
+                    const ownerPhoneCandidates = ownerPhone
+                        ? buildPhoneLookupCandidates(ownerPhone, ownerPhonePrefix)
+                        : [];
+                    const existingUserByPhone = ownerPhoneCandidates.length > 0
+                        ? await tx.user.findFirst({
+                            where: {
+                                deleted_at: null,
+                                phoneNumber: { in: ownerPhoneCandidates },
+                            },
+                        })
+                        : null;
 
                     let ownerUserByEmail = await tx.user.findFirst({
                         where: {
@@ -919,7 +925,11 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                             }
                         });
                     } else {
-                        if (ownerPhone && ownerUserByEmail.phoneNumber && ownerUserByEmail.phoneNumber !== ownerPhone) {
+                        if (
+                            ownerPhone &&
+                            ownerUserByEmail.phoneNumber &&
+                            !ownerPhoneCandidates.includes(ownerUserByEmail.phoneNumber)
+                        ) {
                             return {
                                 error: true as const,
                                 code: 400,
@@ -1590,11 +1600,14 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
                 deleted_at: null
             }
         });
+        const cleanPhoneCandidates = cleanPhone
+            ? buildPhoneLookupCandidates(cleanPhone, cleanPhonePrefix)
+            : [];
         const userWithPhone = cleanPhone
             ? await prisma.user.findFirst({
                 where: {
-                    phoneNumber: cleanPhone,
-                    deleted_at: null
+                    deleted_at: null,
+                    phoneNumber: { in: cleanPhoneCandidates },
                 }
             })
             : null;

@@ -125,6 +125,7 @@ export async function deleteUserAccount(userId: string, actorUserId?: string): P
                 where: { id: user.id },
                 data: {
                     email: replacementEmail,
+                    phone_prefix: null,
                     phoneNumber: null,
                     phoneNumberVerified: false,
                     emailVerified: false,

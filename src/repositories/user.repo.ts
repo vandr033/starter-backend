@@ -1,7 +1,7 @@
 import { prisma } from '../prisma/client';
 import { canonicalizePhoneParts, normalizePhoneDigits } from '../utils/phoneNormalization';
 
-function buildPhoneLookupCandidates(phoneNumber: string, phonePrefix?: string) {
+export function buildPhoneLookupCandidates(phoneNumber: string, phonePrefix?: string) {
   const canonicalPhone = canonicalizePhoneParts({ phonePrefix, phoneNumber });
   const rawDigits = normalizePhoneDigits(phoneNumber);
 
@@ -14,19 +14,28 @@ function buildPhoneLookupCandidates(phoneNumber: string, phonePrefix?: string) {
   );
 }
 
-export const getUserByPhone = (phoneNumber: string, phonePrefix?: string) => {
-  const phoneCandidates = buildPhoneLookupCandidates(phoneNumber, phonePrefix);
+export const findActiveUserByPhone = async (params: {
+  phoneNumber: string;
+  phonePrefix?: string;
+  excludeUserId?: string;
+}) => {
+  const phoneCandidates = buildPhoneLookupCandidates(params.phoneNumber, params.phonePrefix);
   if (phoneCandidates.length === 0) {
-    return Promise.resolve(null);
+    return null;
   }
 
   return prisma.user.findFirst({
     where: {
       deleted_at: null,
+      ...(params.excludeUserId ? { id: { not: params.excludeUserId } } : {}),
       phoneNumber: { in: phoneCandidates },
     },
     orderBy: { createdAt: 'desc' },
   });
+};
+
+export const getUserByPhone = (phoneNumber: string, phonePrefix?: string) => {
+  return findActiveUserByPhone({ phoneNumber, phonePrefix });
 };
 
 export const getUserByEmail = (email: string) =>
@@ -109,16 +118,12 @@ export const updateUserEmail = (id: string, email: string) => {
 export const updateUserPhone = async (id: string, phoneNumber: string, phone_prefix?: string) => {
   const canonicalPhone = canonicalizePhoneParts({ phonePrefix: phone_prefix, phoneNumber });
   const nextPhone = canonicalPhone.phoneNumber || normalizePhoneDigits(phoneNumber) || null;
-  const phoneCandidates = buildPhoneLookupCandidates(phoneNumber, phone_prefix);
 
-  if (nextPhone && phoneCandidates.length > 0) {
-    const existingUser = await prisma.user.findFirst({
-      where: {
-        id: { not: id },
-        deleted_at: null,
-        phoneNumber: { in: phoneCandidates },
-      },
-      select: { id: true },
+  if (nextPhone) {
+    const existingUser = await findActiveUserByPhone({
+      phoneNumber,
+      phonePrefix: phone_prefix,
+      excludeUserId: id,
     });
 
     if (existingUser) {

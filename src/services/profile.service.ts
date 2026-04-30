@@ -140,9 +140,10 @@ export async function updateProfile(
                 : (existing.phone_prefix || null);
 
         if (nextPhone) {
-            const userWithPhone = await prisma.user.findUnique({
-                where: { phoneNumber: nextPhone },
-                select: { id: true },
+            const userWithPhone = await UserRepo.findActiveUserByPhone({
+                phoneNumber: nextPhone,
+                phonePrefix: nextPhonePrefix || undefined,
+                excludeUserId: userId,
             });
             if (userWithPhone && userWithPhone.id !== userId) {
                 return { code: 400, message: "Phone number already in use", error: true };
@@ -324,8 +325,9 @@ export async function sendPhoneChangeOtp(
         }
 
         // Check if phone is already taken
-        const existing = await prisma.user.findUnique({
-            where: { phoneNumber: newPhone },
+        const existing = await UserRepo.findActiveUserByPhone({
+            phoneNumber: newPhone,
+            excludeUserId: userId,
         });
         if (existing && existing.id !== userId) {
             return { code: 400, message: "Phone number already in use", error: true };
