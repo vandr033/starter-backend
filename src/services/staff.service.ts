@@ -14,6 +14,7 @@ import {
     getStaffSeatUsageForCompany,
     isFeatureEnabledForCompany,
 } from './plan-enforcement.service';
+import { getCompanyEntitlements } from './company-entitlements.service';
 
 interface StaffResult extends MensajeApi {
     data?: any;
@@ -318,6 +319,10 @@ export async function createStaff(
         const role = input.role ?? CompanyUserRole.STAFF;
         const seatUsage = await getStaffSeatUsageForCompany(companyId);
         const canUseRolesPermissions = await isFeatureEnabledForCompany(companyId, 'ROLES_PERMISSIONS');
+        const entitlements = await getCompanyEntitlements(companyId);
+        const hasBookingModule =
+            entitlements.productCapabilities.RESERVAS_BASE === true ||
+            entitlements.productCapabilities.RESERVAS_PRO === true;
 
         if (!normalizedEmail) {
             return {
@@ -442,10 +447,12 @@ export async function createStaff(
             endDate: input.end_date ? new Date(input.end_date) : undefined,
         });
 
-        await ensureDefaultStaffAvailabilityFromCompanyHours({
-            companyId,
-            staffId: staff.id,
-        });
+        if (hasBookingModule) {
+            await ensureDefaultStaffAvailabilityFromCompanyHours({
+                companyId,
+                staffId: staff.id,
+            });
+        }
 
         // Assign services if provided
         if (input.service_ids && input.service_ids.length > 0) {
