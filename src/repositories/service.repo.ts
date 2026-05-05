@@ -93,6 +93,10 @@ export interface CreateServiceData {
     name: string;
     description?: string;
     price_cents: number;
+    promo_price_cents?: number | null;
+    promo_starts_at?: Date | null;
+    promo_ends_at?: Date | null;
+    promo_label?: string | null;
     duration_minutes: number;
     is_multi_session?: boolean;
     session_count?: number | null;
@@ -109,6 +113,10 @@ export async function createService(data: CreateServiceData) {
             name: data.name,
             description: data.description,
             price_cents: data.price_cents,
+            promo_price_cents: data.promo_price_cents ?? null,
+            promo_starts_at: data.promo_starts_at ?? null,
+            promo_ends_at: data.promo_ends_at ?? null,
+            promo_label: data.promo_label ?? null,
             duration_minutes: data.duration_minutes,
             is_multi_session: data.is_multi_session ?? false,
             session_count: data.session_count ?? null,
@@ -135,6 +143,10 @@ export interface UpdateServiceData {
     name?: string;
     description?: string;
     price_cents?: number;
+    promo_price_cents?: number | null;
+    promo_starts_at?: Date | null;
+    promo_ends_at?: Date | null;
+    promo_label?: string | null;
     duration_minutes?: number;
     is_multi_session?: boolean;
     session_count?: number | null;

@@ -21,6 +21,7 @@ export const SELECTABLE_CORE_PRODUCT_KEYS = [
     BusinessPricingProductKey.RESERVAS,
     BusinessPricingProductKey.EVENTOS,
     BusinessPricingProductKey.CLASES,
+    BusinessPricingProductKey.TIENDA,
 ] as const;
 
 export const PUBLIC_ADD_ON_KEYS = [
@@ -37,6 +38,8 @@ export const PUBLIC_CORE_TIER_KEYS = [
     ProductTierCode.EVENTOS_PRO,
     ProductTierCode.CLASES_BASE,
     ProductTierCode.CLASES_PRO,
+    ProductTierCode.STORES_BASE,
+    ProductTierCode.STORES_PRO,
 ] as const;
 
 export type PublicCoreProductKey = (typeof PUBLIC_CORE_PRODUCT_KEYS)[number];
@@ -227,18 +230,45 @@ export const DEFAULT_BUSINESS_PRICING_PRODUCTS: BusinessPricingProductDefault[] 
         productKey: BusinessPricingProductKey.TIENDA,
         type: BusinessPricingProductType.CORE,
         displayName: 'Tienda',
-        description: 'Tu tienda online en Priconpri está en camino.',
+        description: 'Catálogo, pedidos, combos, stock y checkout QR para vender desde tu página.',
         monthlyPriceBs: 300,
-        isActive: false,
-        isComingSoon: true,
+        isActive: true,
+        isComingSoon: false,
         sortOrder: 4,
         metadata: {
-            featureList: [
-                'Productos y categorías',
-                'Pickup y delivery',
-                'Pedidos programados',
-                'Checkout por WhatsApp',
-                'Próximamente',
+            tiers: [
+                {
+                    tierKey: ProductTierCode.STORES_BASE,
+                    label: 'Base',
+                    monthlyPriceBs: 300,
+                    featureList: [
+                        'Productos y categorías',
+                        'Stock global',
+                        'Combos estructurados',
+                        'Pickup y delivery',
+                        'Checkout invitado',
+                        'QR manual',
+                    ],
+                    proUnlocks: [
+                        'Pedidos programados',
+                        'Promociones',
+                        'Asignación interna',
+                        'Métricas de tienda',
+                    ],
+                    isDefault: true,
+                },
+                {
+                    tierKey: ProductTierCode.STORES_PRO,
+                    label: 'Pro',
+                    monthlyPriceBs: 500,
+                    featureList: [
+                        'Todo lo de Tienda Base',
+                        'Pedidos programados',
+                        'Promociones',
+                        'Asignación de pedidos',
+                        'Métricas de tienda',
+                    ],
+                },
             ],
         },
     },
@@ -358,7 +388,8 @@ export function isPublicCoreTierKey(value: string): value is PublicCoreTierKey {
 export function getDefaultTierForCoreProduct(productKey: SelectableCoreProductKey): PublicCoreTierKey {
     if (productKey === BusinessPricingProductKey.RESERVAS) return ProductTierCode.RESERVAS_BASE;
     if (productKey === BusinessPricingProductKey.EVENTOS) return ProductTierCode.EVENTOS_BASE;
-    return ProductTierCode.CLASES_BASE;
+    if (productKey === BusinessPricingProductKey.CLASES) return ProductTierCode.CLASES_BASE;
+    return ProductTierCode.STORES_BASE;
 }
 
 export function isTierValidForCoreProduct(
@@ -377,9 +408,15 @@ export function isTierValidForCoreProduct(
             tierKey === ProductTierCode.EVENTOS_PRO
         );
     }
+    if (productKey === BusinessPricingProductKey.CLASES) {
+        return (
+            tierKey === ProductTierCode.CLASES_BASE ||
+            tierKey === ProductTierCode.CLASES_PRO
+        );
+    }
     return (
-        tierKey === ProductTierCode.CLASES_BASE ||
-        tierKey === ProductTierCode.CLASES_PRO
+        tierKey === ProductTierCode.STORES_BASE ||
+        tierKey === ProductTierCode.STORES_PRO
     );
 }
 
@@ -451,7 +488,7 @@ export function mapBusinessPricingKeyToProductCode(
     if (key === BusinessPricingProductKey.RESERVAS) return ProductCode.RESERVAS;
     if (key === BusinessPricingProductKey.EVENTOS) return ProductCode.EVENTOS;
     if (key === BusinessPricingProductKey.CLASES) return ProductCode.CLASES;
-    if (key === BusinessPricingProductKey.TIENDA) return ProductCode.MARKETPLACE;
+    if (key === BusinessPricingProductKey.TIENDA) return ProductCode.STORES;
     if (key === BusinessPricingProductKey.PERSONALIZACION_PRO) return ProductCode.PERSONALIZACION;
     if (key === BusinessPricingProductKey.METRICAS) return ProductCode.METRICAS;
     if (key === BusinessPricingProductKey.MENSAJERIA_PRO) return ProductCode.MENSAJERIA;

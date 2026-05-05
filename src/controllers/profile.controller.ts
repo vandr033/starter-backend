@@ -16,10 +16,11 @@ export async function updateProfile(req: Request, res: Response) {
     const userId = authReq.authUser?.id;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    const { first_name, last_name, phone_prefix, phone, phoneNumber } = req.body;
+    const { first_name, last_name, phone_prefix, country_code, phone, phoneNumber } = req.body;
     const result = await ProfileService.updateProfile(userId, {
         first_name,
         last_name,
+        country_code,
         phone_prefix,
         phoneNumber: phoneNumber ?? phone,
     });
@@ -67,9 +68,9 @@ export async function verifyPhoneChange(req: Request, res: Response) {
     const userId = authReq.authUser?.id;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    const { phoneNumber, code, phone_prefix } = req.body;
+    const { phoneNumber, code, phone_prefix, country_code } = req.body;
     if (!phoneNumber || !code) return res.status(400).json({ code: 400, message: "Phone number and code are required", error: true });
 
-    const result = await ProfileService.verifyPhoneChange(userId, phoneNumber, code, phone_prefix);
+    const result = await ProfileService.verifyPhoneChange(userId, phoneNumber, code, phone_prefix, country_code);
     return res.status(result.code).json(result);
 }

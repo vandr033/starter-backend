@@ -8,10 +8,13 @@ import { MensajeApi } from '../types/MensajeApi';
 import { Prisma } from '../prisma/client';
 import { getCompanyEntitlements } from './company-entitlements.service';
 import {
+  applyCommerceStoreVisibility,
   buildPublicEntitlementSummary,
   buildPublicStorefrontVisibility,
   sanitizePublicThemeConfig,
 } from '../utils/public-storefront';
+import * as CommerceRepo from '../repositories/commerce.repo';
+import { resolveEffectiveServicePrice } from './service-pricing.service';
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const FALLBACK_DEFAULT_LANGUAGE = 'es';
@@ -138,6 +141,64 @@ const DEFAULT_THEME = {
   corner_radius: 'md',
 };
 
+function serializeCommerceStore(store: any) {
+  if (!store) return null;
+  return {
+    ...store,
+    fixed_delivery_cost: store.fixed_delivery_cost != null ? Number(store.fixed_delivery_cost) : null,
+    order_schedule_slots: Array.isArray(store.order_schedule_slots)
+      ? store.order_schedule_slots.map((slot: any) => ({ ...slot }))
+      : [],
+  };
+}
+
+function serializeCommercePointOfSale(pointOfSale: any) {
+  return {
+    ...pointOfSale,
+    opening_time: pointOfSale.opening_time,
+    closing_time: pointOfSale.closing_time,
+    latitude: Number(pointOfSale.latitude),
+    longitude: Number(pointOfSale.longitude),
+  };
+}
+
+function serializeCommerceProduct(product: any) {
+  return {
+    ...product,
+    price: product.price != null ? Number(product.price) : null,
+    regular_price: product.regular_price != null ? Number(product.regular_price) : null,
+    promo_price: product.promo_price != null ? Number(product.promo_price) : null,
+  };
+}
+
+function serializePublicService(service: any, promotionsEnabled: boolean) {
+  const pricing = resolveEffectiveServicePrice({
+    priceCents: service.price_cents,
+    promoPriceCents: service.promo_price_cents ?? null,
+    promoStartsAt: service.promo_starts_at ?? null,
+    promoEndsAt: service.promo_ends_at ?? null,
+    promoLabel: service.promo_label ?? null,
+    promotionsEnabled,
+  });
+
+  return {
+    ...service,
+    promo_price_cents: promotionsEnabled ? service.promo_price_cents ?? null : null,
+    promo_starts_at: promotionsEnabled ? service.promo_starts_at ?? null : null,
+    promo_ends_at: promotionsEnabled ? service.promo_ends_at ?? null : null,
+    promo_label: promotionsEnabled ? service.promo_label ?? null : null,
+    pricing: {
+      regular_price_cents: pricing.regularPriceCents,
+      base_price_cents: pricing.basePriceCents,
+      final_price_cents: pricing.finalPriceCents,
+      promo_applied: pricing.promoApplied,
+      promo_label: pricing.promoLabel,
+      promo_starts_at: pricing.promoStartsAt,
+      promo_ends_at: pricing.promoEndsAt,
+    },
+  };
+}
+
 export const getCompanyPublicPage = async (slug: string) => {
   try {
     const companyData = await CompanyRepo.getCompanyPublicPageBySlug(slug);
@@ -159,7 +220,7 @@ export const getCompanyPublicPage = async (slug: string) => {
     } = companyData;
 
     const entitlements = await getCompanyEntitlements(company.id);
-    const publicFeatures = buildPublicStorefrontVisibility({
+    const basePublicFeatures = buildPublicStorefrontVisibility({
       entitlements,
       availability: {
         availableUntil: company.availableUntil,
@@ -168,6 +229,17 @@ export const getCompanyPublicPage = async (slug: string) => {
       },
       isMarketplaceVisible: (company as any).is_marketplace_visible,
     });
+    const canExposeCommerceStore =
+      basePublicFeatures.storefrontEnabled
+      && entitlements.productCapabilities.COMMERCE_ACCESS === true;
+    const commerceStoreRecord = canExposeCommerceStore
+      ? await CommerceRepo.findCommerceStoreByCompanyId(company.id)
+      : null;
+    const isCommerceStorePubliclyVisible = commerceStoreRecord?.is_active === true;
+    const publicFeatures = applyCommerceStoreVisibility(
+      basePublicFeatures,
+      isCommerceStorePubliclyVisible,
+    );
     const publicEntitlements = buildPublicEntitlementSummary(
       entitlements,
       publicFeatures,
@@ -236,6 +308,19 @@ export const getCompanyPublicPage = async (slug: string) => {
 
     const exposeReservasContent =
       publicFeatures.storefrontEnabled && publicFeatures.servicesVisible;
+    const exposeCommerceContent =
+      publicFeatures.storefrontEnabled && publicFeatures.commerceVisible;
+    const exposeServicePromotions =
+      exposeReservasContent &&
+      entitlements.productCapabilities.RESERVAS_SERVICE_PROMOTIONS === true;
+
+    const [commerceCategories, commerceProducts, commercePointsOfSale] = exposeCommerceContent
+      ? await Promise.all([
+          CommerceRepo.listPublicCommerceCategories(company.id),
+          CommerceRepo.listPublicCommerceProducts(company.id),
+          CommerceRepo.listPublicCommercePointsOfSale(company.id),
+        ])
+      : [[], [], []];
 
     const responseData = {
       company: {
@@ -245,8 +330,21 @@ export const getCompanyPublicPage = async (slug: string) => {
         public_features: publicFeatures,
       },
       categories: exposeReservasContent ? categories : [],
-      services: exposeReservasContent ? services : [],
+      services: exposeReservasContent
+        ? services.map((service) =>
+            serializePublicService(service, exposeServicePromotions),
+          )
+        : [],
       staff: exposeReservasContent ? staff_profiles : [],
+      commerceStore:
+        exposeCommerceContent && commerceStoreRecord
+          ? serializeCommerceStore(commerceStoreRecord)
+          : null,
+      commercePointsOfSale: exposeCommerceContent
+        ? commercePointsOfSale.map(serializeCommercePointOfSale)
+        : [],
+      commerceCategories: exposeCommerceContent ? commerceCategories : [],
+      commerceProducts: exposeCommerceContent ? commerceProducts.map(serializeCommerceProduct) : [],
       settings,
       theme,
       reviewStats: {

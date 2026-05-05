@@ -97,14 +97,6 @@ export const businessSignupSchema = z
             });
         }
 
-        if (data.coreProducts.includes('TIENDA')) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ['coreProducts'],
-                message: 'Tienda todavía no está disponible. Elegí otro producto principal.',
-            });
-        }
-
         data.coreSelections.forEach((selection, index) => {
             if (!isTierValidForCoreProduct(selection.productKey, selection.tierKey)) {
                 ctx.addIssue({

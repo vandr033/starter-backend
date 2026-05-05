@@ -103,6 +103,16 @@ export const PRODUCT_CATALOG_SEED: ProductCatalogSeedDefinition[] = [
         sortOrder: 30,
     },
     {
+        code: PrismaProductCode.STORES,
+        name: 'Stores',
+        description: 'Commerce storefronts, catalog, stock, orders, and fulfillment workflows.',
+        category: 'CORE_PRODUCT',
+        isCoreProduct: true,
+        isAddon: false,
+        isActive: true,
+        sortOrder: 35,
+    },
+    {
         code: PrismaProductCode.PERSONALIZACION,
         name: 'Personalizacion',
         description: 'Storefront branding and layout controls.',
@@ -230,6 +240,28 @@ export const PRODUCT_TIER_SEED: ProductTierSeedDefinition[] = [
         sortOrder: 60,
     },
     {
+        productCode: PrismaProductCode.STORES,
+        code: PrismaProductTierCode.STORES_BASE,
+        name: 'Stores Base',
+        description: 'Catalog, stock, guest checkout, pickup, delivery, and basic order management.',
+        tierLevel: 1,
+        isBase: true,
+        isPro: false,
+        isActive: true,
+        sortOrder: 65,
+    },
+    {
+        productCode: PrismaProductCode.STORES,
+        code: PrismaProductTierCode.STORES_PRO,
+        name: 'Stores Pro',
+        description: 'Scheduled orders, staff assignment, promotions, and advanced store operations.',
+        tierLevel: 2,
+        isBase: false,
+        isPro: true,
+        isActive: true,
+        sortOrder: 68,
+    },
+    {
         productCode: PrismaProductCode.PERSONALIZACION,
         code: PrismaProductTierCode.PERSONALIZACION_BASE,
         name: 'Personalizacion Base',
@@ -340,6 +372,7 @@ const PRODUCT_TIER_RUNTIME_DEFINITIONS: ProductTierRuntimeDefinition[] = [
         includedCapabilities: [
             PrismaProductCapabilityCode.RESERVAS_BASE,
             PrismaProductCapabilityCode.RESERVAS_PRO,
+            PrismaProductCapabilityCode.RESERVAS_SERVICE_PROMOTIONS,
         ],
     },
     {
@@ -362,6 +395,36 @@ const PRODUCT_TIER_RUNTIME_DEFINITIONS: ProductTierRuntimeDefinition[] = [
         includedCapabilities: [
             PrismaProductCapabilityCode.CLASES_BASE,
             PrismaProductCapabilityCode.CLASES_PRO,
+        ],
+    },
+    {
+        ...PRODUCT_TIER_SEED.find((tier) => tier.code === PrismaProductTierCode.STORES_BASE)!,
+        includedCapabilities: [
+            PrismaProductCapabilityCode.COMMERCE_ACCESS,
+            PrismaProductCapabilityCode.COMMERCE_PRODUCTS,
+            PrismaProductCapabilityCode.COMMERCE_CATEGORIES,
+            PrismaProductCapabilityCode.COMMERCE_STOCK,
+            PrismaProductCapabilityCode.COMMERCE_ORDERS,
+            PrismaProductCapabilityCode.COMMERCE_PICKUP,
+            PrismaProductCapabilityCode.COMMERCE_DELIVERY,
+            PrismaProductCapabilityCode.COMMERCE_COMBOS,
+        ],
+    },
+    {
+        ...PRODUCT_TIER_SEED.find((tier) => tier.code === PrismaProductTierCode.STORES_PRO)!,
+        includedCapabilities: [
+            PrismaProductCapabilityCode.COMMERCE_ACCESS,
+            PrismaProductCapabilityCode.COMMERCE_PRODUCTS,
+            PrismaProductCapabilityCode.COMMERCE_CATEGORIES,
+            PrismaProductCapabilityCode.COMMERCE_STOCK,
+            PrismaProductCapabilityCode.COMMERCE_ORDERS,
+            PrismaProductCapabilityCode.COMMERCE_PICKUP,
+            PrismaProductCapabilityCode.COMMERCE_DELIVERY,
+            PrismaProductCapabilityCode.COMMERCE_COMBOS,
+            PrismaProductCapabilityCode.COMMERCE_SCHEDULED_ORDERS,
+            PrismaProductCapabilityCode.COMMERCE_PROMOTIONS,
+            PrismaProductCapabilityCode.COMMERCE_STAFF_ASSIGNMENT,
+            PrismaProductCapabilityCode.COMMERCE_METRICS,
         ],
     },
     {
@@ -497,6 +560,7 @@ export const LEGACY_FEATURE_REQUIREMENTS: Record<PlanFeatureKey, CapabilityRequi
             PrismaProductCapabilityCode.RESERVAS_BASE,
             PrismaProductCapabilityCode.EVENTOS_BASE,
             PrismaProductCapabilityCode.CLASES_BASE,
+            PrismaProductCapabilityCode.COMMERCE_ACCESS,
         ],
     },
     STAFF_AVAILABILITY: {

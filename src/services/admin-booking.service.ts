@@ -14,7 +14,9 @@ import {
 } from '../utils/bookingNotifications';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
 import type { DirectNotificationChannel, ReminderChannel } from '../utils/bookingNotifications';
+import { companyHasCapability } from './company-entitlements.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
+import { resolveEffectiveServicePrice } from './service-pricing.service';
 import { sendReviewRequestReminder } from '../utils/reviewNotifications';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
@@ -73,10 +75,49 @@ interface PreparedAdminBookingSession {
         service_id: number;
         service_name_snapshot: string;
         price_cents_snapshot: number;
+        regular_price_cents_snapshot?: number | null;
+        promo_applied_snapshot?: boolean;
+        promo_label_snapshot?: string | null;
         duration_minutes_snapshot: number;
         position: number;
     }>;
     payment: ResolvedAdminPayment;
+}
+
+function buildAdminServiceSnapshots(
+    services: Array<{
+        id: number;
+        name: string;
+        price_cents: number;
+        promo_price_cents?: number | null;
+        promo_starts_at?: Date | null;
+        promo_ends_at?: Date | null;
+        promo_label?: string | null;
+        duration_minutes: number;
+    }>,
+    promotionsEnabled: boolean,
+) {
+    return services.map((service, index) => {
+        const pricing = resolveEffectiveServicePrice({
+            priceCents: service.price_cents,
+            promoPriceCents: service.promo_price_cents ?? null,
+            promoStartsAt: service.promo_starts_at ?? null,
+            promoEndsAt: service.promo_ends_at ?? null,
+            promoLabel: service.promo_label ?? null,
+            promotionsEnabled,
+        });
+
+        return {
+            service_id: service.id,
+            service_name_snapshot: service.name,
+            price_cents_snapshot: pricing.finalPriceCents,
+            regular_price_cents_snapshot: pricing.regularPriceCents,
+            promo_applied_snapshot: pricing.promoApplied,
+            promo_label_snapshot: pricing.promoLabel,
+            duration_minutes_snapshot: service.duration_minutes,
+            position: index,
+        };
+    });
 }
 
 function cleanupReminderSentCache(now: number): void {
@@ -425,8 +466,23 @@ async function prepareAdminBookingSession(params: {
         };
     }
 
+    const promotionsEnabled = await companyHasCapability(
+        params.companyId,
+        'RESERVAS_SERVICE_PROMOTIONS',
+    );
     const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0);
-    const totalPrice = services.reduce((sum, service) => sum + service.price_cents, 0);
+    const totalPrice = services.reduce((sum, service) => {
+        const pricing = resolveEffectiveServicePrice({
+            priceCents: service.price_cents,
+            promoPriceCents: service.promo_price_cents ?? null,
+            promoStartsAt: service.promo_starts_at ?? null,
+            promoEndsAt: service.promo_ends_at ?? null,
+            promoLabel: service.promo_label ?? null,
+            promotionsEnabled,
+        });
+
+        return sum + pricing.finalPriceCents;
+    }, 0);
     const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
 
     const conflict = await BookingRepo.checkSlotConflict(
@@ -456,13 +512,7 @@ async function prepareAdminBookingSession(params: {
             endAt,
             totalPrice,
             services,
-            serviceSnapshots: services.map((service, index) => ({
-                service_id: service.id,
-                service_name_snapshot: service.name,
-                price_cents_snapshot: service.price_cents,
-                duration_minutes_snapshot: service.duration_minutes,
-                position: index,
-            })),
+            serviceSnapshots: buildAdminServiceSnapshots(services, promotionsEnabled),
             payment: paymentResult.payment,
         },
     };
@@ -811,8 +861,23 @@ export async function updateBooking(
                 };
             }
 
+            const promotionsEnabled = await companyHasCapability(
+                companyId,
+                'RESERVAS_SERVICE_PROMOTIONS',
+            );
             const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
-            const totalPrice = services.reduce((sum, s) => sum + s.price_cents, 0);
+            const totalPrice = services.reduce((sum, service) => {
+                const pricing = resolveEffectiveServicePrice({
+                    priceCents: service.price_cents,
+                    promoPriceCents: service.promo_price_cents ?? null,
+                    promoStartsAt: service.promo_starts_at ?? null,
+                    promoEndsAt: service.promo_ends_at ?? null,
+                    promoLabel: service.promo_label ?? null,
+                    promotionsEnabled,
+                });
+
+                return sum + pricing.finalPriceCents;
+            }, 0);
 
             // Use new start_at if provided, otherwise use existing
             const baseStartAt = updates.start_at
@@ -820,13 +885,7 @@ export async function updateBooking(
                 : existingBooking.start_at;
             const endAt = new Date(baseStartAt.getTime() + totalDuration * 60 * 1000);
 
-            const serviceSnapshots = services.map((service, index) => ({
-                service_id: service.id,
-                service_name_snapshot: service.name,
-                price_cents_snapshot: service.price_cents,
-                duration_minutes_snapshot: service.duration_minutes,
-                position: index,
-            }));
+            const serviceSnapshots = buildAdminServiceSnapshots(services, promotionsEnabled);
 
             await AdminBookingRepo.replaceBookingServices(
                 bookingId,

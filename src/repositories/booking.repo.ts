@@ -102,6 +102,10 @@ export async function getServicesByIds(serviceIds: number[], companyId: number) 
             name: true,
             duration_minutes: true,
             price_cents: true,
+            promo_price_cents: true,
+            promo_starts_at: true,
+            promo_ends_at: true,
+            promo_label: true,
             is_multi_session: true,
             session_count: true,
             session_duration_minutes: true,
@@ -575,6 +579,9 @@ export interface ServiceSnapshot {
     service_id: number;
     service_name_snapshot: string;
     price_cents_snapshot: number;
+    regular_price_cents_snapshot?: number | null;
+    promo_applied_snapshot?: boolean;
+    promo_label_snapshot?: string | null;
     duration_minutes_snapshot: number;
     position: number;
 }
@@ -614,6 +621,9 @@ export async function createBookingWithServices(
                     service_id: s.service_id,
                     service_name_snapshot: s.service_name_snapshot,
                     price_cents_snapshot: s.price_cents_snapshot,
+                    regular_price_cents_snapshot: s.regular_price_cents_snapshot ?? null,
+                    promo_applied_snapshot: s.promo_applied_snapshot ?? false,
+                    promo_label_snapshot: s.promo_label_snapshot ?? null,
                     duration_minutes_snapshot: s.duration_minutes_snapshot,
                     position: s.position,
                 })),

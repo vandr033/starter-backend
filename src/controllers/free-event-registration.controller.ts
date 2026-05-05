@@ -56,6 +56,7 @@ export async function submitFreeRegistrationHandler(req: AuthenticatedRequest, r
         gender: req.body.gender,
         age: Number(req.body.age),
         email: req.body.email,
+        countryCode: req.body.countryCode,
         phonePrefix: req.body.phonePrefix,
         phoneNumber: req.body.phoneNumber,
         tosAccepted: Boolean(req.body.tosAccepted),

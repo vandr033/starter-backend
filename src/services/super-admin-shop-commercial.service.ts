@@ -105,6 +105,7 @@ const DEFAULT_INCLUDED_ADDON_TIERS: Record<ProductCode, ProductTierCode> = {
     [ProductCode.RESERVAS]: ProductTierCode.RESERVAS_BASE,
     [ProductCode.EVENTOS]: ProductTierCode.EVENTOS_BASE,
     [ProductCode.CLASES]: ProductTierCode.CLASES_BASE,
+    [ProductCode.STORES]: ProductTierCode.STORES_BASE,
     [ProductCode.METRICAS]: ProductTierCode.METRICAS_BASE,
     [ProductCode.MARKETPLACE]: ProductTierCode.MARKETPLACE_PLUS,
 };

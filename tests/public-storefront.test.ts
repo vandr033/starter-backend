@@ -8,6 +8,7 @@ import {
   type ProductCapability,
 } from '../src/config/product-entitlements';
 import {
+  applyCommerceStoreVisibility,
   buildPublicEntitlementSummary,
   buildPublicStorefrontVisibility,
   sanitizePublicThemeConfig,
@@ -158,6 +159,50 @@ test('company without Personalizacion Plus has advanced storefront fields stripp
   assert.equal(theme.home_section_order, null);
   assert.equal(theme.footer_config, null);
   assert.equal(theme.announcement_banners, null);
+});
+
+test('storefront keeps commerce sections when the store module is active and publicly enabled', () => {
+  const entitlements = buildEntitlements({
+    products: [activeProduct('STORES', 'STORES_BASE')],
+    capabilities: ['COMMERCE_ACCESS', 'COMMERCE_COMBOS'],
+  });
+
+  const visibility = buildPublicStorefrontVisibility({
+    entitlements,
+    availability: {
+      availableUntil: new Date('2026-12-31T23:59:59.000Z'),
+      is_active: true,
+      deleted_at: null,
+    },
+  });
+
+  const storeVisible = applyCommerceStoreVisibility(visibility, true);
+
+  assert.equal(storeVisible.commerceVisible, true);
+  assert.equal(storeVisible.commerceCombosVisible, true);
+});
+
+test('storefront hides commerce homepage sections until the store is active publicly', () => {
+  const entitlements = buildEntitlements({
+    products: [activeProduct('STORES', 'STORES_PRO')],
+    capabilities: ['COMMERCE_ACCESS', 'COMMERCE_COMBOS', 'COMMERCE_PROMOTIONS'],
+  });
+
+  const visibility = buildPublicStorefrontVisibility({
+    entitlements,
+    availability: {
+      availableUntil: new Date('2026-12-31T23:59:59.000Z'),
+      is_active: true,
+      deleted_at: null,
+    },
+  });
+
+  const storeHidden = applyCommerceStoreVisibility(visibility, false);
+
+  assert.equal(storeHidden.storefrontEnabled, true);
+  assert.equal(storeHidden.commerceVisible, false);
+  assert.equal(storeHidden.commerceCombosVisible, false);
+  assert.equal(storeHidden.commercePromotionsVisible, false);
 });
 
 test('public entitlement summary includes modular products, add-ons, capabilities, and visibility flags', () => {

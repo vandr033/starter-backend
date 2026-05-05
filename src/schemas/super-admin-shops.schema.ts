@@ -1,34 +1,10 @@
+import { BillingCycle, ProductCode, ProductTierCode, ShopPlan } from '@prisma/client';
 import { z } from 'zod';
 
-const shopPlanSchema = z.enum(['STARTER', 'BUSINESS', 'PRO']);
-const billingCycleSchema = z.enum(['MONTHLY', 'YEARLY']);
-const productCodeSchema = z.enum([
-  'RESERVAS',
-  'EVENTOS',
-  'CLASES',
-  'PERSONALIZACION',
-  'CRM',
-  'MENSAJERIA',
-  'METRICAS',
-  'MARKETPLACE',
-]);
-const productTierCodeSchema = z.enum([
-  'RESERVAS_BASE',
-  'RESERVAS_PRO',
-  'EVENTOS_BASE',
-  'EVENTOS_PRO',
-  'CLASES_BASE',
-  'CLASES_PRO',
-  'PERSONALIZACION_BASE',
-  'PERSONALIZACION_PLUS',
-  'CRM_BASE',
-  'CRM_PRO',
-  'MENSAJERIA_BASE',
-  'MENSAJERIA_PRO',
-  'METRICAS_BASE',
-  'METRICAS_PRO',
-  'MARKETPLACE_PLUS',
-]);
+const shopPlanSchema = z.nativeEnum(ShopPlan);
+const billingCycleSchema = z.nativeEnum(BillingCycle);
+const productCodeSchema = z.nativeEnum(ProductCode);
+const productTierCodeSchema = z.nativeEnum(ProductTierCode);
 
 const optionalTextSchema = z
   .string()
@@ -77,6 +53,7 @@ function tierBelongsToProduct(
   if (productCode === 'RESERVAS') return tierCode === 'RESERVAS_BASE' || tierCode === 'RESERVAS_PRO';
   if (productCode === 'EVENTOS') return tierCode === 'EVENTOS_BASE' || tierCode === 'EVENTOS_PRO';
   if (productCode === 'CLASES') return tierCode === 'CLASES_BASE' || tierCode === 'CLASES_PRO';
+  if (productCode === 'STORES') return tierCode === 'STORES_BASE' || tierCode === 'STORES_PRO';
   if (productCode === 'PERSONALIZACION') {
     return tierCode === 'PERSONALIZACION_BASE' || tierCode === 'PERSONALIZACION_PLUS';
   }
@@ -90,7 +67,12 @@ function tierBelongsToProduct(
 }
 
 function isCoreProduct(productCode: z.infer<typeof productCodeSchema>): boolean {
-  return productCode === 'RESERVAS' || productCode === 'EVENTOS' || productCode === 'CLASES';
+  return (
+    productCode === 'RESERVAS' ||
+    productCode === 'EVENTOS' ||
+    productCode === 'CLASES' ||
+    productCode === 'STORES'
+  );
 }
 
 function validateProductConfiguration(

@@ -196,7 +196,6 @@ function resolveCoreTiers(product: BusinessPricingProduct, metadata: BusinessPri
     return tierSource
         .filter((tier) =>
             isKnownPublicCoreProduct(product.productKey) &&
-            product.productKey !== BusinessPricingProductKey.TIENDA &&
             isTierValidForCoreProduct(product.productKey as SelectableCoreProductKey, tier.tierKey),
         )
         .map((tier, index) => ({

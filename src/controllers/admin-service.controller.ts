@@ -5,6 +5,18 @@ import { AuthenticatedRequest } from '../middlewares/requireAuth';
 
 let mensaje: MensajeApi;
 
+function parseOptionalDate(value: unknown): Date | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+
+    const parsed = value instanceof Date ? value : new Date(String(value));
+    if (Number.isNaN(parsed.getTime())) {
+        return undefined;
+    }
+
+    return parsed;
+}
+
 /**
  * GET /api/admin/services
  * List all services for the admin's company
@@ -46,6 +58,10 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         name,
         description,
         price_cents,
+        promo_price_cents,
+        promo_starts_at,
+        promo_ends_at,
+        promo_label,
         duration_minutes,
         is_multi_session,
         session_count,
@@ -92,11 +108,36 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
+    if (promo_starts_at !== undefined && parsedPromoStartsAt === undefined) {
+        return res.status(400).json({
+            code: 400,
+            message: 'promo_starts_at no tiene un formato válido.',
+            error: true,
+        });
+    }
+
+    const parsedPromoEndsAt = parseOptionalDate(promo_ends_at);
+    if (promo_ends_at !== undefined && parsedPromoEndsAt === undefined) {
+        return res.status(400).json({
+            code: 400,
+            message: 'promo_ends_at no tiene un formato válido.',
+            error: true,
+        });
+    }
+
     const result = await ServiceService.createService(companyId, {
         category_id,
         name,
         description,
         price_cents,
+        promo_price_cents:
+            promo_price_cents === null || promo_price_cents === undefined
+                ? promo_price_cents
+                : Number(promo_price_cents),
+        promo_starts_at: parsedPromoStartsAt,
+        promo_ends_at: parsedPromoEndsAt,
+        promo_label: typeof promo_label === 'string' ? promo_label : undefined,
         duration_minutes,
         is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
         session_count: typeof session_count === 'number' ? session_count : undefined,
@@ -142,6 +183,10 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         name,
         description,
         price_cents,
+        promo_price_cents,
+        promo_starts_at,
+        promo_ends_at,
+        promo_label,
         duration_minutes,
         is_multi_session,
         session_count,
@@ -153,10 +198,35 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         required_resource_ids,
     } = req.body;
 
+    const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
+    if (promo_starts_at !== undefined && parsedPromoStartsAt === undefined) {
+        return res.status(400).json({
+            code: 400,
+            message: 'promo_starts_at no tiene un formato válido.',
+            error: true,
+        });
+    }
+
+    const parsedPromoEndsAt = parseOptionalDate(promo_ends_at);
+    if (promo_ends_at !== undefined && parsedPromoEndsAt === undefined) {
+        return res.status(400).json({
+            code: 400,
+            message: 'promo_ends_at no tiene un formato válido.',
+            error: true,
+        });
+    }
+
     const result = await ServiceService.updateService(companyId, serviceId, {
         name,
         description,
         price_cents,
+        promo_price_cents:
+            promo_price_cents === null || promo_price_cents === undefined
+                ? promo_price_cents
+                : Number(promo_price_cents),
+        promo_starts_at: parsedPromoStartsAt,
+        promo_ends_at: parsedPromoEndsAt,
+        promo_label: typeof promo_label === 'string' ? promo_label : undefined,
         duration_minutes,
         is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
         session_count: typeof session_count === 'number' ? session_count : undefined,

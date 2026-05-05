@@ -369,6 +369,9 @@ export async function createWalkInBooking(
         service_id: number;
         service_name_snapshot: string;
         price_cents_snapshot: number;
+        regular_price_cents_snapshot?: number | null;
+        promo_applied_snapshot?: boolean;
+        promo_label_snapshot?: string | null;
         duration_minutes_snapshot: number;
         position: number;
     }>
@@ -411,6 +414,9 @@ export async function createWalkInBooking(
                     service_id: s.service_id,
                     service_name_snapshot: s.service_name_snapshot,
                     price_cents_snapshot: s.price_cents_snapshot,
+                    regular_price_cents_snapshot: s.regular_price_cents_snapshot ?? null,
+                    promo_applied_snapshot: s.promo_applied_snapshot ?? false,
+                    promo_label_snapshot: s.promo_label_snapshot ?? null,
                     duration_minutes_snapshot: s.duration_minutes_snapshot,
                     position: s.position,
                 })),
@@ -466,6 +472,9 @@ export async function replaceBookingServices(
         service_id: number;
         service_name_snapshot: string;
         price_cents_snapshot: number;
+        regular_price_cents_snapshot?: number | null;
+        promo_applied_snapshot?: boolean;
+        promo_label_snapshot?: string | null;
         duration_minutes_snapshot: number;
         position: number;
     }>,
@@ -487,6 +496,9 @@ export async function replaceBookingServices(
                 service_id: s.service_id,
                 service_name_snapshot: s.service_name_snapshot,
                 price_cents_snapshot: s.price_cents_snapshot,
+                regular_price_cents_snapshot: s.regular_price_cents_snapshot ?? null,
+                promo_applied_snapshot: s.promo_applied_snapshot ?? false,
+                promo_label_snapshot: s.promo_label_snapshot ?? null,
                 duration_minutes_snapshot: s.duration_minutes_snapshot,
                 position: s.position,
             })),
@@ -528,6 +540,9 @@ export async function createCustomerBooking(
         service_id: number;
         service_name_snapshot: string;
         price_cents_snapshot: number;
+        regular_price_cents_snapshot?: number | null;
+        promo_applied_snapshot?: boolean;
+        promo_label_snapshot?: string | null;
         duration_minutes_snapshot: number;
         position: number;
     }>
@@ -566,6 +581,9 @@ export async function createCustomerBooking(
                     service_id: s.service_id,
                     service_name_snapshot: s.service_name_snapshot,
                     price_cents_snapshot: s.price_cents_snapshot,
+                    regular_price_cents_snapshot: s.regular_price_cents_snapshot ?? null,
+                    promo_applied_snapshot: s.promo_applied_snapshot ?? false,
+                    promo_label_snapshot: s.promo_label_snapshot ?? null,
                     duration_minutes_snapshot: s.duration_minutes_snapshot,
                     position: s.position,
                 })),

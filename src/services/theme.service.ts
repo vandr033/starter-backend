@@ -20,7 +20,7 @@ const DEFAULT_THEME = {
     home_cta_buttons: null,
 };
 
-const VALID_CTA_DESTINATIONS = ['booking', 'services', 'free-events', 'events', 'classes'];
+const VALID_CTA_DESTINATIONS = ['booking', 'services', 'store', 'free-events', 'events', 'classes'];
 
 function validateCTAButtons(buttons: unknown): string | null {
     if (!Array.isArray(buttons)) return 'home_cta_buttons must be an array';
@@ -233,7 +233,7 @@ export async function updateTheme(
         }
 
         // Validate home_section_order if provided
-        const validSections = ['about', 'services', 'events', 'classes', 'team'];
+        const validSections = ['about', 'services', 'products', 'promotions', 'combos', 'events', 'classes', 'team'];
         if (input.home_section_order !== undefined && input.home_section_order !== null) {
             if (!Array.isArray(input.home_section_order) ||
                 !input.home_section_order.every((s) => validSections.includes(s as string))) {

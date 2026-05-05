@@ -63,7 +63,15 @@ export const verifyUserEmail = (id: string) => {
   });
 }
 
-export const createUser = (name: string, email: string, first_name: string, last_name: string, phoneNumber: string, phone_prefix: string) => {
+export const createUser = (
+  name: string,
+  email: string,
+  first_name: string,
+  last_name: string,
+  phoneNumber: string,
+  phone_prefix: string,
+  country_code?: string,
+) => {
   const canonicalPhone = canonicalizePhoneParts({ phonePrefix: phone_prefix, phoneNumber });
   return prisma.user.create({
     data: {
@@ -71,6 +79,7 @@ export const createUser = (name: string, email: string, first_name: string, last
       email,
       first_name,
       last_name,
+      ...(country_code?.trim() ? { country_code: country_code.trim().toUpperCase() } : {}),
       phoneNumber: canonicalPhone.phoneNumber || phoneNumber,
       phone_prefix: canonicalPhone.phonePrefix || phone_prefix,
     },
@@ -115,9 +124,15 @@ export const updateUserEmail = (id: string, email: string) => {
   });
 }
 
-export const updateUserPhone = async (id: string, phoneNumber: string, phone_prefix?: string) => {
+export const updateUserPhone = async (
+  id: string,
+  phoneNumber: string,
+  phone_prefix?: string,
+  country_code?: string,
+) => {
   const canonicalPhone = canonicalizePhoneParts({ phonePrefix: phone_prefix, phoneNumber });
   const nextPhone = canonicalPhone.phoneNumber || normalizePhoneDigits(phoneNumber) || null;
+  const normalizedCountryCode = country_code?.trim().toUpperCase() || null;
 
   if (nextPhone) {
     const existingUser = await findActiveUserByPhone({
@@ -137,6 +152,7 @@ export const updateUserPhone = async (id: string, phoneNumber: string, phone_pre
       phoneNumber: nextPhone,
       phoneNumberVerified: true,
       ...(canonicalPhone.phonePrefix ? { phone_prefix: canonicalPhone.phonePrefix } : {}),
+      ...(normalizedCountryCode !== null ? { country_code: normalizedCountryCode } : {}),
     },
   });
 }

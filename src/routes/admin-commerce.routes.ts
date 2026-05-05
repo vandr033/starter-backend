@@ -1,0 +1,376 @@
+import { Router } from 'express';
+import { CompanyUserRole } from '@prisma/client';
+import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
+import { requireCompanyCapability } from '../middlewares/requireCompanyCapability';
+import { validate } from '../middlewares/validate';
+import * as CommerceStoreController from '../controllers/commerce-store.controller';
+import * as CommercePointOfSaleController from '../controllers/commerce-point-of-sale.controller';
+import * as CommerceCategoryController from '../controllers/commerce-category.controller';
+import * as CommerceProductController from '../controllers/commerce-product.controller';
+import * as CommerceComboController from '../controllers/commerce-combo.controller';
+import * as CommerceOrderController from '../controllers/commerce-order.controller';
+import { uploadMiddleware } from '../controllers/admin-upload.controller';
+import {
+    createCommerceComboSchema,
+    createCommerceCategorySchema,
+    createCommercePointOfSaleSchema,
+    createCommerceProductSchema,
+    reorderCommerceEntitiesSchema,
+    reorderCommerceProductImagesSchema,
+    updateCommerceProductImageSchema,
+    upsertCommercePromotionSchema,
+    updateCommerceCategorySchema,
+    updateCommerceComboSchema,
+    updateCommerceOrderAssignSchema,
+    updateCommerceOrderDeliveryCostSchema,
+    updateCommerceOrderNotesSchema,
+    updateCommerceOrderStatusSchema,
+    updateCommercePointOfSaleSchema,
+    updateCommerceProductSchema,
+    upsertCommerceStoreSchema,
+} from '../schemas/commerce.schema';
+
+const router = Router();
+
+const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
+const allStaffRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN, CompanyUserRole.STAFF];
+
+router.get(
+    '/store',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_ACCESS'),
+    CommerceStoreController.getAdminCommerceStore,
+);
+router.put(
+    '/store',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_ACCESS'),
+    validate(upsertCommerceStoreSchema),
+    CommerceStoreController.upsertAdminCommerceStore,
+);
+
+router.get(
+    '/points-of-sale',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_ACCESS'),
+    CommercePointOfSaleController.listAdminCommercePointsOfSale,
+);
+router.post(
+    '/points-of-sale',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_ACCESS'),
+    validate(createCommercePointOfSaleSchema),
+    CommercePointOfSaleController.createAdminCommercePointOfSale,
+);
+router.put(
+    '/points-of-sale/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_ACCESS'),
+    validate(updateCommercePointOfSaleSchema),
+    CommercePointOfSaleController.updateAdminCommercePointOfSale,
+);
+router.delete(
+    '/points-of-sale/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_ACCESS'),
+    CommercePointOfSaleController.deleteAdminCommercePointOfSale,
+);
+
+router.get(
+    '/categories',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_CATEGORIES'),
+    CommerceCategoryController.listAdminCommerceCategories,
+);
+router.post(
+    '/categories',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_CATEGORIES'),
+    validate(createCommerceCategorySchema),
+    CommerceCategoryController.createAdminCommerceCategory,
+);
+router.put(
+    '/categories/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_CATEGORIES'),
+    validate(updateCommerceCategorySchema),
+    CommerceCategoryController.updateAdminCommerceCategory,
+);
+router.delete(
+    '/categories/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_CATEGORIES'),
+    CommerceCategoryController.deleteAdminCommerceCategory,
+);
+router.post(
+    '/categories/reorder',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_CATEGORIES'),
+    validate(reorderCommerceEntitiesSchema),
+    CommerceCategoryController.reorderAdminCommerceCategories,
+);
+
+router.get(
+    '/products',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    CommerceProductController.listAdminCommerceProducts,
+);
+router.post(
+    '/products',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    validate(createCommerceProductSchema),
+    CommerceProductController.createAdminCommerceProduct,
+);
+router.get(
+    '/products/:id',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    CommerceProductController.getAdminCommerceProduct,
+);
+router.put(
+    '/products/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    validate(updateCommerceProductSchema),
+    CommerceProductController.updateAdminCommerceProduct,
+);
+router.delete(
+    '/products/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    CommerceProductController.deleteAdminCommerceProduct,
+);
+router.post(
+    '/products/reorder',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    validate(reorderCommerceEntitiesSchema),
+    CommerceProductController.reorderAdminCommerceProducts,
+);
+router.post(
+    '/products/:id/images',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    uploadMiddleware,
+    CommerceProductController.uploadAdminCommerceProductImage,
+);
+router.put(
+    '/products/:id/images/:imageId/primary',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    CommerceProductController.setAdminCommerceProductPrimaryImage,
+);
+router.put(
+    '/products/:id/images/reorder',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    validate(reorderCommerceProductImagesSchema),
+    CommerceProductController.reorderAdminCommerceProductImages,
+);
+router.put(
+    '/products/:id/images/:imageId',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    validate(updateCommerceProductImageSchema),
+    CommerceProductController.updateAdminCommerceProductImage,
+);
+router.delete(
+    '/products/:id/images/:imageId',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PRODUCTS'),
+    CommerceProductController.deleteAdminCommerceProductImage,
+);
+router.put(
+    '/products/:id/promotion',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PROMOTIONS'),
+    validate(upsertCommercePromotionSchema),
+    CommerceProductController.upsertAdminCommerceProductPromotion,
+);
+router.delete(
+    '/products/:id/promotion',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PROMOTIONS'),
+    CommerceProductController.removeAdminCommerceProductPromotion,
+);
+
+router.get(
+    '/combos',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    CommerceComboController.listAdminCommerceCombos,
+);
+router.post(
+    '/combos',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    validate(createCommerceComboSchema),
+    CommerceComboController.createAdminCommerceCombo,
+);
+router.get(
+    '/combos/:id',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    CommerceComboController.getAdminCommerceCombo,
+);
+router.put(
+    '/combos/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    validate(updateCommerceComboSchema),
+    CommerceComboController.updateAdminCommerceCombo,
+);
+router.delete(
+    '/combos/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    CommerceComboController.deleteAdminCommerceCombo,
+);
+router.post(
+    '/combos/:id/images',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    uploadMiddleware,
+    CommerceComboController.uploadAdminCommerceComboImage,
+);
+router.put(
+    '/combos/:id/images/:imageId/primary',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    CommerceComboController.setAdminCommerceComboPrimaryImage,
+);
+router.put(
+    '/combos/:id/images/reorder',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    validate(reorderCommerceProductImagesSchema),
+    CommerceComboController.reorderAdminCommerceComboImages,
+);
+router.put(
+    '/combos/:id/images/:imageId',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    validate(updateCommerceProductImageSchema),
+    CommerceComboController.updateAdminCommerceComboImage,
+);
+router.delete(
+    '/combos/:id/images/:imageId',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_COMBOS'),
+    CommerceComboController.deleteAdminCommerceComboImage,
+);
+router.put(
+    '/combos/:id/promotion',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PROMOTIONS'),
+    validate(upsertCommercePromotionSchema),
+    CommerceComboController.upsertAdminCommerceComboPromotion,
+);
+router.delete(
+    '/combos/:id/promotion',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_PROMOTIONS'),
+    CommerceComboController.removeAdminCommerceComboPromotion,
+);
+
+router.get(
+    '/orders',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_ORDERS'),
+    CommerceOrderController.listAdminCommerceOrders,
+);
+router.get(
+    '/orders/:id',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_ORDERS'),
+    CommerceOrderController.getAdminCommerceOrder,
+);
+router.put(
+    '/orders/:id/status',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_ORDERS'),
+    validate(updateCommerceOrderStatusSchema),
+    CommerceOrderController.updateAdminCommerceOrderStatus,
+);
+router.put(
+    '/orders/:id/delivery-cost',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_DELIVERY'),
+    validate(updateCommerceOrderDeliveryCostSchema),
+    CommerceOrderController.updateAdminCommerceOrderDeliveryCost,
+);
+router.put(
+    '/orders/:id/assign',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_STAFF_ASSIGNMENT'),
+    validate(updateCommerceOrderAssignSchema),
+    CommerceOrderController.updateAdminCommerceOrderAssignment,
+);
+router.put(
+    '/orders/:id/notes',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_ORDERS'),
+    validate(updateCommerceOrderNotesSchema),
+    CommerceOrderController.updateAdminCommerceOrderNotes,
+);
+
+router.get(
+    '/staff',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_STAFF_ASSIGNMENT'),
+    CommerceOrderController.getAdminCommerceAssignableStaff,
+);
+router.get(
+    '/metrics',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('COMMERCE_METRICS'),
+    CommerceOrderController.getAdminCommerceMetrics,
+);
+
+export default router;

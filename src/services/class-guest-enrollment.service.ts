@@ -38,6 +38,7 @@ type AccountLookupUser = {
 type StartInput = {
     full_name: string;
     email: string;
+    countryCode?: string;
     phonePrefix: string;
     phoneNumber: string;
 };
@@ -323,6 +324,7 @@ export async function startClassGuestEnrollment(
         phonePrefix: input.phonePrefix,
         phoneNumber: input.phoneNumber,
     });
+    const normalizedCountryCode = input.countryCode?.trim().toUpperCase() || null;
     const email = normalizeEmail(input.email ?? '');
 
     if (!name.fullName) return { code: 400, error: true, message: 'full_name is required' };
@@ -367,6 +369,7 @@ export async function startClassGuestEnrollment(
             first_name: name.firstName,
             last_name: name.lastName,
             email,
+            country_code: normalizedCountryCode,
             phone_prefix: canonicalPhone.phonePrefix,
             phone_number: canonicalPhone.phoneNumber,
             account_outcome: account.outcome,
@@ -487,6 +490,7 @@ export async function verifyClassGuestEnrollment(
         email: session.email,
         phone: session.phone_number,
         phonePrefix: session.phone_prefix,
+        countryCode: session.country_code,
     });
 
     if (provisioned.error) {
@@ -533,6 +537,7 @@ export async function verifyClassGuestEnrollment(
                 name: true,
                 first_name: true,
                 last_name: true,
+                country_code: true,
                 phone_prefix: true,
                 phoneNumber: true,
                 emailVerified: true,

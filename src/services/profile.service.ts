@@ -56,6 +56,7 @@ export async function getProfile(userId: string): Promise<MensajeApi> {
                 first_name: true,
                 last_name: true,
                 name: true,
+                country_code: true,
                 phoneNumber: true,
                 phone_prefix: true,
                 phoneNumberVerified: true,
@@ -88,7 +89,13 @@ export async function getProfile(userId: string): Promise<MensajeApi> {
 
 export async function updateProfile(
     userId: string,
-    data: { first_name?: string; last_name?: string; phoneNumber?: string; phone_prefix?: string }
+    data: {
+        first_name?: string;
+        last_name?: string;
+        phoneNumber?: string;
+        phone_prefix?: string;
+        country_code?: string;
+    }
 ): Promise<MensajeApi> {
     try {
         const existing = await prisma.user.findUnique({
@@ -98,6 +105,7 @@ export async function updateProfile(
                 first_name: true,
                 last_name: true,
                 name: true,
+                country_code: true,
                 phoneNumber: true,
                 phone_prefix: true,
             },
@@ -111,7 +119,8 @@ export async function updateProfile(
             data.first_name !== undefined ||
             data.last_name !== undefined ||
             data.phoneNumber !== undefined ||
-            data.phone_prefix !== undefined;
+            data.phone_prefix !== undefined ||
+            data.country_code !== undefined;
 
         if (!hasAnyUpdate) {
             return { code: 400, message: "No profile fields provided", error: true };
@@ -124,6 +133,10 @@ export async function updateProfile(
 
         const nextDisplayName =
             `${normalizedFirstName} ${normalizedLastName}`.trim() || existing.name || "User";
+        const normalizedCountryCode =
+            data.country_code !== undefined
+                ? (data.country_code.trim().toUpperCase() || null)
+                : (existing.country_code || null);
 
         const canonicalPhone = canonicalizePhoneParts({
             phonePrefix: data.phone_prefix !== undefined ? data.phone_prefix : existing.phone_prefix,
@@ -164,6 +177,7 @@ export async function updateProfile(
                 ...(data.phone_prefix !== undefined || data.phoneNumber !== undefined
                     ? { phone_prefix: nextPhonePrefix }
                     : {}),
+                ...(data.country_code !== undefined ? { country_code: normalizedCountryCode } : {}),
                 ...(phoneChanged ? { phoneNumberVerified: false } : {}),
             },
             select: {
@@ -172,6 +186,7 @@ export async function updateProfile(
                 first_name: true,
                 last_name: true,
                 name: true,
+                country_code: true,
                 phoneNumber: true,
                 phone_prefix: true,
                 phoneNumberVerified: true,
@@ -369,7 +384,8 @@ export async function verifyPhoneChange(
     userId: string,
     newPhone: string,
     code: string,
-    phone_prefix?: string
+    phone_prefix?: string,
+    country_code?: string
 ): Promise<MensajeApi> {
     try {
         const identifier = `${userId}:${newPhone}`;
@@ -399,7 +415,7 @@ export async function verifyPhoneChange(
             return { code: 400, message: "Invalid code", error: true };
         }
 
-        const updated = await UserRepo.updateUserPhone(userId, newPhone, phone_prefix);
+        const updated = await UserRepo.updateUserPhone(userId, newPhone, phone_prefix, country_code);
 
         return {
             code: 200,

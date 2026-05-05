@@ -15,6 +15,9 @@ export type PublicStorefrontVisibility = {
   contactVisible: boolean;
   servicesVisible: boolean;
   bookingsEnabled: boolean;
+  commerceVisible: boolean;
+  commercePromotionsVisible: boolean;
+  commerceCombosVisible: boolean;
   eventsVisible: boolean;
   eventRegistrationEnabled: boolean;
   eventAdvancedEnabled: boolean;
@@ -73,6 +76,8 @@ export function buildPublicStorefrontVisibility(params: {
 }): PublicStorefrontVisibility {
   const storefrontEnabled = isCompanyAvailableNow(params.availability);
   const servicesVisible = storefrontEnabled && hasCapability(params.entitlements, 'RESERVAS_BASE');
+  const commerceVisible =
+    storefrontEnabled && hasCapability(params.entitlements, 'COMMERCE_ACCESS');
   const eventsVisible = storefrontEnabled && hasCapability(params.entitlements, 'EVENTOS_BASE');
   const classesVisible = storefrontEnabled && hasCapability(params.entitlements, 'CLASES_BASE');
   const personalizationPlusEnabled =
@@ -94,6 +99,11 @@ export function buildPublicStorefrontVisibility(params: {
     contactVisible: storefrontEnabled,
     servicesVisible,
     bookingsEnabled: servicesVisible,
+    commerceVisible,
+    commercePromotionsVisible:
+      commerceVisible && hasCapability(params.entitlements, 'COMMERCE_PROMOTIONS'),
+    commerceCombosVisible:
+      commerceVisible && hasCapability(params.entitlements, 'COMMERCE_COMBOS'),
     eventsVisible,
     eventRegistrationEnabled: eventsVisible,
     eventAdvancedEnabled,
@@ -125,6 +135,22 @@ export function buildPublicEntitlementSummary(
     capabilities: { ...entitlements.productCapabilities },
     products: entitlements.products.map((product) => ({ ...product })),
     publicFeatures: { ...publicFeatures },
+  };
+}
+
+export function applyCommerceStoreVisibility(
+  publicFeatures: PublicStorefrontVisibility,
+  isCommerceStoreActive: boolean,
+): PublicStorefrontVisibility {
+  if (isCommerceStoreActive) {
+    return { ...publicFeatures };
+  }
+
+  return {
+    ...publicFeatures,
+    commerceVisible: false,
+    commercePromotionsVisible: false,
+    commerceCombosVisible: false,
   };
 }
 

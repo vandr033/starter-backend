@@ -35,6 +35,18 @@ export class StorageService {
     return path.join(this.getCompanyPath(companyId), 'qr');
   }
 
+  static getCompanyCommerceStorePath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'commerce-store');
+  }
+
+  static getCompanyCommerceCategoriesPath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'commerce-categories');
+  }
+
+  static getCompanyCommerceProductsPath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'commerce-products');
+  }
+
   static getCompanyGroupEventsPath(companyId: number): string {
     return path.join(this.getCompanyPath(companyId), 'group-events');
   }
@@ -53,13 +65,27 @@ export class StorageService {
     await fs.mkdir(this.getCompanyStaffPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGalleryPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyQRPath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyCommerceStorePath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyCommerceCategoriesPath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyCommerceProductsPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGroupEventsPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGroupClassesPath(companyId), { recursive: true });
   }
 
   static async saveFile(
     companyId: number,
-    type: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'qr' | 'group-events' | 'group-classes',
+    type:
+      | 'logo'
+      | 'hero'
+      | 'about'
+      | 'staff'
+      | 'gallery'
+      | 'qr'
+      | 'commerce-store'
+      | 'commerce-categories'
+      | 'commerce-products'
+      | 'group-events'
+      | 'group-classes',
     filename: string,
     buffer: Buffer
   ): Promise<string> {
@@ -96,6 +122,15 @@ export class StorageService {
         break;
       case 'qr':
         directory = this.getCompanyQRPath(companyId);
+        break;
+      case 'commerce-store':
+        directory = this.getCompanyCommerceStorePath(companyId);
+        break;
+      case 'commerce-categories':
+        directory = this.getCompanyCommerceCategoriesPath(companyId);
+        break;
+      case 'commerce-products':
+        directory = this.getCompanyCommerceProductsPath(companyId);
         break;
       case 'group-events':
         directory = this.getCompanyGroupEventsPath(companyId);

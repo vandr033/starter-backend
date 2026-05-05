@@ -60,12 +60,18 @@ function buildVersionedEntityImageFilename(
   return `${entityId}-${kind}-${version}.${extension}`;
 }
 
+function buildVersionedCommerceFilename(prefix: string, extension: string): string {
+  const version = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${prefix}-${version}.${extension}`;
+}
+
 export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const rawCompanyId = (req as any).companyID ?? req.body.company_id;
     const companyId = Number.parseInt(String(rawCompanyId), 10);
     const { type, entity_id } = req.body;
-    const entityId = entity_id ? parseInt(entity_id, 10) : null;
+    const entityId = typeof entity_id === 'string' && entity_id.trim() ? entity_id.trim() : null;
+    const numericEntityId = entityId && /^\d+$/.test(entityId) ? Number.parseInt(entityId, 10) : null;
     
     if (!Number.isInteger(companyId) || companyId <= 0) {
       return res.status(400).json({
@@ -91,6 +97,9 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       'about_1',
       'about_2',
       'about_3',
+      'commerce_store_qr',
+      'commerce_category',
+      'commerce_product',
       'staff',
       'group_event_cover',
       'group_event_thumbnail',
@@ -109,6 +118,13 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       || type === 'group_event_cover'
       || type === 'group_event_thumbnail'
       || type === 'group_class_cover'
+      || type === 'group_class_thumbnail'
+      || type === 'commerce_category'
+      || type === 'commerce_product';
+    const typeRequiresNumericEntityId = type === 'staff'
+      || type === 'group_event_cover'
+      || type === 'group_event_thumbnail'
+      || type === 'group_class_cover'
       || type === 'group_class_thumbnail';
 
     // For staff and group item image types, entity_id is required
@@ -117,6 +133,13 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         code: 400,
         error: true,
         message: 'Entity ID is required for this upload type',
+      });
+    }
+    if (typeRequiresNumericEntityId && !numericEntityId) {
+      return res.status(400).json({
+        code: 400,
+        error: true,
+        message: 'Entity ID must be numeric for this upload type',
       });
     }
 
@@ -133,7 +156,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     let previousImageUrl: string | null = null;
     if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
       const currentRecord = await prisma.groupEvent.findFirst({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         select: { cover_image_url: true, thumbnail_url: true },
       });
       if (!currentRecord) {
@@ -146,7 +169,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       previousImageUrl = type === 'group_event_cover' ? currentRecord.cover_image_url : currentRecord.thumbnail_url;
     } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
       const currentRecord = await prisma.groupClass.findFirst({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         select: { cover_image_url: true, thumbnail_url: true },
       });
       if (!currentRecord) {
@@ -157,10 +180,39 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         });
       }
       previousImageUrl = type === 'group_class_cover' ? currentRecord.cover_image_url : currentRecord.thumbnail_url;
+    } else if (type === 'commerce_store_qr') {
+      const currentRecord = await prisma.commerceStore.findUnique({
+        where: { company_id: companyId },
+        select: { qr_image_url: true },
+      });
+      previousImageUrl = currentRecord?.qr_image_url ?? null;
+    } else if (type === 'commerce_category') {
+      const currentRecord = await prisma.commerceCategory.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: { image_url: true },
+      });
+      if (!currentRecord) {
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Commerce category not found',
+        });
+      }
+      previousImageUrl = currentRecord.image_url;
     }
 
     // Determine storage type and filename
-    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'group-events' | 'group-classes';
+    let storageType:
+      | 'logo'
+      | 'hero'
+      | 'about'
+      | 'staff'
+      | 'gallery'
+      | 'commerce-store'
+      | 'commerce-categories'
+      | 'commerce-products'
+      | 'group-events'
+      | 'group-classes';
     let filename: string;
     let imageUrlField: string;
 
@@ -188,29 +240,44 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         filename = `image${imageNumber}.${fileExtension}`;
         imageUrlField = `about_image_${imageNumber}_url`;
         break;
+      case 'commerce_store_qr':
+        storageType = 'commerce-store';
+        filename = buildVersionedCommerceFilename('qr', fileExtension);
+        imageUrlField = 'qr_image_url';
+        break;
+      case 'commerce_category':
+        storageType = 'commerce-categories';
+        filename = buildVersionedCommerceFilename(`category-${entityId!}`, fileExtension);
+        imageUrlField = 'image_url';
+        break;
+      case 'commerce_product':
+        storageType = 'commerce-products';
+        filename = buildVersionedCommerceFilename(`product-${entityId!}`, fileExtension);
+        imageUrlField = 'image_url';
+        break;
       case 'staff':
         storageType = 'staff';
-        filename = `${entityId}.${fileExtension}`;
+        filename = `${numericEntityId}.${fileExtension}`;
         imageUrlField = 'image_url';
         break;
       case 'group_event_cover':
         storageType = 'group-events';
-        filename = buildVersionedEntityImageFilename(entityId!, 'cover', fileExtension);
+        filename = buildVersionedEntityImageFilename(numericEntityId!, 'cover', fileExtension);
         imageUrlField = 'cover_image_url';
         break;
       case 'group_event_thumbnail':
         storageType = 'group-events';
-        filename = buildVersionedEntityImageFilename(entityId!, 'thumbnail', fileExtension);
+        filename = buildVersionedEntityImageFilename(numericEntityId!, 'thumbnail', fileExtension);
         imageUrlField = 'thumbnail_url';
         break;
       case 'group_class_cover':
         storageType = 'group-classes';
-        filename = buildVersionedEntityImageFilename(entityId!, 'cover', fileExtension);
+        filename = buildVersionedEntityImageFilename(numericEntityId!, 'cover', fileExtension);
         imageUrlField = 'cover_image_url';
         break;
       case 'group_class_thumbnail':
         storageType = 'group-classes';
-        filename = buildVersionedEntityImageFilename(entityId!, 'thumbnail', fileExtension);
+        filename = buildVersionedEntityImageFilename(numericEntityId!, 'thumbnail', fileExtension);
         imageUrlField = 'thumbnail_url';
         break;
       default:
@@ -236,7 +303,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
     if (type === 'staff') {
       // Update staff profile
       const updated = await prisma.staffProfile.updateMany({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         data: { image_url: url },
       });
       if (updated.count === 0) {
@@ -247,9 +314,64 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
           message: 'Staff profile not found',
         });
       }
+    } else if (type === 'commerce_store_qr') {
+      await prisma.commerceStore.upsert({
+        where: { company_id: companyId },
+        create: {
+          company_id: companyId,
+          qr_image_url: url,
+        },
+        update: {
+          qr_image_url: url,
+        },
+      });
+    } else if (type === 'commerce_category') {
+      const updated = await prisma.commerceCategory.updateMany({
+        where: { id: entityId!, company_id: companyId },
+        data: { image_url: url },
+      });
+      if (updated.count === 0) {
+        await StorageService.deleteFile(relativePath).catch(() => undefined);
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Commerce category not found',
+        });
+      }
+    } else if (type === 'commerce_product') {
+      const existingProduct = await prisma.commerceProduct.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: { id: true },
+      });
+      if (!existingProduct) {
+        await StorageService.deleteFile(relativePath).catch(() => undefined);
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Commerce product not found',
+        });
+      }
+
+      const isPrimary = String(req.body.is_primary ?? '').toLowerCase() === 'true';
+      if (isPrimary) {
+        await prisma.commerceProductImage.updateMany({
+          where: { product_id: entityId! },
+          data: { is_primary: false },
+        });
+      }
+
+      await prisma.commerceProductImage.create({
+        data: {
+          product_id: entityId!,
+          image_url: url,
+          alt_text: req.body.alt_text?.trim() || null,
+          sort_order: Number.parseInt(String(req.body.sort_order ?? 0), 10) || 0,
+          is_primary: isPrimary,
+        },
+      });
     } else if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
       const updated = await prisma.groupEvent.updateMany({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         data: { [imageUrlField]: url } as any,
       });
       if (updated.count === 0) {
@@ -262,7 +384,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       }
     } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
       const updated = await prisma.groupClass.updateMany({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         data: { [imageUrlField]: url } as any,
       });
       if (updated.count === 0) {
@@ -302,6 +424,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       data: {
         url,
         type,
+        image_url: url,
       },
     });
   } catch (error) {
@@ -322,7 +445,8 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
     const rawCompanyId = (req as any).companyID ?? req.body.company_id;
     const companyId = Number.parseInt(String(rawCompanyId), 10);
     const { type, entity_id } = req.body;
-    const entityId = entity_id ? parseInt(entity_id, 10) : null;
+    const entityId = typeof entity_id === 'string' && entity_id.trim() ? entity_id.trim() : null;
+    const numericEntityId = entityId && /^\d+$/.test(entityId) ? Number.parseInt(entityId, 10) : null;
     
     if (!Number.isInteger(companyId) || companyId <= 0) {
       return res.status(400).json({
@@ -340,6 +464,8 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       'about_1',
       'about_2',
       'about_3',
+      'commerce_store_qr',
+      'commerce_category',
       'staff',
       'group_event_cover',
       'group_event_thumbnail',
@@ -358,6 +484,12 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       || type === 'group_event_cover'
       || type === 'group_event_thumbnail'
       || type === 'group_class_cover'
+      || type === 'group_class_thumbnail'
+      || type === 'commerce_category';
+    const typeRequiresNumericEntityId = type === 'staff'
+      || type === 'group_event_cover'
+      || type === 'group_event_thumbnail'
+      || type === 'group_class_cover'
       || type === 'group_class_thumbnail';
 
     // For staff and group item image types, entity_id is required
@@ -368,9 +500,25 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
         message: 'Entity ID is required for this delete type',
       });
     }
+    if (typeRequiresNumericEntityId && !numericEntityId) {
+      return res.status(400).json({
+        code: 400,
+        error: true,
+        message: 'Entity ID must be numeric for this delete type',
+      });
+    }
 
     // Determine storage type and get current image URL from database
-    let storageType: 'logo' | 'hero' | 'about' | 'staff' | 'gallery' | 'group-events' | 'group-classes';
+    let storageType:
+      | 'logo'
+      | 'hero'
+      | 'about'
+      | 'staff'
+      | 'gallery'
+      | 'commerce-store'
+      | 'commerce-categories'
+      | 'group-events'
+      | 'group-classes';
     let imageUrlField: string = '';
 
     // First, get the current image URL from database
@@ -378,7 +526,7 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
     
     if (type === 'staff') {
       currentRecord = await prisma.staffProfile.findUnique({
-        where: { id: entityId! },
+        where: { id: numericEntityId! },
         select: { image_url: true, company_id: true },
       });
       
@@ -391,7 +539,7 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       }
     } else if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
       currentRecord = await prisma.groupEvent.findFirst({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         select: {
           cover_image_url: true,
           thumbnail_url: true,
@@ -407,7 +555,7 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       }
     } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
       currentRecord = await prisma.groupClass.findFirst({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         select: {
           cover_image_url: true,
           thumbnail_url: true,
@@ -419,6 +567,24 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
           code: 404,
           error: true,
           message: 'Group class not found',
+        });
+      }
+    } else if (type === 'commerce_store_qr') {
+      currentRecord = await prisma.commerceStore.findUnique({
+        where: { company_id: companyId },
+        select: { qr_image_url: true },
+      });
+    } else if (type === 'commerce_category') {
+      currentRecord = await prisma.commerceCategory.findFirst({
+        where: { id: entityId!, company_id: companyId },
+        select: { image_url: true },
+      });
+
+      if (!currentRecord) {
+        return res.status(404).json({
+          code: 404,
+          error: true,
+          message: 'Commerce category not found',
         });
       }
     } else {
@@ -477,6 +643,16 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
         storageType = 'about';
         imageUrlField = 'about_image_3_url';
         break;
+      case 'commerce_store_qr':
+        currentImageUrl = currentRecord?.qr_image_url ?? null;
+        storageType = 'commerce-store';
+        imageUrlField = 'qr_image_url';
+        break;
+      case 'commerce_category':
+        currentImageUrl = currentRecord.image_url;
+        storageType = 'commerce-categories';
+        imageUrlField = 'image_url';
+        break;
       case 'staff':
         currentImageUrl = currentRecord.image_url;
         storageType = 'staff';
@@ -527,17 +703,27 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
     // Update database record to set image_url = null
     if (type === 'staff') {
       await prisma.staffProfile.update({
-        where: { id: entityId! },
+        where: { id: numericEntityId! },
+        data: { image_url: null },
+      });
+    } else if (type === 'commerce_store_qr') {
+      await prisma.commerceStore.updateMany({
+        where: { company_id: companyId },
+        data: { qr_image_url: null },
+      });
+    } else if (type === 'commerce_category') {
+      await prisma.commerceCategory.updateMany({
+        where: { id: entityId!, company_id: companyId },
         data: { image_url: null },
       });
     } else if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
       await prisma.groupEvent.updateMany({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         data: { [imageUrlField]: null } as any,
       });
     } else if (type === 'group_class_cover' || type === 'group_class_thumbnail') {
       await prisma.groupClass.updateMany({
-        where: { id: entityId!, company_id: companyId },
+        where: { id: numericEntityId!, company_id: companyId },
         data: { [imageUrlField]: null } as any,
       });
     } else {

@@ -279,18 +279,12 @@ export async function signUpBusiness(
         throw buildSpanishSignupError('Elegí un tipo de negocio válido.');
     }
 
-    if (input.coreProducts.some((product) => product === 'TIENDA')) {
-        throw buildSpanishSignupError(
-            'Tienda todavía no está disponible. Elegí otro producto principal.',
-        );
-    }
-
     const invalidCoreProduct = input.coreSelections.find(
         (selection) => !isSelectableCoreProduct(selection.productKey),
     );
     if (invalidCoreProduct) {
         throw buildSpanishSignupError(
-            'Solo podés elegir Reservas, Eventos o Clases como productos principales.',
+            'Solo podés elegir productos principales válidos para tu negocio.',
         );
     }
 

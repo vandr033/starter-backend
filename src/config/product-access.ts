@@ -31,6 +31,8 @@ const PRODUCT_REQUEST_LABELS: Record<ProductTierCode, string> = {
     EVENTOS_PRO: 'Eventos Pro',
     CLASES_BASE: 'Clases',
     CLASES_PRO: 'Clases Pro',
+    STORES_BASE: 'Tienda',
+    STORES_PRO: 'Tienda Pro',
     PERSONALIZACION_BASE: 'Personalización Base',
     PERSONALIZACION_PLUS: 'Personalización Pro',
     CRM_BASE: 'CRM',
@@ -53,6 +55,11 @@ const CAPABILITY_PRODUCT_ACCESS: Record<ProductCapability, ProductAccessDefiniti
         tierCode: 'RESERVAS_PRO',
         capability: 'RESERVAS_PRO',
     },
+    RESERVAS_SERVICE_PROMOTIONS: {
+        productCode: 'RESERVAS',
+        tierCode: 'RESERVAS_PRO',
+        capability: 'RESERVAS_SERVICE_PROMOTIONS',
+    },
     EVENTOS_BASE: {
         productCode: 'EVENTOS',
         tierCode: 'EVENTOS_BASE',
@@ -72,6 +79,66 @@ const CAPABILITY_PRODUCT_ACCESS: Record<ProductCapability, ProductAccessDefiniti
         productCode: 'CLASES',
         tierCode: 'CLASES_PRO',
         capability: 'CLASES_PRO',
+    },
+    COMMERCE_ACCESS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_ACCESS',
+    },
+    COMMERCE_PRODUCTS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_PRODUCTS',
+    },
+    COMMERCE_CATEGORIES: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_CATEGORIES',
+    },
+    COMMERCE_STOCK: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_STOCK',
+    },
+    COMMERCE_ORDERS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_ORDERS',
+    },
+    COMMERCE_PICKUP: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_PICKUP',
+    },
+    COMMERCE_DELIVERY: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_DELIVERY',
+    },
+    COMMERCE_COMBOS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_BASE',
+        capability: 'COMMERCE_COMBOS',
+    },
+    COMMERCE_SCHEDULED_ORDERS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_PRO',
+        capability: 'COMMERCE_SCHEDULED_ORDERS',
+    },
+    COMMERCE_PROMOTIONS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_PRO',
+        capability: 'COMMERCE_PROMOTIONS',
+    },
+    COMMERCE_STAFF_ASSIGNMENT: {
+        productCode: 'STORES',
+        tierCode: 'STORES_PRO',
+        capability: 'COMMERCE_STAFF_ASSIGNMENT',
+    },
+    COMMERCE_METRICS: {
+        productCode: 'STORES',
+        tierCode: 'STORES_PRO',
+        capability: 'COMMERCE_METRICS',
     },
     CRM_BASE: {
         productCode: 'CRM',

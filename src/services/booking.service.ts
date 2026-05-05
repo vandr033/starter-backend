@@ -4,7 +4,9 @@ import { prisma } from '../prisma/client';
 import { notifyBookingCreated, notifyBookingPendingForManagement } from '../utils/bookingNotifications';
 import { BookingSource, BookingStatus, PaymentStatus } from '@prisma/client';
 import * as MarketplaceAnalyticsService from './marketplace-analytics.service';
+import { companyHasCapability } from './company-entitlements.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
+import { resolveEffectiveServicePrice } from './service-pricing.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
 
 interface GetSlotsParams {
@@ -76,6 +78,42 @@ async function resolveBookingFlowSettings(companyId: number): Promise<{
         requireComprobante: canCustomizeFlow ? (settings?.require_comprobante_for_qr ?? true) : true,
         autoConfirm: canCustomizeFlow ? (settings?.auto_confirm_bookings ?? true) : true,
     };
+}
+
+function buildServiceSnapshots(
+    services: Array<{
+        id: number;
+        name: string;
+        price_cents: number;
+        promo_price_cents?: number | null;
+        promo_starts_at?: Date | null;
+        promo_ends_at?: Date | null;
+        promo_label?: string | null;
+        duration_minutes: number;
+    }>,
+    promotionsEnabled: boolean,
+) {
+    return services.map((service, index) => {
+        const pricing = resolveEffectiveServicePrice({
+            priceCents: service.price_cents,
+            promoPriceCents: service.promo_price_cents ?? null,
+            promoStartsAt: service.promo_starts_at ?? null,
+            promoEndsAt: service.promo_ends_at ?? null,
+            promoLabel: service.promo_label ?? null,
+            promotionsEnabled,
+        });
+
+        return {
+            service_id: service.id,
+            service_name_snapshot: service.name,
+            price_cents_snapshot: pricing.finalPriceCents,
+            regular_price_cents_snapshot: pricing.regularPriceCents,
+            promo_applied_snapshot: pricing.promoApplied,
+            promo_label_snapshot: pricing.promoLabel,
+            duration_minutes_snapshot: service.duration_minutes,
+            position: index,
+        };
+    });
 }
 
 /**
@@ -659,9 +697,25 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
             };
         }
 
+        const promotionsEnabled = await companyHasCapability(
+            company_id,
+            'RESERVAS_SERVICE_PROMOTIONS',
+        );
+
         // 4. Calculate total duration and end time
         const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
-        const totalPrice = services.reduce((sum, s) => sum + s.price_cents, 0);
+        const totalPrice = services.reduce((sum, service) => {
+            const pricing = resolveEffectiveServicePrice({
+                priceCents: service.price_cents,
+                promoPriceCents: service.promo_price_cents ?? null,
+                promoStartsAt: service.promo_starts_at ?? null,
+                promoEndsAt: service.promo_ends_at ?? null,
+                promoLabel: service.promo_label ?? null,
+                promotionsEnabled,
+            });
+
+            return sum + pricing.finalPriceCents;
+        }, 0);
 
         const startAt = parseDateTimeInTimeZone(start_at, company.timezone);
         const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
@@ -759,13 +813,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         const customerProfile = await BookingRepo.getOrCreateCustomerProfile(company_id, user_id);
 
         // 9. Prepare service snapshots
-        const serviceSnapshots = services.map((s, index) => ({
-            service_id: s.id,
-            service_name_snapshot: s.name,
-            price_cents_snapshot: s.price_cents,
-            duration_minutes_snapshot: s.duration_minutes,
-            position: index,
-        }));
+        const serviceSnapshots = buildServiceSnapshots(services, promotionsEnabled);
 
         // 10. Determine booking status based on auto_confirm setting
         const bookingStatus = bookingFlowSettings.autoConfirm ? BookingStatus.CONFIRMED : BookingStatus.PENDING;
@@ -1001,6 +1049,10 @@ type CheckoutServiceDetail = {
     name: string;
     duration_minutes: number;
     price_cents: number;
+    promo_price_cents?: number | null;
+    promo_starts_at?: Date | null;
+    promo_ends_at?: Date | null;
+    promo_label?: string | null;
     is_multi_session: boolean;
     session_count: number | null;
     session_duration_minutes: number | null;
@@ -1174,6 +1226,10 @@ async function loadCheckoutServices(
             name: true,
             duration_minutes: true,
             price_cents: true,
+            promo_price_cents: true,
+            promo_starts_at: true,
+            promo_ends_at: true,
+            promo_label: true,
             is_multi_session: true,
             session_count: true,
             session_duration_minutes: true,
@@ -1234,6 +1290,7 @@ async function resolveRequestedCheckoutGroups(params: {
     companyId: number;
     timezone: string | null;
     requestedGroups: RequestedBookingGroupInput[];
+    promotionsEnabled: boolean;
 }): Promise<{ error: true; result: MensajeApi } | { error: false; groups: ResolvedCheckoutGroup[] }> {
     const uniqueServiceIds = Array.from(
         new Set(
@@ -1321,10 +1378,18 @@ async function resolveRequestedCheckoutGroups(params: {
             };
         }
 
-        const totalPriceCents = groupServices.reduce(
-            (sum, service) => sum + service.price_cents,
-            0,
-        );
+        const totalPriceCents = groupServices.reduce((sum, service) => {
+            const pricing = resolveEffectiveServicePrice({
+                priceCents: service.price_cents,
+                promoPriceCents: service.promo_price_cents ?? null,
+                promoStartsAt: service.promo_starts_at ?? null,
+                promoEndsAt: service.promo_ends_at ?? null,
+                promoLabel: service.promo_label ?? null,
+                promotionsEnabled: params.promotionsEnabled,
+            });
+
+            return sum + pricing.finalPriceCents;
+        }, 0);
 
         if (multiSessionServices.length === 1) {
             const multiService = multiSessionServices[0];
@@ -1462,10 +1527,15 @@ async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Pro
         };
     }
 
+    const servicePromotionsEnabled = await companyHasCapability(
+        params.company.id,
+        'RESERVAS_SERVICE_PROMOTIONS',
+    );
     const resolvedGroupsResult = await resolveRequestedCheckoutGroups({
         companyId: params.company.id,
         timezone: params.company.timezone,
         requestedGroups: params.requestedGroups,
+        promotionsEnabled: servicePromotionsEnabled,
     });
     if (resolvedGroupsResult.error) {
         return resolvedGroupsResult.result;
@@ -1728,21 +1798,35 @@ async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Pro
                 });
 
                 await tx.bookingService.createMany({
-                    data: group.services.map((service, serviceIndex) => ({
-                        booking_id: booking.id,
-                        company_id: params.company.id,
-                        service_id: service.id,
-                        service_name_snapshot: service.name,
-                        price_cents_snapshot:
-                            group.isMultiSession
-                                ? perBookingTotals[slotIndex] ?? service.price_cents
-                                : service.price_cents,
-                        duration_minutes_snapshot:
-                            group.isMultiSession
-                                ? slot.durationMinutes
-                                : service.duration_minutes,
-                        position: serviceIndex,
-                    })),
+                    data: group.services.map((service, serviceIndex) => {
+                        const pricing = resolveEffectiveServicePrice({
+                            priceCents: service.price_cents,
+                            promoPriceCents: service.promo_price_cents ?? null,
+                            promoStartsAt: service.promo_starts_at ?? null,
+                            promoEndsAt: service.promo_ends_at ?? null,
+                            promoLabel: service.promo_label ?? null,
+                            promotionsEnabled: servicePromotionsEnabled,
+                        });
+
+                        return {
+                            booking_id: booking.id,
+                            company_id: params.company.id,
+                            service_id: service.id,
+                            service_name_snapshot: service.name,
+                            price_cents_snapshot:
+                                group.isMultiSession
+                                    ? perBookingTotals[slotIndex] ?? pricing.finalPriceCents
+                                    : pricing.finalPriceCents,
+                            regular_price_cents_snapshot: pricing.regularPriceCents,
+                            promo_applied_snapshot: pricing.promoApplied,
+                            promo_label_snapshot: pricing.promoLabel,
+                            duration_minutes_snapshot:
+                                group.isMultiSession
+                                    ? slot.durationMinutes
+                                    : service.duration_minutes,
+                            position: serviceIndex,
+                        };
+                    }),
                 });
 
                 createdBookings.push({

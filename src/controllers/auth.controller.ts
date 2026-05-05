@@ -127,7 +127,7 @@ export async function completePhoneProfile(req: Request, res: Response) {
   const userId = authReq.authUser?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  const { first_name, last_name, phone_prefix } = req.body;
+  const { first_name, last_name, phone_prefix, country_code } = req.body;
   if (!first_name) {
     return res.status(400).json({ code: 400, message: "First name is required", error: true });
   }
@@ -135,7 +135,12 @@ export async function completePhoneProfile(req: Request, res: Response) {
   try {
     await UserRepo.updateUserNames(userId, first_name, last_name);
     if (phone_prefix) {
-      await UserRepo.updateUserPhone(userId, authReq.authUser.phoneNumber || '', phone_prefix);
+      await UserRepo.updateUserPhone(
+        userId,
+        authReq.authUser.phoneNumber || '',
+        phone_prefix,
+        country_code,
+      );
     }
     return res.status(200).json({
       code: 200,

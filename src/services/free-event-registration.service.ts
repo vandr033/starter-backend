@@ -26,6 +26,7 @@ export interface FreeEventRegistrationInput {
     gender: string;
     age: number;
     email: string;
+    countryCode?: string;
     phonePrefix: string;
     phoneNumber: string;
     tosAccepted: boolean;
@@ -83,6 +84,7 @@ export interface FreeRegistrationStateResult {
             gender: string;
             age: number | null;
             email: string;
+            countryCode?: string;
             phonePrefix: string;
             phoneNumber: string;
         } | null;
@@ -371,6 +373,7 @@ async function createAccountForFreeRegistration(input: {
     lastName: string;
     gender: string;
     age: number;
+    countryCode?: string;
     phonePrefix: string;
     phoneNumber: string;
 }): Promise<string> {
@@ -403,6 +406,7 @@ async function createAccountForFreeRegistration(input: {
             last_name: input.lastName,
             gender: input.gender,
             age: input.age,
+            country_code: input.countryCode?.trim().toUpperCase() || null,
             phone_prefix: canonicalPhone.phonePrefix ?? null,
             phoneNumber: canonicalPhone.phoneNumber ?? undefined,
             phoneNumberVerified: false,
@@ -416,6 +420,7 @@ async function resolveAccountForFreeRegistration(input: {
     createAccount: boolean;
     userId?: string;
     email: string;
+    countryCode?: string;
     phonePrefix: string;
     phoneNumber: string;
     otpChannelPreference?: OtpChannel;
@@ -502,6 +507,7 @@ async function resolveAccountForFreeRegistration(input: {
                 lastName: input.lastName,
                 gender: input.gender,
                 age: input.age,
+                countryCode: input.countryCode,
                 phonePrefix: input.phonePrefix,
                 phoneNumber: input.phoneNumber,
             });
@@ -795,7 +801,16 @@ export async function getFreeRegistrationState(
     const user = userId
         ? await prisma.user.findUnique({
             where: { id: userId },
-            select: { first_name: true, last_name: true, gender: true, age: true, email: true, phone_prefix: true, phoneNumber: true },
+            select: {
+                first_name: true,
+                last_name: true,
+                gender: true,
+                age: true,
+                email: true,
+                country_code: true,
+                phone_prefix: true,
+                phoneNumber: true,
+            },
         })
         : null;
 
@@ -864,6 +879,7 @@ export async function getFreeRegistrationState(
             gender: user.gender ?? '',
             age: user.age,
             email: user.email ?? '',
+            countryCode: user.country_code ?? undefined,
             phonePrefix: canonicalProfilePhone.phonePrefix ?? '591',
             phoneNumber: canonicalProfilePhone.phoneNumber ?? '',
         };
@@ -910,6 +926,7 @@ export async function submitFreeRegistration(
         lastName: input.lastName?.trim() ?? '',
         gender: input.gender?.trim().toUpperCase() ?? '',
         email: normalizeEmail(input.email ?? ''),
+        countryCode: input.countryCode?.trim().toUpperCase() ?? '',
         phonePrefix: canonicalPhone.phonePrefix ?? '',
         phoneNumber: canonicalPhone.phoneNumber ?? '',
     };
@@ -960,6 +977,7 @@ export async function submitFreeRegistration(
             createAccount: Boolean(input.createAccount),
             userId,
             email: trimmed.email,
+            countryCode: trimmed.countryCode,
             phonePrefix: trimmed.phonePrefix,
             phoneNumber: trimmed.phoneNumber,
             otpChannelPreference,
@@ -1049,6 +1067,7 @@ export async function submitFreeRegistration(
                         gender,
                         age: input.age,
                         email: trimmed.email,
+                        country_code: trimmed.countryCode || null,
                         phone_prefix: trimmed.phonePrefix,
                         phone_number: trimmed.phoneNumber,
                         tos_accepted: input.tosAccepted,
@@ -1083,6 +1102,7 @@ export async function submitFreeRegistration(
             last_name: trimmed.lastName,
             gender: trimmed.gender,
             age: input.age,
+            countryCode: trimmed.countryCode,
             phonePrefix: trimmed.phonePrefix,
             phoneNumber: trimmed.phoneNumber,
         });
@@ -1131,7 +1151,15 @@ export async function submitFreeRegistration(
 
 async function syncUserProfile(
     userId: string,
-    fields: { first_name: string; last_name: string; gender: string; age: number; phonePrefix: string; phoneNumber: string },
+    fields: {
+        first_name: string;
+        last_name: string;
+        gender: string;
+        age: number;
+        countryCode?: string;
+        phonePrefix: string;
+        phoneNumber: string;
+    },
 ): Promise<void> {
     try {
         const canonicalPhone = canonicalizePhoneParts({
@@ -1145,6 +1173,7 @@ async function syncUserProfile(
                 last_name: fields.last_name || undefined,
                 gender: fields.gender || undefined,
                 age: fields.age || undefined,
+                country_code: fields.countryCode?.trim().toUpperCase() || undefined,
                 phone_prefix: canonicalPhone.phonePrefix || undefined,
                 phoneNumber: canonicalPhone.phoneNumber || undefined,
                 name: [fields.first_name, fields.last_name].filter(Boolean).join(' ') || undefined,

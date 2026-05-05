@@ -1,20 +1,13 @@
 export type ProductFeatureMatrixSection =
     | {
           kind: 'core';
-          productKey: 'RESERVAS' | 'EVENTOS' | 'CLASES';
+          productKey: 'RESERVAS' | 'EVENTOS' | 'CLASES' | 'TIENDA';
           title: string;
           rows: Array<{
               feature: string;
               base: boolean;
               pro: boolean;
           }>;
-      }
-    | {
-          kind: 'comingSoon';
-          productKey: 'TIENDA';
-          title: string;
-          status: string;
-          features: string[];
       }
     | {
           kind: 'addons';
@@ -75,15 +68,18 @@ export const PRODUCT_FEATURE_MATRIX: ProductFeatureMatrixSection[] = [
         ],
     },
     {
-        kind: 'comingSoon',
+        kind: 'core',
         productKey: 'TIENDA',
         title: 'Tienda',
-        status: 'Próximamente',
-        features: [
-            'Productos y categorías',
-            'Pickup y delivery',
-            'Pedidos programados',
-            'Checkout por WhatsApp',
+        rows: [
+            { feature: 'Productos y categorías', base: true, pro: true },
+            { feature: 'Pickup y delivery', base: true, pro: true },
+            { feature: 'Pedidos manuales / QR', base: true, pro: true },
+            { feature: 'Costo de delivery manual', base: true, pro: true },
+            { feature: 'Promociones de productos', base: false, pro: true },
+            { feature: 'Combos estructurados', base: false, pro: true },
+            { feature: 'Asignación de pedidos a staff', base: false, pro: true },
+            { feature: 'Métricas de tienda', base: false, pro: true },
         ],
     },
     {

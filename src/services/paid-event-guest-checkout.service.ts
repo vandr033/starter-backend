@@ -37,6 +37,7 @@ type AccountLookupUser = {
 type GuestCheckoutStartInput = {
     full_name: string;
     email: string;
+    countryCode?: string;
     phonePrefix: string;
     phoneNumber: string;
     tosAccepted: boolean;
@@ -394,6 +395,7 @@ export async function startPaidEventGuestCheckout(
         phonePrefix: input.phonePrefix,
         phoneNumber: input.phoneNumber,
     });
+    const normalizedCountryCode = input.countryCode?.trim().toUpperCase() || null;
     const email = normalizeEmail(input.email ?? '');
 
     if (!name.fullName) {
@@ -454,6 +456,7 @@ export async function startPaidEventGuestCheckout(
             first_name: name.firstName,
             last_name: name.lastName,
             email,
+            country_code: normalizedCountryCode,
             phone_prefix: canonicalPhone.phonePrefix,
             phone_number: canonicalPhone.phoneNumber,
             account_outcome: account.outcome,
@@ -588,6 +591,7 @@ export async function verifyPaidEventGuestCheckout(
         email: session.email,
         phone: session.phone_number,
         phonePrefix: session.phone_prefix,
+        countryCode: session.country_code,
     });
 
     if (provisioned.error) {
@@ -643,6 +647,7 @@ export async function verifyPaidEventGuestCheckout(
                 name: true,
                 first_name: true,
                 last_name: true,
+                country_code: true,
                 phone_prefix: true,
                 phoneNumber: true,
                 emailVerified: true,

@@ -30,6 +30,7 @@ export type EnsuredCustomerProfile = {
     userId: string;
     userName: string;
     userEmail: string | null;
+    userCountryCode: string | null;
     userPhonePrefix: string | null;
     userPhoneNumber: string | null;
     inviteContext: CustomerAccountInviteContext | null;
@@ -147,6 +148,7 @@ export async function ensureCustomerProfileWithAccount(params: {
     email: string;
     phone?: string | null;
     phonePrefix?: string | null;
+    countryCode?: string | null;
 }): Promise<EnsuredCustomerProfile | ServiceFailure> {
     const company = await prisma.company.findFirst({
         where: { id: params.companyId, deleted_at: null },
@@ -188,6 +190,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                 name: true,
                 first_name: true,
                 last_name: true,
+                country_code: true,
                 phone_prefix: true,
                 phoneNumber: true,
             },
@@ -205,6 +208,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                     name: true,
                     first_name: true,
                     last_name: true,
+                    country_code: true,
                     phone_prefix: true,
                     phoneNumber: true,
                 },
@@ -226,6 +230,7 @@ export async function ensureCustomerProfileWithAccount(params: {
     if (!user) {
         const temporaryPassword = crypto.randomBytes(9).toString('base64url');
         const passwordHash = await hash(temporaryPassword);
+        const normalizedCountryCode = params.countryCode?.trim().toUpperCase() || null;
 
         user = await prisma.user.create({
             data: {
@@ -233,6 +238,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                 name: nameParts.displayName,
                 first_name: nameParts.firstName ?? undefined,
                 last_name: nameParts.lastName ?? undefined,
+                ...(normalizedCountryCode ? { country_code: normalizedCountryCode } : {}),
                 phone_prefix: canonicalPhone.phoneNumber ? canonicalPhone.phonePrefix : undefined,
                 phoneNumber: canonicalPhone.phoneNumber ?? undefined,
                 must_change_password: true,
@@ -243,6 +249,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                 name: true,
                 first_name: true,
                 last_name: true,
+                country_code: true,
                 phone_prefix: true,
                 phoneNumber: true,
             },
@@ -265,6 +272,7 @@ export async function ensureCustomerProfileWithAccount(params: {
         };
     } else {
         const updateData: Record<string, string | null> = {};
+        const normalizedCountryCode = params.countryCode?.trim().toUpperCase() || null;
 
         if ((!user.name || isTemporaryEmailAddress(user.name)) && nameParts.displayName) {
             updateData.name = nameParts.displayName;
@@ -278,6 +286,9 @@ export async function ensureCustomerProfileWithAccount(params: {
         if (!user.phoneNumber && canonicalPhone.phoneNumber) {
             updateData.phoneNumber = canonicalPhone.phoneNumber;
             updateData.phone_prefix = canonicalPhone.phonePrefix;
+        }
+        if (!user.country_code && normalizedCountryCode) {
+            updateData.country_code = normalizedCountryCode;
         }
         if (isTemporaryEmailAddress(user.email) && user.email !== normalizedEmail) {
             updateData.email = normalizedEmail;
@@ -293,6 +304,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                     name: true,
                     first_name: true,
                     last_name: true,
+                    country_code: true,
                     phone_prefix: true,
                     phoneNumber: true,
                 },
@@ -369,6 +381,7 @@ export async function ensureCustomerProfileWithAccount(params: {
         userId: user.id,
         userName: user.name,
         userEmail: normalizeEmail(user.email),
+        userCountryCode: user.country_code || null,
         userPhonePrefix: user.phone_prefix || null,
         userPhoneNumber: user.phoneNumber || null,
         inviteContext,
