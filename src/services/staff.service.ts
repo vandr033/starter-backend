@@ -316,13 +316,16 @@ export async function createStaff(
         const normalizedEmail = (input.email || '').trim().toLowerCase();
         const cleanPhone = (input.phone || '').replace(/\D/g, '');
         const cleanPhonePrefix = (input.phone_prefix || '591').replace(/\D/g, '') || '591';
-        const role = input.role ?? CompanyUserRole.STAFF;
         const seatUsage = await getStaffSeatUsageForCompany(companyId);
-        const canUseRolesPermissions = await isFeatureEnabledForCompany(companyId, 'ROLES_PERMISSIONS');
         const entitlements = await getCompanyEntitlements(companyId);
         const hasBookingModule =
             entitlements.productCapabilities.RESERVAS_BASE === true ||
             entitlements.productCapabilities.RESERVAS_PRO === true;
+        const requestedRole = input.role ?? CompanyUserRole.STAFF;
+        const role = hasBookingModule ? requestedRole : CompanyUserRole.STAFF;
+        const canUseRolesPermissions = hasBookingModule
+            ? await isFeatureEnabledForCompany(companyId, 'ROLES_PERMISSIONS')
+            : false;
 
         if (!normalizedEmail) {
             return {
@@ -333,9 +336,9 @@ export async function createStaff(
         }
 
         if (
-            role !== CompanyUserRole.OWNER &&
-            role !== CompanyUserRole.ADMIN &&
-            role !== CompanyUserRole.STAFF
+            requestedRole !== CompanyUserRole.OWNER &&
+            requestedRole !== CompanyUserRole.ADMIN &&
+            requestedRole !== CompanyUserRole.STAFF
         ) {
             return {
                 code: 400,
@@ -344,7 +347,7 @@ export async function createStaff(
             };
         }
 
-        if (!canUseRolesPermissions && role !== CompanyUserRole.STAFF) {
+        if (hasBookingModule && !canUseRolesPermissions && role !== CompanyUserRole.STAFF) {
             return {
                 code: 403,
                 message: 'Available on the Business plan',
