@@ -732,20 +732,22 @@ export async function updateStaff(
             }
 
             if (normalizedEmail !== undefined || cleanPhone !== undefined || cleanPhonePrefix !== undefined) {
-                if (!existing.user?.id) {
+                const existingUser = existing.user;
+
+                if (!existingUser?.id) {
                     throw new Error('Staff user not found');
                 }
 
                 const nextEmail = normalizedEmail !== undefined
-                    ? (normalizedEmail || null)
-                    : (existing.user.email || null);
-                const emailChanged = nextEmail !== (existing.user.email || null);
+                    ? normalizedEmail
+                    : existingUser.email;
+                const emailChanged = nextEmail !== existingUser.email;
                 const phoneChanged =
-                    nextPhone !== (existing.user.phoneNumber || null) ||
-                    nextPhonePrefix !== (existing.user.phone_prefix || null);
+                    nextPhone !== (existingUser.phoneNumber || null) ||
+                    nextPhonePrefix !== (existingUser.phone_prefix || null);
 
                 await tx.user.update({
-                    where: { id: existing.user.id },
+                    where: { id: existingUser.id },
                     data: {
                         ...(normalizedEmail !== undefined
                             ? {
