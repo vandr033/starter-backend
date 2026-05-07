@@ -304,6 +304,12 @@ export async function getPublicCommerceOrderByOrderNumber(
             order_number: orderNumber,
         },
         include: {
+            customer_profile: {
+                select: {
+                    id: true,
+                    user_id: true,
+                },
+            },
             pickup_point: true,
             items: {
                 include: {

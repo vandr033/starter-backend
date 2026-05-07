@@ -4,6 +4,7 @@ import { MensajeApi } from '../types/MensajeApi';
 import { StorageService } from '../services/storage.service';
 import { logger } from '../config/logger';
 import multer from 'multer';
+import { buildStorageDeleteToken, verifyStorageDeleteToken } from '../utils/storageDeleteToken';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -34,12 +35,12 @@ export async function uploadQRImage(req: Request, res: Response) {
         }
 
         
-        // Validate file type (should be an image)
-        const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+        // Validate file type (image or PDF)
+        const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
         if (!allowedTypes.includes(req.file.mimetype)) {
             mensaje = {
                 code: 400,
-                message: 'Invalid file type. Only JPEG, PNG, and WebP images are allowed',
+                message: 'Invalid file type. Only JPEG, PNG, WebP images, or PDF files are allowed',
                 error: true,
             };
             return res.status(400).json(mensaje);
@@ -91,6 +92,7 @@ export async function uploadQRImage(req: Request, res: Response) {
             message: 'QR code uploaded successfully',
             data: {
                 url: url,
+                deleteToken: buildStorageDeleteToken(relativePath),
                 filename: filename,
                 size: req.file.size,
                 mimetype: req.file.mimetype,
@@ -115,7 +117,7 @@ export async function uploadQRImage(req: Request, res: Response) {
  */
 export async function deleteQRImage(req: Request, res: Response) {
     try {
-        const { url } = req.body;
+        const { url, deleteToken } = req.body;
 
         if (!url || typeof url !== 'string') {
             mensaje = {
@@ -126,10 +128,17 @@ export async function deleteQRImage(req: Request, res: Response) {
             return res.status(400).json(mensaje);
         }
 
-        // Extract relative path from URL
-        // URL format: /api/storage/uploads/{company_id}/qr/{filename}
-        const urlParts = url.split('/api/storage/');
-        if (urlParts.length !== 2) {
+        if (!deleteToken || typeof deleteToken !== 'string') {
+            mensaje = {
+                code: 401,
+                message: 'deleteToken is required',
+                error: true,
+            };
+            return res.status(401).json(mensaje);
+        }
+
+        const relativePath = StorageService.toRelativeStoragePath(url);
+        if (!relativePath) {
             mensaje = {
                 code: 400,
                 message: 'Invalid URL format',
@@ -137,8 +146,6 @@ export async function deleteQRImage(req: Request, res: Response) {
             };
             return res.status(400).json(mensaje);
         }
-
-        const relativePath = urlParts[1];
 
         // Validate that it's a QR code path
         if (!relativePath.includes('/qr/')) {
@@ -148,6 +155,15 @@ export async function deleteQRImage(req: Request, res: Response) {
                 error: true,
             };
             return res.status(400).json(mensaje);
+        }
+
+        if (!verifyStorageDeleteToken(deleteToken, relativePath)) {
+            mensaje = {
+                code: 403,
+                message: 'Invalid delete token',
+                error: true,
+            };
+            return res.status(403).json(mensaje);
         }
 
         // Delete file using StorageService

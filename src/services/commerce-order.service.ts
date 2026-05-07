@@ -7,6 +7,7 @@ import {
     CompanyUserRole,
     Prisma,
 } from '@prisma/client';
+import crypto from 'crypto';
 import { prisma } from '../prisma/client';
 import * as CommerceRepo from '../repositories/commerce.repo';
 import { buildCommerceComponentSnapshots } from './commerce-combo.service';
@@ -15,6 +16,8 @@ import { resolveEffectiveCommercePrice } from './commerce-pricing.service';
 import { notifyCommerceOrderCustomer } from './commerce-notifications.service';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 import { isCompanyAvailableNow } from '../utils/company-availability';
+import { StorageService } from './storage.service';
+import { buildStorageDeleteToken } from '../utils/storageDeleteToken';
 
 type ServiceResult = {
     code: number;
@@ -25,6 +28,38 @@ type ServiceResult = {
 
 type Tx = Prisma.TransactionClient;
 type CommercePaymentMethodValue = 'CASH' | 'QR' | 'MANUAL';
+type PublicOrderAccessParams = { accessToken?: string | null; authUserId?: string | null };
+
+const LEGACY_STORAGE_API_PREFIX = '/api/storage/';
+
+function generateCommerceOrderPublicAccessToken(): string {
+    return crypto.randomBytes(24).toString('base64url');
+}
+
+function buildCommercePaymentProofFileName(extension: string): string {
+    const version = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return `proof-${version}.${extension}`;
+}
+
+function buildCommercePaymentProofUserSegment(userId: string): string {
+    return Buffer.from(userId, 'utf8').toString('base64url');
+}
+
+function getCommercePaymentProofCheckoutPrefix(companyId: number, userId: string): string {
+    return `uploads/${companyId}/commerce-payment-proofs/customers/${buildCommercePaymentProofUserSegment(userId)}/`;
+}
+
+function getCommercePaymentProofOrderPrefix(companyId: number, orderId: string): string {
+    return `uploads/${companyId}/commerce-payment-proofs/orders/${orderId}/`;
+}
+
+function isInternalCommercePaymentProofPath(value: string): boolean {
+    return value.startsWith('uploads/') && value.includes('/commerce-payment-proofs/');
+}
+
+function isLegacyPublicStorageUrl(value: string): boolean {
+    return value.startsWith(LEGACY_STORAGE_API_PREFIX) || value.startsWith('http://') || value.startsWith('https://');
+}
 
 function normalizeEmail(email?: string | null): string | null {
     const value = (email ?? '').trim().toLowerCase();
@@ -154,12 +189,68 @@ function serializeCommerceProduct(product: any) {
     };
 }
 
-function serializeCommerceOrder(order: any, options?: { admin?: boolean }) {
+function buildAdminCommercePaymentProofUrl(orderId: string): string {
+    return `/api/admin/commerce/orders/${encodeURIComponent(orderId)}/payment-proof`;
+}
+
+function buildMyCommercePaymentProofUrl(companySlug: string, orderNumber: string): string {
+    return `/api/public/commerce/${encodeURIComponent(companySlug)}/me/orders/${encodeURIComponent(orderNumber)}/payment-proof/file`;
+}
+
+function buildPublicCommercePaymentProofUrl(companySlug: string, orderNumber: string, accessToken: string): string {
+    const params = new URLSearchParams({ token: accessToken });
+    return `/api/public/commerce/${encodeURIComponent(companySlug)}/orders/${encodeURIComponent(orderNumber)}/payment-proof/file?${params.toString()}`;
+}
+
+function resolveSerializedCommercePaymentProofUrl(order: any, options?: {
+    paymentProofViewer?: 'admin' | 'customer' | 'public';
+    companySlug?: string;
+    publicAccessToken?: string | null;
+}): string | null {
+    const rawValue = typeof order.payment_proof_url === 'string' ? order.payment_proof_url.trim() : '';
+    if (!rawValue) return null;
+
+    if (isInternalCommercePaymentProofPath(rawValue)) {
+        if (options?.paymentProofViewer === 'admin') {
+            return buildAdminCommercePaymentProofUrl(order.id);
+        }
+
+        if (options?.paymentProofViewer === 'customer' && options.companySlug) {
+            return buildMyCommercePaymentProofUrl(options.companySlug, order.order_number);
+        }
+
+        if (options?.paymentProofViewer === 'public' && options.companySlug && options.publicAccessToken) {
+            return buildPublicCommercePaymentProofUrl(
+                options.companySlug,
+                order.order_number,
+                options.publicAccessToken,
+            );
+        }
+
+        return null;
+    }
+
+    return isLegacyPublicStorageUrl(rawValue) ? rawValue : null;
+}
+
+function serializeCommerceOrder(order: any, options?: {
+    admin?: boolean;
+    companySlug?: string;
+    includePublicAccessToken?: boolean;
+    paymentProofViewer?: 'admin' | 'customer' | 'public';
+    publicAccessToken?: string | null;
+}) {
     return {
         ...order,
         subtotal: order.subtotal != null ? Number(order.subtotal) : null,
         delivery_cost: order.delivery_cost != null ? Number(order.delivery_cost) : null,
         total: order.total != null ? Number(order.total) : null,
+        public_access_token: options?.includePublicAccessToken ? order.public_access_token ?? null : undefined,
+        payment_proof_url: resolveSerializedCommercePaymentProofUrl(order, {
+            paymentProofViewer: options?.paymentProofViewer,
+            companySlug: options?.companySlug,
+            publicAccessToken: options?.publicAccessToken,
+        }),
         items: Array.isArray(order.items)
             ? order.items.map((item: any) => ({
                   ...item,
@@ -648,6 +739,99 @@ async function appendOrderStatusHistory(params: {
     });
 }
 
+function extractCommercePaymentProofRelativePath(rawPathOrUrl: string, companyId: number): string | null {
+    const relativePath = StorageService.toRelativeStoragePath(rawPathOrUrl);
+    if (!relativePath) return null;
+    if (!relativePath.startsWith(`uploads/${companyId}/commerce-payment-proofs/`)) {
+        return null;
+    }
+    return relativePath;
+}
+
+async function ensureCommercePaymentProofExists(rawPathOrUrl: string, companyId: number): Promise<string | null> {
+    const relativePath = extractCommercePaymentProofRelativePath(rawPathOrUrl, companyId);
+    if (!relativePath) return null;
+    const exists = await StorageService.fileExists(relativePath);
+    return exists ? relativePath : null;
+}
+
+async function uploadCommercePaymentProofFile(params: {
+    companyId: number;
+    filename: string;
+    file: Express.Multer.File;
+}): Promise<{
+    relativePath: string;
+    publicDeleteToken: string;
+}> {
+    const relativePath = await StorageService.saveFile(
+        params.companyId,
+        'commerce-payment-proofs',
+        params.filename,
+        params.file.buffer,
+    );
+
+    return {
+        relativePath,
+        publicDeleteToken: buildStorageDeleteToken(relativePath),
+    };
+}
+
+function isValidCommerceProofFile(file?: Express.Multer.File): file is Express.Multer.File {
+    if (!file) return false;
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+    return allowedTypes.includes(file.mimetype) && file.size > 0 && file.size <= 5 * 1024 * 1024;
+}
+
+function hasPublicOrderTokenAccess(order: { public_access_token: string | null | undefined }, accessToken?: string | null): boolean {
+    if (!order.public_access_token || !accessToken) return false;
+    return order.public_access_token === accessToken.trim();
+}
+
+function hasPublicOrderOwnerAccess(order: { customer_profile?: { user_id?: string | null } | null }, authUserId?: string | null): boolean {
+    return Boolean(authUserId && order.customer_profile?.user_id && order.customer_profile.user_id === authUserId);
+}
+
+function canAccessPublicCommerceOrder(
+    order: { public_access_token: string | null | undefined; customer_profile?: { user_id?: string | null } | null },
+    access: PublicOrderAccessParams,
+): boolean {
+    return hasPublicOrderTokenAccess(order, access.accessToken) || hasPublicOrderOwnerAccess(order, access.authUserId);
+}
+
+async function getPublicCommerceOrderWithAccess(params: {
+    slug: string;
+    orderNumber: string;
+    access: PublicOrderAccessParams;
+}): Promise<
+    | {
+          error: false;
+          company: NonNullable<Awaited<ReturnType<typeof CommerceRepo.findActiveCommerceCompanyBySlug>>>;
+          store: NonNullable<Awaited<ReturnType<typeof CommerceRepo.findCommerceStoreByCompanyId>>>;
+          order: Awaited<ReturnType<typeof CommerceRepo.getPublicCommerceOrderByOrderNumber>>;
+      }
+    | { error: true; result: ServiceResult }
+> {
+    const company = await CommerceRepo.findActiveCommerceCompanyBySlug(params.slug);
+    if (!company) {
+        return { error: true, result: { code: 404, error: true, message: 'No encontramos la tienda.' } };
+    }
+
+    const [store, order] = await Promise.all([
+        CommerceRepo.findCommerceStoreByCompanyId(company.id),
+        CommerceRepo.getPublicCommerceOrderByOrderNumber(company.id, params.orderNumber),
+    ]);
+
+    if (!store) {
+        return { error: true, result: { code: 404, error: true, message: 'No encontramos la tienda.' } };
+    }
+
+    if (!order || !canAccessPublicCommerceOrder(order as any, params.access)) {
+        return { error: true, result: { code: 404, error: true, message: 'No encontramos el pedido.' } };
+    }
+
+    return { error: false, company, store, order };
+}
+
 export async function getAdminCommerceOrders(params: {
     companyId: number;
     actorRole?: CompanyUserRole | null;
@@ -664,7 +848,7 @@ export async function getAdminCommerceOrders(params: {
         code: 200,
         error: false,
         message: 'Pedidos obtenidos correctamente.',
-        data: orders.map((order) => serializeCommerceOrder(order, { admin: true })),
+        data: orders.map((order) => serializeCommerceOrder(order, { admin: true, paymentProofViewer: 'admin' })),
     };
 }
 
@@ -689,7 +873,37 @@ export async function getAdminCommerceOrder(params: {
         code: 200,
         error: false,
         message: 'Pedido obtenido correctamente.',
-        data: serializeCommerceOrder(order, { admin: true }),
+        data: serializeCommerceOrder(order, { admin: true, paymentProofViewer: 'admin' }),
+    };
+}
+
+export async function resolveAdminCommercePaymentProofFile(params: {
+    companyId: number;
+    orderId: string;
+    actorRole?: CompanyUserRole | null;
+    actorUserId?: string | null;
+}): Promise<ServiceResult> {
+    const accessScope = await resolveStaffScopedCommerceAccess(params);
+    if ('error' in accessScope && accessScope.error) {
+        return accessScope;
+    }
+
+    const scope = accessScope as { assignedStaffId?: number };
+    const order = await CommerceRepo.getAdminCommerceOrder(params.companyId, params.orderId, scope);
+    if (!order?.payment_proof_url) {
+        return { code: 404, error: true, message: 'No encontramos el comprobante.' };
+    }
+
+    const relativePath = extractCommercePaymentProofRelativePath(order.payment_proof_url, params.companyId);
+    if (!relativePath) {
+        return { code: 404, error: true, message: 'No encontramos el comprobante.' };
+    }
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Comprobante obtenido correctamente.',
+        data: { relativePath },
     };
 }
 
@@ -833,7 +1047,7 @@ export async function updateAdminCommerceOrderStatus(params: {
         code: 200,
         error: false,
         message: 'Estado del pedido actualizado.',
-        data: serializeCommerceOrder(updated, { admin: true }),
+        data: serializeCommerceOrder(updated, { admin: true, paymentProofViewer: 'admin' }),
     };
 }
 
@@ -914,7 +1128,7 @@ export async function updateAdminCommerceOrderDeliveryCost(params: {
         code: 200,
         error: false,
         message: 'Costo de delivery actualizado.',
-        data: serializeCommerceOrder(updated, { admin: true }),
+        data: serializeCommerceOrder(updated, { admin: true, paymentProofViewer: 'admin' }),
     };
 }
 
@@ -987,7 +1201,7 @@ export async function updateAdminCommerceOrderAssignment(params: {
         code: 200,
         error: false,
         message: 'Asignación del pedido actualizada.',
-        data: serializeCommerceOrder(updated, { admin: true }),
+        data: serializeCommerceOrder(updated, { admin: true, paymentProofViewer: 'admin' }),
     };
 }
 
@@ -1030,7 +1244,7 @@ export async function updateAdminCommerceOrderNotes(params: {
         code: 200,
         error: false,
         message: 'Notas internas actualizadas.',
-        data: serializeCommerceOrder(updated, { admin: true }),
+        data: serializeCommerceOrder(updated, { admin: true, paymentProofViewer: 'admin' }),
     };
 }
 
@@ -1463,6 +1677,17 @@ export async function createPublicCommerceOrder(
         customerEmail: input.customerEmail,
     });
 
+    if (paymentProofUrl) {
+        const relativePath = await ensureCommercePaymentProofExists(paymentProofUrl, company.id);
+        if (!relativePath || !relativePath.startsWith(getCommercePaymentProofCheckoutPrefix(company.id, authenticatedUserId))) {
+            return {
+                code: 403,
+                error: true,
+                message: 'No puedes adjuntar un comprobante que no te pertenece.',
+            };
+        }
+    }
+
     const created = await prisma.$transaction(async (tx) => {
         const orderNumber = await generateCommerceOrderNumber(tx, company.id);
         const order = await tx.commerceOrder.create({
@@ -1471,6 +1696,7 @@ export async function createPublicCommerceOrder(
                 store_id: store.id,
                 customer_profile_id: customer.customerProfileId,
                 order_number: orderNumber,
+                public_access_token: generateCommerceOrderPublicAccessToken(),
                 customer_name: input.customerName.trim(),
                 customer_phone: customer.customerPhonePrefix
                     ? `${customer.customerPhonePrefix}${customer.customerPhone}`
@@ -1588,28 +1814,25 @@ export async function createPublicCommerceOrder(
         code: 201,
         error: false,
         message: 'Pedido creado correctamente.',
-        data: serializeCommerceOrder(created),
+        data: serializeCommerceOrder(created, {
+            companySlug: company.slug,
+            includePublicAccessToken: true,
+            paymentProofViewer: 'customer',
+        }),
     };
 }
 
-export async function getPublicCommerceOrder(slug: string, orderNumber: string): Promise<ServiceResult> {
-    const company = await CommerceRepo.findActiveCommerceCompanyBySlug(slug);
-    if (!company) {
-        return { code: 404, error: true, message: 'No encontramos la tienda.' };
+export async function getPublicCommerceOrder(
+    slug: string,
+    orderNumber: string,
+    access: PublicOrderAccessParams = {},
+): Promise<ServiceResult> {
+    const resolved = await getPublicCommerceOrderWithAccess({ slug, orderNumber, access });
+    if (resolved.error) {
+        return resolved.result;
     }
 
-    const [store, order] = await Promise.all([
-        CommerceRepo.findCommerceStoreByCompanyId(company.id),
-        CommerceRepo.getPublicCommerceOrderByOrderNumber(company.id, orderNumber),
-    ]);
-
-    if (!store) {
-        return { code: 404, error: true, message: 'No encontramos la tienda.' };
-    }
-
-    if (!order) {
-        return { code: 404, error: true, message: 'No encontramos el pedido.' };
-    }
+    const order = resolved.order!;
 
     return {
         code: 200,
@@ -1617,23 +1840,27 @@ export async function getPublicCommerceOrder(slug: string, orderNumber: string):
         message: 'Pedido público obtenido correctamente.',
         data: {
             company: {
-                id: company.id,
-                slug: company.slug,
-                name: company.name,
-                currency: company.currency,
-                logo_url: company.logo_url,
+                id: resolved.company.id,
+                slug: resolved.company.slug,
+                name: resolved.company.name,
+                currency: resolved.company.currency,
+                logo_url: resolved.company.logo_url,
             },
             store: {
-                allow_cash_payment: store.allow_cash_payment,
-                allow_qr_payment: store.allow_qr_payment,
-                allow_manual_payment: store.allow_manual_payment,
-                qr_image_url: store.qr_image_url,
-                payment_instructions: store.payment_instructions,
-                payment_proof_required: store.payment_proof_required,
-                delivery_cost_mode: store.delivery_cost_mode,
-                delivery_instructions: store.delivery_instructions,
+                allow_cash_payment: resolved.store.allow_cash_payment,
+                allow_qr_payment: resolved.store.allow_qr_payment,
+                allow_manual_payment: resolved.store.allow_manual_payment,
+                qr_image_url: resolved.store.qr_image_url,
+                payment_instructions: resolved.store.payment_instructions,
+                payment_proof_required: resolved.store.payment_proof_required,
+                delivery_cost_mode: resolved.store.delivery_cost_mode,
+                delivery_instructions: resolved.store.delivery_instructions,
             },
-            order: serializeCommerceOrder(order),
+            order: serializeCommerceOrder(order, {
+                companySlug: resolved.company.slug,
+                paymentProofViewer: 'public',
+                publicAccessToken: order.public_access_token ?? access.accessToken ?? null,
+            }),
         },
     };
 }
@@ -1642,16 +1869,14 @@ export async function submitPublicCommercePaymentProof(
     slug: string,
     orderNumber: string,
     paymentProofUrl: string,
+    access: PublicOrderAccessParams = {},
 ): Promise<ServiceResult> {
-    const company = await CommerceRepo.findActiveCommerceCompanyBySlug(slug);
-    if (!company) {
-        return { code: 404, error: true, message: 'No encontramos la tienda.' };
+    const resolved = await getPublicCommerceOrderWithAccess({ slug, orderNumber, access });
+    if (resolved.error) {
+        return resolved.result;
     }
 
-    const order = await CommerceRepo.getPublicCommerceOrderByOrderNumber(company.id, orderNumber);
-    if (!order) {
-        return { code: 404, error: true, message: 'No encontramos el pedido.' };
-    }
+    const order = resolved.order!;
 
     if (!isProofBasedPaymentMethod(order.payment_method)) {
         return {
@@ -1672,11 +1897,20 @@ export async function submitPublicCommercePaymentProof(
         };
     }
 
+    const relativePath = await ensureCommercePaymentProofExists(paymentProofUrl, resolved.company.id);
+    if (!relativePath || !relativePath.startsWith(getCommercePaymentProofOrderPrefix(resolved.company.id, order.id))) {
+        return {
+            code: 403,
+            error: true,
+            message: 'No puedes subir un comprobante para otro pedido.',
+        };
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
         const next = await tx.commerceOrder.update({
             where: { id: order.id },
             data: {
-                payment_proof_url: paymentProofUrl.trim(),
+                payment_proof_url: relativePath,
                 payment_status: CommercePaymentStatus.PAYMENT_SUBMITTED,
             },
         });
@@ -1708,7 +1942,178 @@ export async function submitPublicCommercePaymentProof(
         code: 200,
         error: false,
         message: 'Comprobante recibido correctamente.',
-        data: serializeCommerceOrder(updated),
+        data: serializeCommerceOrder(updated, {
+            companySlug: resolved.company.slug,
+            paymentProofViewer: hasPublicOrderTokenAccess(order as any, access.accessToken) ? 'public' : 'customer',
+            publicAccessToken: order.public_access_token,
+        }),
+    };
+}
+
+export async function uploadCheckoutPaymentProof(params: {
+    slug: string;
+    authUserId: string | null;
+    file?: Express.Multer.File;
+}): Promise<ServiceResult> {
+    if (!params.authUserId) {
+        return { code: 401, error: true, message: 'Unauthorized' };
+    }
+
+    const company = await CommerceRepo.findActiveCommerceCompanyBySlug(params.slug);
+    if (!company) {
+        return { code: 404, error: true, message: 'No encontramos la tienda.' };
+    }
+
+    if (!isValidCommerceProofFile(params.file)) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Debes subir un archivo JPG, PNG, WebP o PDF de hasta 5MB.',
+        };
+    }
+
+    const extension = params.file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
+    const stored = await uploadCommercePaymentProofFile({
+        companyId: company.id,
+        filename: `customers/${buildCommercePaymentProofUserSegment(params.authUserId)}/${buildCommercePaymentProofFileName(extension)}`,
+        file: params.file,
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Comprobante subido correctamente.',
+        data: {
+            url: stored.relativePath,
+            deleteToken: stored.publicDeleteToken,
+        },
+    };
+}
+
+export async function uploadPublicCommercePaymentProof(params: {
+    slug: string;
+    orderNumber: string;
+    accessToken?: string | null;
+    authUserId?: string | null;
+    file?: Express.Multer.File;
+}): Promise<ServiceResult> {
+    const resolved = await getPublicCommerceOrderWithAccess({
+        slug: params.slug,
+        orderNumber: params.orderNumber,
+        access: {
+            accessToken: params.accessToken,
+            authUserId: params.authUserId,
+        },
+    });
+    if (resolved.error) {
+        return resolved.result;
+    }
+
+    if (!isValidCommerceProofFile(params.file)) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Debes subir un archivo JPG, PNG, WebP o PDF de hasta 5MB.',
+        };
+    }
+
+    const extension = params.file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
+    const stored = await uploadCommercePaymentProofFile({
+        companyId: resolved.company.id,
+        filename: `orders/${resolved.order!.id}/${buildCommercePaymentProofFileName(extension)}`,
+        file: params.file,
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Comprobante subido correctamente.',
+        data: {
+            url: stored.relativePath,
+            deleteToken: stored.publicDeleteToken,
+        },
+    };
+}
+
+export async function deletePublicCommercePaymentProof(params: {
+    slug: string;
+    orderNumber: string;
+    accessToken?: string | null;
+    authUserId?: string | null;
+}): Promise<ServiceResult> {
+    const resolved = await getPublicCommerceOrderWithAccess({
+        slug: params.slug,
+        orderNumber: params.orderNumber,
+        access: {
+            accessToken: params.accessToken,
+            authUserId: params.authUserId,
+        },
+    });
+    if (resolved.error) {
+        return resolved.result;
+    }
+
+    const order = resolved.order!;
+    if (!order.payment_proof_url?.trim()) {
+        return { code: 404, error: true, message: 'No encontramos un comprobante para este pedido.' };
+    }
+
+    const relativePath = extractCommercePaymentProofRelativePath(order.payment_proof_url, resolved.company.id);
+    if (!relativePath) {
+        return {
+            code: 403,
+            error: true,
+            message: 'Este comprobante no se puede borrar desde este flujo.',
+        };
+    }
+
+    await prisma.commerceOrder.update({
+        where: { id: order.id },
+        data: {
+            payment_proof_url: null,
+            payment_status: CommercePaymentStatus.AWAITING_PAYMENT,
+        },
+    });
+
+    await StorageService.deleteFile(relativePath).catch(() => undefined);
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Comprobante eliminado correctamente.',
+    };
+}
+
+export async function resolvePublicCommercePaymentProofFile(params: {
+    slug: string;
+    orderNumber: string;
+    accessToken?: string | null;
+    authUserId?: string | null;
+}): Promise<ServiceResult> {
+    const resolved = await getPublicCommerceOrderWithAccess({
+        slug: params.slug,
+        orderNumber: params.orderNumber,
+        access: {
+            accessToken: params.accessToken,
+            authUserId: params.authUserId,
+        },
+    });
+    if (resolved.error) {
+        return resolved.result;
+    }
+
+    const relativePath = resolved.order?.payment_proof_url
+        ? extractCommercePaymentProofRelativePath(resolved.order.payment_proof_url, resolved.company.id)
+        : null;
+    if (!relativePath) {
+        return { code: 404, error: true, message: 'No encontramos el comprobante.' };
+    }
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Comprobante obtenido correctamente.',
+        data: { relativePath },
     };
 }
 
@@ -1754,7 +2159,10 @@ export async function listMyCommerceOrders(
         code: 200,
         error: false,
         message: 'Pedidos obtenidos correctamente.',
-        data: orders.map((order) => serializeCommerceOrder(order)),
+        data: orders.map((order) => serializeCommerceOrder(order, {
+            companySlug: company.slug,
+            paymentProofViewer: 'customer',
+        })),
     };
 }
 
@@ -1815,7 +2223,49 @@ export async function getMyCommerceOrder(
                 delivery_cost_mode: store.delivery_cost_mode,
                 delivery_instructions: store.delivery_instructions,
             } : null,
-            order: serializeCommerceOrder(order),
+            order: serializeCommerceOrder(order, {
+                companySlug: company.slug,
+                paymentProofViewer: 'customer',
+            }),
         },
+    };
+}
+
+export async function resolveMyCommercePaymentProofFile(params: {
+    slug: string;
+    orderNumber: string;
+    userId: string;
+}): Promise<ServiceResult> {
+    const company = await CommerceRepo.findActiveCommerceCompanyBySlug(params.slug);
+    if (!company) {
+        return { code: 404, error: true, message: 'No encontramos la tienda.' };
+    }
+
+    const order = await prisma.commerceOrder.findFirst({
+        where: {
+            company_id: company.id,
+            order_number: params.orderNumber,
+            customer_profile: { user_id: params.userId },
+        },
+        select: {
+            id: true,
+            payment_proof_url: true,
+        },
+    });
+
+    if (!order?.payment_proof_url) {
+        return { code: 404, error: true, message: 'No encontramos el comprobante.' };
+    }
+
+    const relativePath = extractCommercePaymentProofRelativePath(order.payment_proof_url, company.id);
+    if (!relativePath) {
+        return { code: 404, error: true, message: 'No encontramos el comprobante.' };
+    }
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Comprobante obtenido correctamente.',
+        data: { relativePath },
     };
 }

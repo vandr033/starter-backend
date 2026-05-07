@@ -47,6 +47,10 @@ export class StorageService {
     return path.join(this.getCompanyPath(companyId), 'commerce-products');
   }
 
+  static getCompanyCommercePaymentProofsPath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'commerce-payment-proofs');
+  }
+
   static getCompanyGroupEventsPath(companyId: number): string {
     return path.join(this.getCompanyPath(companyId), 'group-events');
   }
@@ -68,6 +72,7 @@ export class StorageService {
     await fs.mkdir(this.getCompanyCommerceStorePath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyCommerceCategoriesPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyCommerceProductsPath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyCommercePaymentProofsPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGroupEventsPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGroupClassesPath(companyId), { recursive: true });
   }
@@ -84,6 +89,7 @@ export class StorageService {
       | 'commerce-store'
       | 'commerce-categories'
       | 'commerce-products'
+      | 'commerce-payment-proofs'
       | 'group-events'
       | 'group-classes',
     filename: string,
@@ -132,6 +138,9 @@ export class StorageService {
       case 'commerce-products':
         directory = this.getCompanyCommerceProductsPath(companyId);
         break;
+      case 'commerce-payment-proofs':
+        directory = this.getCompanyCommercePaymentProofsPath(companyId);
+        break;
       case 'group-events':
         directory = this.getCompanyGroupEventsPath(companyId);
         break;
@@ -143,6 +152,7 @@ export class StorageService {
     }
 
     const filePath = path.join(directory, filename);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, buffer);
     
     // Return relative path from storage root
@@ -171,6 +181,37 @@ export class StorageService {
 
   static getFileUrl(relativePath: string): string {
     return `/api/storage/${relativePath}`;
+  }
+
+  static toRelativeStoragePath(rawPathOrUrl: string): string | null {
+    const normalized = rawPathOrUrl.trim();
+    if (!normalized) return null;
+
+    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+      try {
+        return this.toRelativeStoragePath(new URL(normalized).pathname);
+      } catch {
+        return null;
+      }
+    }
+
+    const pathWithoutQuery = normalized.split(/[?#]/, 1)[0];
+    if (!pathWithoutQuery) return null;
+
+    if (pathWithoutQuery.startsWith('/api/storage/')) {
+      return pathWithoutQuery.slice('/api/storage/'.length);
+    }
+
+    const uploadsIndex = pathWithoutQuery.indexOf('/uploads/');
+    if (uploadsIndex >= 0) {
+      return pathWithoutQuery.slice(uploadsIndex + 1);
+    }
+
+    if (pathWithoutQuery.startsWith('uploads/')) {
+      return pathWithoutQuery;
+    }
+
+    return null;
   }
 
   static async getFilePath(relativePath: string): Promise<string> {

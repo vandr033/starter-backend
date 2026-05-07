@@ -919,6 +919,7 @@ model CommerceOrder {
   store_id             String?
   customer_profile_id  Int?
   order_number         String                    @db.VarChar(64)
+  public_access_token  String                    @unique(map: "commerce_order_public_access_token_key") @db.VarChar(128)
   customer_name        String                    @db.VarChar(160)
   customer_phone       String                    @db.VarChar(32)
   customer_email       String?                   @db.VarChar(191)

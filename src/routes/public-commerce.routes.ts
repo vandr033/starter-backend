@@ -9,6 +9,8 @@ import {
     verifyPublicCommerceGuestCheckoutSchema,
 } from '../schemas/commerce.schema';
 import { requireAuth } from '../middlewares/requireAuth';
+import { optionalAuth } from '../middlewares/optionalAuth';
+import { uploadMiddleware } from '../controllers/public-upload.controller';
 
 const router = Router();
 
@@ -37,11 +39,34 @@ router.post(
     validate(createPublicCommerceOrderSchema),
     PublicCommerceController.createPublicCommerceOrder,
 );
-router.get('/:slug/orders/:orderNumber', PublicCommerceController.getPublicCommerceOrder);
+router.get('/:slug/orders/:orderNumber', optionalAuth, PublicCommerceController.getPublicCommerceOrder);
+router.post(
+    '/:slug/checkout/payment-proof-upload',
+    requireAuth,
+    uploadMiddleware,
+    PublicCommerceController.uploadCheckoutPaymentProof,
+);
+router.post(
+    '/:slug/orders/:orderNumber/payment-proof/upload',
+    optionalAuth,
+    uploadMiddleware,
+    PublicCommerceController.uploadPublicCommercePaymentProof,
+);
 router.post(
     '/:slug/orders/:orderNumber/payment-proof',
+    optionalAuth,
     validate(submitCommercePaymentProofSchema),
     PublicCommerceController.submitPublicCommercePaymentProof,
+);
+router.delete(
+    '/:slug/orders/:orderNumber/payment-proof',
+    optionalAuth,
+    PublicCommerceController.deletePublicCommercePaymentProof,
+);
+router.get(
+    '/:slug/orders/:orderNumber/payment-proof/file',
+    optionalAuth,
+    PublicCommerceController.servePublicCommercePaymentProof,
 );
 router.get(
     '/:slug/me/orders',
@@ -52,6 +77,11 @@ router.get(
     '/:slug/me/orders/:orderNumber',
     requireAuth,
     PublicCommerceController.getMyCommerceOrder,
+);
+router.get(
+    '/:slug/me/orders/:orderNumber/payment-proof/file',
+    requireAuth,
+    PublicCommerceController.serveMyCommercePaymentProof,
 );
 
 export default router;

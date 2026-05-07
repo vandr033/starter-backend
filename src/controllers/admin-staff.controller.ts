@@ -409,7 +409,7 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { display_name, bio, image_url, is_bookable, service_ids, resource_type } = req.body;
+    const { email, phone, phone_prefix, display_name, bio, image_url, is_bookable, service_ids, resource_type } = req.body;
 
     // Validate resource_type if provided
     const validResourceTypes = ['PERSON', 'ROOM', 'EQUIPMENT'];
@@ -446,6 +446,44 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         mensaje = {
             code: 400,
             message: 'bio must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (email !== undefined) {
+        if (typeof email !== 'string') {
+            mensaje = {
+                code: 400,
+                message: 'email must be a string',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+            mensaje = {
+                code: 400,
+                message: 'email must be a valid email address',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+    }
+
+    if (phone !== undefined && typeof phone !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'phone must be a string',
+            error: true,
+        };
+        return res.status(400).json(mensaje);
+    }
+
+    if (phone_prefix !== undefined && typeof phone_prefix !== 'string') {
+        mensaje = {
+            code: 400,
+            message: 'phone_prefix must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -503,6 +541,9 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
     }
 
     const result = await StaffService.updateStaff(companyId, staffId, {
+        email: email?.trim().toLowerCase(),
+        phone: phone?.trim(),
+        phone_prefix: phone_prefix?.trim(),
         display_name: display_name?.trim(),
         bio: bio === undefined ? undefined : (typeof bio === 'string' ? bio.trim() : ''),
         image_url: image_url?.trim(),

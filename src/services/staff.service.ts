@@ -653,6 +653,9 @@ export async function resendStaffInvite(
  * Update a staff profile
  */
 export interface UpdateStaffInput {
+    email?: string;
+    phone?: string;
+    phone_prefix?: string;
     display_name?: string;
     bio?: string;
     image_url?: string;
@@ -677,8 +680,98 @@ export async function updateStaff(
             };
         }
 
-        // Update staff profile
-        await StaffRepo.updateStaffProfile(staffId, companyId, input);
+        const normalizedEmail = input.email !== undefined ? input.email.trim().toLowerCase() : undefined;
+        const cleanPhone = input.phone !== undefined ? input.phone.replace(/\D/g, '') : undefined;
+        const cleanPhonePrefix = input.phone_prefix !== undefined
+            ? input.phone_prefix.replace(/\D/g, '')
+            : undefined;
+
+        await prisma.$transaction(async (tx) => {
+            if (normalizedEmail !== undefined) {
+                const existingEmailUser = normalizedEmail
+                    ? await tx.user.findFirst({
+                        where: {
+                            deleted_at: null,
+                            email: normalizedEmail,
+                        },
+                        select: { id: true },
+                    })
+                    : null;
+
+                if (existingEmailUser && existingEmailUser.id !== existing.user?.id) {
+                    throw new Error('Email is already in use');
+                }
+            }
+
+            const nextPhone = cleanPhone !== undefined
+                ? (cleanPhone.length > 0 ? cleanPhone : null)
+                : (existing.user?.phoneNumber || null);
+            let nextPhonePrefix = cleanPhonePrefix !== undefined
+                ? (cleanPhonePrefix.length > 0 ? cleanPhonePrefix : null)
+                : (existing.user?.phone_prefix || null);
+
+            if (nextPhone && !nextPhonePrefix) {
+                nextPhonePrefix = '591';
+            }
+
+            if (nextPhone) {
+                const phoneCandidates = buildPhoneLookupCandidates(nextPhone, nextPhonePrefix || undefined);
+                const existingPhoneUser = phoneCandidates.length > 0
+                    ? await tx.user.findFirst({
+                        where: {
+                            deleted_at: null,
+                            phoneNumber: { in: phoneCandidates },
+                        },
+                        select: { id: true },
+                    })
+                    : null;
+
+                if (existingPhoneUser && existingPhoneUser.id !== existing.user?.id) {
+                    throw new Error('Phone number is already in use');
+                }
+            }
+
+            if (normalizedEmail !== undefined || cleanPhone !== undefined || cleanPhonePrefix !== undefined) {
+                if (!existing.user?.id) {
+                    throw new Error('Staff user not found');
+                }
+
+                const nextEmail = normalizedEmail !== undefined
+                    ? (normalizedEmail || null)
+                    : (existing.user.email || null);
+                const emailChanged = nextEmail !== (existing.user.email || null);
+                const phoneChanged =
+                    nextPhone !== (existing.user.phoneNumber || null) ||
+                    nextPhonePrefix !== (existing.user.phone_prefix || null);
+
+                await tx.user.update({
+                    where: { id: existing.user.id },
+                    data: {
+                        ...(normalizedEmail !== undefined
+                            ? {
+                                email: nextEmail,
+                                ...(emailChanged ? { emailVerified: false } : {}),
+                            }
+                            : {}),
+                        ...(cleanPhone !== undefined || cleanPhonePrefix !== undefined
+                            ? {
+                                phoneNumber: nextPhone,
+                                phone_prefix: nextPhonePrefix,
+                                ...(phoneChanged ? { phoneNumberVerified: false } : {}),
+                            }
+                            : {}),
+                    },
+                });
+            }
+
+            await StaffRepo.updateStaffProfile(staffId, companyId, {
+                display_name: input.display_name,
+                bio: input.bio,
+                image_url: input.image_url,
+                is_bookable: input.is_bookable,
+                resource_type: input.resource_type,
+            });
+        });
 
         // Update services if provided
         if (input.service_ids !== undefined) {
@@ -706,6 +799,37 @@ export async function updateStaff(
             data: updated ? { ...updated, bio: updated.bio ?? '' } : updated,
         };
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            const target = String(error?.meta?.target || '');
+            if (target.includes('email')) {
+                return {
+                    code: 400,
+                    message: 'Email is already in use',
+                    error: true,
+                };
+            }
+            if (target.includes('phoneNumber')) {
+                return {
+                    code: 400,
+                    message: 'Phone number is already in use',
+                    error: true,
+                };
+            }
+        }
+        if (String(error?.message || '').includes('Email is already in use')) {
+            return {
+                code: 400,
+                message: 'Email is already in use',
+                error: true,
+            };
+        }
+        if (String(error?.message || '').includes('Phone number is already in use')) {
+            return {
+                code: 400,
+                message: 'Phone number is already in use',
+                error: true,
+            };
+        }
         console.error('Error updating staff:', error);
         return {
             code: 500,

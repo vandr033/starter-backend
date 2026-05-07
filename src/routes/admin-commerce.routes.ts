@@ -325,6 +325,13 @@ router.get(
     requireCompanyCapability('COMMERCE_ORDERS'),
     CommerceOrderController.getAdminCommerceOrder,
 );
+router.get(
+    '/orders/:id/payment-proof',
+    requireAuth,
+    requireCompanyRole(allStaffRoles),
+    requireCompanyCapability('COMMERCE_ORDERS'),
+    CommerceOrderController.serveAdminCommercePaymentProof,
+);
 router.put(
     '/orders/:id/status',
     requireAuth,
