@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { CompanyUserRole } from '@prisma/client';
 
-import { getAllCompanies, getCompanyPublicPage, getCompanyStatus, getCompanyById, updateCompany, getFeaturedCompanies } from '../controllers/company.controller';
+import { getAllCompanies, getCompanyPublicPage, getCompanyInviteService, getCompanyStatus, getCompanyById, updateCompany, getFeaturedCompanies } from '../controllers/company.controller';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { validate } from '../middlewares/validate';
 import { updateCompanySchema } from '../schemas/company.schema';
@@ -13,6 +13,7 @@ router.get('/', getAllCompanies);
 router.get('/featured', getFeaturedCompanies);
 router.get('/id/:id', getCompanyById);
 router.put('/id/:id', requireAuth, requireCompanyRole(adminRoles), validate(updateCompanySchema), updateCompany);
+router.get('/:slug/invite-service/:token', getCompanyInviteService);
 router.get('/:slug', getCompanyPublicPage);
 router.get('/:slug/status', getCompanyStatus);
 

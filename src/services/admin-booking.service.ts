@@ -51,6 +51,10 @@ interface AdminPaymentInput {
     qr_proof_image_url?: string | null;
 }
 
+interface AdminSessionSlotInput {
+    start_at: string;
+}
+
 interface ResolvedAdminCustomer {
     customerId: number | null;
     clientName: string;
@@ -118,6 +122,13 @@ function buildAdminServiceSnapshots(
             position: index,
         };
     });
+}
+
+function splitAmountAcrossSessions(totalCents: number, parts: number): number[] {
+    if (parts <= 1) return [totalCents];
+    const base = Math.floor(totalCents / parts);
+    const remainder = totalCents - base * parts;
+    return Array.from({ length: parts }, (_, index) => base + (index < remainder ? 1 : 0));
 }
 
 function cleanupReminderSentCache(now: number): void {
@@ -573,6 +584,233 @@ async function sendAdminBookingCreatedSideEffects(params: {
         time: params.startAt.toISOString().slice(11, 16),
         total_price_cents: params.totalPrice,
     });
+}
+
+async function createAdminMultiSessionBookings(params: {
+    companyId: number;
+    staffId: number;
+    createdByUserId: string;
+    customer: ResolvedAdminCustomer;
+    payment: ResolvedAdminPayment;
+    serviceIds: number[];
+    sessionSlots: AdminSessionSlotInput[];
+    notes?: string;
+}): Promise<AdminBookingResult> {
+    if (params.serviceIds.length !== 1) {
+        return {
+            code: 400,
+            message: 'Multi-session admin bookings must contain exactly one service',
+            error: true,
+        };
+    }
+
+    const [service] = await BookingRepo.getServicesByIds(params.serviceIds, params.companyId);
+    if (!service) {
+        return {
+            code: 400,
+            message: 'No valid services found',
+            error: true,
+        };
+    }
+
+    if (!service.is_multi_session) {
+        return {
+            code: 400,
+            message: 'session_slots can only be used with multi-session services',
+            error: true,
+        };
+    }
+
+    const sessionCount = service.session_count ?? 0;
+    const sessionDurationMinutes = service.session_duration_minutes ?? 0;
+
+    if (sessionCount <= 1 || sessionDurationMinutes <= 0) {
+        return {
+            code: 400,
+            message: 'Invalid multi-session service configuration',
+            error: true,
+        };
+    }
+
+    if (params.sessionSlots.length !== sessionCount) {
+        return {
+            code: 400,
+            message: `Choose a date and time for all ${sessionCount} sessions`,
+            error: true,
+        };
+    }
+
+    const timeZone = await getCompanyTimeZone(params.companyId);
+    const parsedSlots = params.sessionSlots.map((slot, index) => {
+        const startAt = parseDateTimeInTimeZone(slot.start_at, timeZone);
+        return {
+            sessionIndex: index + 1,
+            startAt,
+            endAt: new Date(startAt.getTime() + sessionDurationMinutes * 60 * 1000),
+        };
+    });
+
+    if (parsedSlots.some((slot) => isNaN(slot.startAt.getTime()))) {
+        return {
+            code: 400,
+            message: 'Invalid session start_at format',
+            error: true,
+        };
+    }
+
+    for (let index = 0; index < parsedSlots.length; index += 1) {
+        const slot = parsedSlots[index];
+        const overlap = parsedSlots.find((candidate, candidateIndex) =>
+            candidateIndex !== index &&
+            intervalsOverlap(slot.startAt, slot.endAt, candidate.startAt, candidate.endAt),
+        );
+
+        if (overlap) {
+            return {
+                code: 409,
+                message: 'Selected sessions overlap with each other',
+                error: true,
+            };
+        }
+
+        const conflict = await BookingRepo.checkSlotConflict(
+            params.companyId,
+            params.staffId,
+            slot.startAt,
+            slot.endAt,
+            0,
+        );
+
+        if (conflict) {
+            return {
+                code: 409,
+                message: `Session ${slot.sessionIndex} conflicts with another booking`,
+                error: true,
+            };
+        }
+    }
+
+    const promotionsEnabled = await companyHasCapability(
+        params.companyId,
+        'RESERVAS_SERVICE_PROMOTIONS',
+    );
+    const pricing = resolveEffectiveServicePrice({
+        priceCents: service.price_cents,
+        promoPriceCents: service.promo_price_cents ?? null,
+        promoStartsAt: service.promo_starts_at ?? null,
+        promoEndsAt: service.promo_ends_at ?? null,
+        promoLabel: service.promo_label ?? null,
+        promotionsEnabled,
+    });
+    const perSessionPrices = splitAmountAcrossSessions(pricing.finalPriceCents, sessionCount);
+    const perSessionRegularPrices =
+        pricing.promoApplied && pricing.regularPriceCents
+            ? splitAmountAcrossSessions(pricing.regularPriceCents, sessionCount)
+            : null;
+
+    const created = await prisma.$transaction(async (tx) => {
+        const bookingGroup = await tx.bookingGroup.create({
+            data: {
+                company_id: params.companyId,
+                customer_id: params.customer.customerId,
+                group_type: 'MULTI_SESSION_SERVICE',
+                metadata: {
+                    service_id: service.id,
+                    session_count: sessionCount,
+                },
+            },
+        });
+
+        const createdBookings: Array<{
+            id: number;
+            startAt: Date;
+            endAt: Date;
+            totalPrice: number;
+        }> = [];
+
+        for (const slot of parsedSlots) {
+            const booking = await tx.booking.create({
+                data: {
+                    company_id: params.companyId,
+                    booking_group_id: bookingGroup.id,
+                    staff_id: params.staffId,
+                    customer_id: params.customer.customerId,
+                    client_name: params.customer.clientName,
+                    client_email: params.customer.clientEmail,
+                    client_phone_prefix: params.customer.clientPhonePrefix,
+                    client_phone_number: params.customer.clientPhoneNumber,
+                    booking_type: 'CUSTOMER',
+                    booking_source: BookingSource.ADMIN,
+                    start_at: slot.startAt,
+                    end_at: slot.endAt,
+                    status: BookingStatus.CONFIRMED,
+                    payment_method: params.payment.paymentMethod,
+                    payment_status: params.payment.paymentStatus,
+                    qr_proof_image_url: params.payment.qrProofImageUrl,
+                    total_price_cents: perSessionPrices[slot.sessionIndex - 1] ?? pricing.finalPriceCents,
+                    session_index: slot.sessionIndex,
+                    session_count: sessionCount,
+                    notes: params.notes,
+                    created_by_user_id: params.createdByUserId,
+                },
+            });
+
+            await tx.bookingService.create({
+                data: {
+                    booking_id: booking.id,
+                    company_id: params.companyId,
+                    service_id: service.id,
+                    service_name_snapshot: service.name,
+                    price_cents_snapshot:
+                        perSessionPrices[slot.sessionIndex - 1] ?? pricing.finalPriceCents,
+                    regular_price_cents_snapshot:
+                        perSessionRegularPrices?.[slot.sessionIndex - 1] ?? null,
+                    promo_applied_snapshot: pricing.promoApplied,
+                    promo_label_snapshot: pricing.promoLabel,
+                    duration_minutes_snapshot: sessionDurationMinutes,
+                    position: 0,
+                },
+            });
+
+            createdBookings.push({
+                id: booking.id,
+                startAt: slot.startAt,
+                endAt: slot.endAt,
+                totalPrice: booking.total_price_cents,
+            });
+        }
+
+        return createdBookings;
+    });
+
+    for (const booking of created) {
+        await sendAdminBookingCreatedSideEffects({
+            companyId: params.companyId,
+            staffId: params.staffId,
+            serviceIds: params.serviceIds,
+            bookingId: booking.id,
+            startAt: booking.startAt,
+            endAt: booking.endAt,
+            totalPrice: booking.totalPrice,
+            customer: params.customer,
+            services: [service],
+        });
+    }
+
+    if (params.customer.inviteContext) {
+        void sendCustomerPortalInvite(params.customer.inviteContext).catch((error) => {
+            logger.error({ companyId: params.companyId, bookingCount: created.length, error }, 'Failed to send customer portal invite after admin multi-session bookings');
+        });
+    }
+
+    const primaryBooking = await AdminBookingRepo.getBookingById(created[0]?.id, params.companyId);
+
+    return {
+        code: 201,
+        message: 'Booking created successfully',
+        error: false,
+        data: primaryBooking,
+    };
 }
 
 async function createAdminBookingRecord(params: {
@@ -1142,6 +1380,7 @@ export async function createBooking(
         staff_id: number;
         service_ids: number[];
         start_at: string;
+        session_slots?: AdminSessionSlotInput[];
         customer_id?: number;
         client_name?: string;
         client_phone?: string;
@@ -1154,12 +1393,45 @@ export async function createBooking(
     createdByUserId: string
 ): Promise<AdminBookingResult> {
     try {
-        if (!data.staff_id || !data.service_ids || data.service_ids.length === 0 || !data.start_at) {
+        const hasSessionSlots = Array.isArray(data.session_slots) && data.session_slots.length > 0;
+        if (!data.staff_id || !data.service_ids || data.service_ids.length === 0 || (!data.start_at && !hasSessionSlots)) {
             return {
                 code: 400,
-                message: 'staff_id, service_ids, and start_at are required',
+                message: 'staff_id, service_ids, and booking time are required',
                 error: true,
             };
+        }
+
+        const customerResult = await resolveAdminCustomer(data.companyId, {
+            customer_id: data.customer_id,
+            client_name: data.client_name,
+            client_phone: data.client_phone,
+            client_email: data.client_email,
+        });
+        if ('error' in customerResult) {
+            return customerResult;
+        }
+
+        if (hasSessionSlots) {
+            const paymentResult = await resolveAdminPayment(data.companyId, {
+                is_paid: data.is_paid,
+                payment_method: data.payment_method,
+                qr_proof_image_url: data.qr_proof_image_url,
+            });
+            if ('error' in paymentResult) {
+                return paymentResult;
+            }
+
+            return createAdminMultiSessionBookings({
+                companyId: data.companyId,
+                staffId: data.staff_id,
+                createdByUserId,
+                customer: customerResult.customer,
+                payment: paymentResult.payment,
+                serviceIds: data.service_ids,
+                sessionSlots: data.session_slots ?? [],
+                notes: data.notes,
+            });
         }
 
         const sessionResult = await prepareAdminBookingSession({
@@ -1175,16 +1447,6 @@ export async function createBooking(
         });
         if ('error' in sessionResult) {
             return sessionResult;
-        }
-
-        const customerResult = await resolveAdminCustomer(data.companyId, {
-            customer_id: data.customer_id,
-            client_name: data.client_name,
-            client_phone: data.client_phone,
-            client_email: data.client_email,
-        });
-        if ('error' in customerResult) {
-            return customerResult;
         }
 
         const booking = await createAdminBookingRecord({

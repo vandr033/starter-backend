@@ -117,6 +117,7 @@ function buildServiceFilterWithCategoryFallback(serviceTypeId: number): Prisma.S
   return {
     is_active: true,
     deleted_at: null,
+    is_invite_only: false,
     category: {
       is_active: true,
       deleted_at: null,
@@ -137,6 +138,7 @@ function buildServiceFilterWithoutCategoryFallback(serviceTypeId: number): Prism
   return {
     is_active: true,
     deleted_at: null,
+    is_invite_only: false,
     global_type_id: serviceTypeId,
   };
 }

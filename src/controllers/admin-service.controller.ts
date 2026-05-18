@@ -69,6 +69,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         position,
         global_type_id,
         required_resource_ids,
+        is_invite_only,
     } = req.body;
 
     // Validate required fields
@@ -148,6 +149,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         position,
         global_type_id,
         required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
+        is_invite_only: typeof is_invite_only === 'boolean' ? is_invite_only : undefined,
     });
 
     return res.status(result.code).json(result);
@@ -196,6 +198,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         category_id,
         global_type_id,
         required_resource_ids,
+        is_invite_only,
     } = req.body;
 
     const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
@@ -239,6 +242,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         category_id,
         global_type_id,
         required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
+        is_invite_only: typeof is_invite_only === 'boolean' ? is_invite_only : undefined,
     });
 
     return res.status(result.code).json(result);

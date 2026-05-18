@@ -15,6 +15,7 @@ import {
 } from '../utils/public-storefront';
 import * as CommerceRepo from '../repositories/commerce.repo';
 import { resolveEffectiveServicePrice } from './service-pricing.service';
+import * as ServiceRepo from '../repositories/service.repo';
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const FALLBACK_DEFAULT_LANGUAGE = 'es';
@@ -199,6 +200,14 @@ function serializePublicService(service: any, promotionsEnabled: boolean) {
   };
 }
 
+function filterPublicCategoriesByServices(
+  categories: Array<{ id: number }>,
+  services: Array<{ category_id: number }>,
+) {
+  const categoryIds = new Set(services.map((service) => service.category_id));
+  return categories.filter((category) => categoryIds.has(category.id));
+}
+
 export const getCompanyPublicPage = async (slug: string) => {
   try {
     const companyData = await CompanyRepo.getCompanyPublicPageBySlug(slug);
@@ -322,6 +331,15 @@ export const getCompanyPublicPage = async (slug: string) => {
         ])
       : [[], [], []];
 
+    const publicServices = exposeReservasContent
+      ? services.map((service) =>
+          serializePublicService(service, exposeServicePromotions),
+        )
+      : [];
+    const publicCategories = exposeReservasContent
+      ? filterPublicCategoriesByServices(categories, publicServices)
+      : [];
+
     const responseData = {
       company: {
         ...company,
@@ -329,12 +347,8 @@ export const getCompanyPublicPage = async (slug: string) => {
         entitlements: publicEntitlements,
         public_features: publicFeatures,
       },
-      categories: exposeReservasContent ? categories : [],
-      services: exposeReservasContent
-        ? services.map((service) =>
-            serializePublicService(service, exposeServicePromotions),
-          )
-        : [],
+      categories: publicCategories,
+      services: publicServices,
       staff: exposeReservasContent ? staff_profiles : [],
       commerceStore:
         exposeCommerceContent && commerceStoreRecord
@@ -355,6 +369,41 @@ export const getCompanyPublicPage = async (slug: string) => {
     return buildSuccessResponse('Company retrieved', responseData);
   } catch (error) {
     return buildServiceErrorResponse('company', 'get public page', error);
+  }
+};
+
+export const getCompanyInviteService = async (slug: string, inviteToken: string) => {
+  try {
+    const inviteService = await ServiceRepo.getPublicInviteServiceByToken(slug, inviteToken);
+
+    if (!inviteService) {
+      return buildNotFoundResponse('Invite service', 'Invite service not found');
+    }
+
+    const entitlements = await getCompanyEntitlements(inviteService.company.id);
+    const publicFeatures = buildPublicStorefrontVisibility({
+      entitlements,
+      availability: {
+        availableUntil: inviteService.company.availableUntil,
+        is_active: inviteService.company.is_active,
+        deleted_at: inviteService.company.deleted_at,
+      },
+      isMarketplaceVisible: inviteService.company.isMarketplaceVisible,
+    });
+
+    if (!publicFeatures.bookingsEnabled) {
+      return buildNotFoundResponse('Invite service', 'Invite service not found');
+    }
+
+    const promotionsEnabled =
+      entitlements.productCapabilities.RESERVAS_SERVICE_PROMOTIONS === true;
+
+    return buildSuccessResponse(
+      'Invite service retrieved',
+      serializePublicService(inviteService, promotionsEnabled),
+    );
+  } catch (error) {
+    return buildServiceErrorResponse('company', 'get invite service', error);
   }
 };
 

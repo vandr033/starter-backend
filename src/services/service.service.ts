@@ -1,6 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as ServiceRepo from '../repositories/service.repo';
 import { companyHasCapability } from './company-entitlements.service';
+import crypto from 'node:crypto';
 import {
     resolveEffectiveServicePrice,
     validateServicePromoWindow,
@@ -22,6 +23,11 @@ type ServicePromotionConfig = {
     promo_starts_at?: Date | null;
     promo_ends_at?: Date | null;
     promo_label?: string | null;
+};
+
+type InviteOnlyConfig = {
+    is_invite_only?: boolean;
+    invite_token?: string | null;
 };
 
 function serializeServiceWithPricing(
@@ -55,6 +61,30 @@ function serializeServiceWithPricing(
             promo_starts_at: pricing.promoStartsAt,
             promo_ends_at: pricing.promoEndsAt,
         },
+    };
+}
+
+function normalizeInviteOnlyInput(
+    input: {
+        is_invite_only?: boolean;
+    },
+    existingInviteToken?: string | null,
+): InviteOnlyConfig {
+    if (input.is_invite_only === undefined) {
+        return {};
+    }
+
+    if (!input.is_invite_only) {
+        return {
+            is_invite_only: false,
+        };
+    }
+
+    return {
+        is_invite_only: true,
+        invite_token:
+            existingInviteToken?.trim() ||
+            crypto.randomBytes(24).toString('base64url'),
     };
 }
 
@@ -260,6 +290,7 @@ export interface CreateServiceInput {
     position?: number;
     global_type_id?: number;
     required_resource_ids?: number[];
+    is_invite_only?: boolean;
 }
 
 export async function createService(
@@ -292,6 +323,7 @@ export async function createService(
         if ('error' in promotionConfig) {
             return promotionConfig;
         }
+        const inviteOnlyConfig = normalizeInviteOnlyInput(input);
 
         const service = await ServiceRepo.createService({
             company_id: companyId,
@@ -306,6 +338,7 @@ export async function createService(
             session_duration_minutes: multiSessionConfig.session_duration_minutes,
             position,
             global_type_id: input.global_type_id,
+            ...inviteOnlyConfig,
         });
 
         if (input.required_resource_ids && input.required_resource_ids.length > 0) {
@@ -357,6 +390,7 @@ export interface UpdateServiceInput {
     category_id?: number;
     global_type_id?: number;
     required_resource_ids?: number[];
+    is_invite_only?: boolean;
 }
 
 export async function updateService(
@@ -407,6 +441,10 @@ export async function updateService(
         if ('error' in promotionConfig) {
             return promotionConfig;
         }
+        const inviteOnlyConfig = normalizeInviteOnlyInput(
+            input,
+            (existing as { invite_token?: string | null }).invite_token ?? null,
+        );
 
         const {
             required_resource_ids,
@@ -417,12 +455,16 @@ export async function updateService(
             promo_starts_at: _promoStartsAt,
             promo_ends_at: _promoEndsAt,
             promo_label: _promoLabel,
+            is_invite_only: _isInviteOnly,
             ...coreInput
         } = input;
         await ServiceRepo.updateService(serviceId, companyId, coreInput);
         await ServiceRepo.updateService(serviceId, companyId, multiSessionConfig);
         if (Object.keys(promotionConfig).length > 0) {
             await ServiceRepo.updateService(serviceId, companyId, promotionConfig);
+        }
+        if (Object.keys(inviteOnlyConfig).length > 0) {
+            await ServiceRepo.updateService(serviceId, companyId, inviteOnlyConfig);
         }
 
         if (required_resource_ids !== undefined) {

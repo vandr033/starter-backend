@@ -280,6 +280,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         staff_id,
         service_ids,
         start_at,
+        session_slots,
         customer_id,
         customer,
         notes,
@@ -289,10 +290,11 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
     } = req.body;
 
     // Validate required fields
-    if (!staff_id || !service_ids || !start_at) {
+    const hasSessionSlots = Array.isArray(session_slots) && session_slots.length > 0;
+    if (!staff_id || !service_ids || (!start_at && !hasSessionSlots)) {
         mensaje = {
             code: 400,
-            message: 'staff_id, service_ids, and start_at are required',
+            message: 'staff_id, service_ids, and booking time are required',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -349,6 +351,13 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         staff_id: parsedStaffId,
         service_ids,
         start_at,
+        session_slots: hasSessionSlots
+            ? session_slots
+                .map((slot: any) => ({
+                    start_at: typeof slot?.start_at === 'string' ? slot.start_at : '',
+                }))
+                .filter((slot: { start_at: string }) => slot.start_at)
+            : undefined,
         customer_id: customer_id ? Number(customer_id) : undefined,
         client_name,
         client_phone,

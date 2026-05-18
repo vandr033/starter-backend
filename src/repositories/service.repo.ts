@@ -103,6 +103,8 @@ export interface CreateServiceData {
     session_duration_minutes?: number | null;
     position?: number;
     global_type_id?: number;
+    is_invite_only?: boolean;
+    invite_token?: string | null;
 }
 
 export async function createService(data: CreateServiceData) {
@@ -123,6 +125,8 @@ export async function createService(data: CreateServiceData) {
             session_duration_minutes: data.session_duration_minutes ?? null,
             position: data.position ?? 0,
             global_type_id: data.global_type_id,
+            is_invite_only: data.is_invite_only ?? false,
+            invite_token: data.invite_token ?? null,
         },
         include: {
             category: {
@@ -155,6 +159,8 @@ export interface UpdateServiceData {
     is_active?: boolean;
     category_id?: number;
     global_type_id?: number;
+    is_invite_only?: boolean;
+    invite_token?: string | null;
 }
 
 export async function updateService(id: number, companyId: number, data: UpdateServiceData) {
@@ -187,6 +193,59 @@ export async function getUpdatedService(id: number, companyId: number) {
             },
             required_resources: {
                 select: { staff_profile_id: true },
+            },
+        },
+    });
+}
+
+export async function getPublicInviteServiceByToken(
+    slug: string,
+    inviteToken: string,
+) {
+    return prisma.service.findFirst({
+        where: {
+            invite_token: inviteToken,
+            is_invite_only: true,
+            is_active: true,
+            deleted_at: null,
+            company: {
+                slug,
+                deleted_at: null,
+            },
+        },
+        select: {
+            id: true,
+            category_id: true,
+            name: true,
+            description: true,
+            price_cents: true,
+            promo_price_cents: true,
+            promo_starts_at: true,
+            promo_ends_at: true,
+            promo_label: true,
+            duration_minutes: true,
+            is_multi_session: true,
+            session_count: true,
+            session_duration_minutes: true,
+            position: true,
+            is_invite_only: true,
+            required_resources: {
+                select: { staff_profile_id: true },
+            },
+            category: {
+                select: {
+                    id: true,
+                    name: true,
+                },
+            },
+            company: {
+                select: {
+                    id: true,
+                    availableUntil: true,
+                    is_active: true,
+                    deleted_at: true,
+                    isMarketplaceVisible: true,
+                },
             },
         },
     });

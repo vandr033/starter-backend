@@ -533,6 +533,8 @@ model Service {
   session_duration_minutes Int?
   position           Int                       @default(0)
   is_active          Boolean                   @default(true)
+  is_invite_only     Boolean                   @default(false)
+  invite_token       String?                   @unique @db.VarChar(255)
   created_at         DateTime                  @default(now())
   updated_at         DateTime                  @updatedAt
   deleted_at         DateTime?
@@ -547,6 +549,7 @@ model Service {
   required_resources ServiceRequiredResource[]
 
   @@index([company_id, is_active])
+  @@index([company_id, is_invite_only, is_active], map: "service_company_invite_active_idx")
   @@index([company_id, global_type_id, is_active], map: "service_company_global_active_idx")
   @@index([category_id, is_active, position])
   @@index([global_type_id], map: "service_global_type_id_fkey")

@@ -188,6 +188,8 @@ async function resolveSlotMinutesForGlobalType(
       where: {
         global_type_id: globalServiceTypeId,
         is_active: true,
+        is_invite_only: false,
+        deleted_at: null,
       },
       _min: {
         duration_minutes: true,
@@ -331,6 +333,8 @@ export const getCompanySearch = async (globalServiceTypeId?: number, location?: 
       services: {
         where: {
           is_active: true,
+          is_invite_only: false,
+          deleted_at: null,
           ...(globalServiceTypeId
             ? { global_type_id: globalServiceTypeId }
             : {}),
@@ -433,7 +437,7 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
         },
       },
       services: {
-        where: { is_active: true, deleted_at: null },
+        where: { is_active: true, deleted_at: null, is_invite_only: false },
         orderBy: { position: 'asc' },
         select: {
           id: true,

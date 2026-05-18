@@ -196,6 +196,20 @@ export const getCompanyPublicPage = async (req: Request, res: Response) => {
     }
 }
 
+export const getCompanyInviteService = async (req: Request, res: Response) => {
+    try {
+        const slug = req.params.slug as string;
+        const token = req.params.token as string;
+        mensaje = await CompanyService.getCompanyInviteService(slug, token);
+        res.status(mensaje.code).json(mensaje);
+    } catch (error) {
+        logger.error("Error al obtener el servicio con invitación");
+        logger.error(error);
+        mensaje = buildServiceErrorResponse('company', 'get invite service', error);
+        res.status(500).json(mensaje);
+    }
+}
+
 export const getCompanyStatus = async (req: Request, res: Response) => {
     try {
         const slug = req.params.slug as string;
