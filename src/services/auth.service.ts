@@ -152,6 +152,29 @@ async function signInExistingEmailUser(
   };
 }
 
+function extractResponseCookies(response: Response): string[] {
+  const cookies = response.headers.getSetCookie?.() || [];
+  if (cookies.length > 0) {
+    return cookies;
+  }
+
+  const singleCookie = response.headers.get("set-cookie");
+  return singleCookie ? [singleCookie] : [];
+}
+
+async function getSessionFromResponseCookies(
+  reqHeaders: HeadersInit | undefined,
+  cookies: string[],
+) {
+  const auth = await getAuth();
+  const sessionHeaders = new Headers(reqHeaders);
+  if (cookies.length > 0) {
+    sessionHeaders.set("cookie", cookies.join("; "));
+  }
+
+  return auth.api.getSession({ headers: sessionHeaders });
+}
+
 // ────────────────────────────────────────────
 // REGISTRATION — Email OTP flow (no password)
 // ────────────────────────────────────────────
@@ -726,16 +749,43 @@ export async function verifyLoginOtpPhone(
     }
 
     const auth = await getAuth();
-    const result = await auth.api.verifyPhoneNumber({
+    const verificationResponse = await auth.api.verifyPhoneNumber({
       body: { phoneNumber, code },
       headers: reqHeaders,
+      asResponse: true,
     });
+
+    if (!verificationResponse.ok) {
+      const payload = await verificationResponse.json().catch(() => null);
+      const message =
+        typeof payload?.message === "string" && payload.message.trim().length > 0
+          ? payload.message
+          : "Error al verificar el código";
+
+      return {
+        code: verificationResponse.status || 400,
+        message,
+        error: true,
+      };
+    }
+
+    const payload = await verificationResponse.json().catch(() => null);
+    const cookies = extractResponseCookies(verificationResponse);
+    const session = await getSessionFromResponseCookies(reqHeaders, cookies);
+
+    if (!session?.user) {
+      throw new Error("No pudimos recuperar la sesión del usuario");
+    }
 
     return {
       code: 200,
       message: "Inicio de sesión exitoso",
       error: false,
-      data: result,
+      data: {
+        ...(payload && typeof payload === "object" ? payload : {}),
+        user: session.user,
+        cookies,
+      },
     };
   } catch (error: any) {
     return {
