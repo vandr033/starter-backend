@@ -19,6 +19,11 @@ export async function getServicesByCompany(companyId: number) {
                 },
             },
             required_resources: {
+                where: {
+                    staff_profile: {
+                        deleted_at: null,
+                    },
+                },
                 select: { staff_profile_id: true },
             },
         },
@@ -48,6 +53,11 @@ export async function getServiceById(id: number, companyId: number) {
                 },
             },
             required_resources: {
+                where: {
+                    staff_profile: {
+                        deleted_at: null,
+                    },
+                },
                 select: { staff_profile_id: true },
             },
         },
@@ -192,6 +202,11 @@ export async function getUpdatedService(id: number, companyId: number) {
                 },
             },
             required_resources: {
+                where: {
+                    staff_profile: {
+                        deleted_at: null,
+                    },
+                },
                 select: { staff_profile_id: true },
             },
         },
@@ -230,6 +245,11 @@ export async function getPublicInviteServiceByToken(
             position: true,
             is_invite_only: true,
             required_resources: {
+                where: {
+                    staff_profile: {
+                        deleted_at: null,
+                    },
+                },
                 select: { staff_profile_id: true },
             },
             category: {

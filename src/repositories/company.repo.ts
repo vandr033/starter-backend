@@ -455,6 +455,11 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
           session_duration_minutes: true,
           position: true,
           required_resources: {
+            where: {
+              staff_profile: {
+                deleted_at: null,
+              },
+            },
             select: { staff_profile_id: true },
           },
         },
