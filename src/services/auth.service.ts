@@ -328,33 +328,72 @@ export async function completeCustomerRegistrationEmail(
 
     // Create user via Better Auth
     const auth = await getAuth();
-    const result = await auth.api.signUpEmail({
+    const signUpResponse = await auth.api.signUpEmail({
       body: {
         email: normalizedEmail,
         password: randomPassword,
         name: displayName,
       },
       headers: reqHeaders,
+      asResponse: true,
     });
 
-    if (!result || !result.user) {
-      throw new Error("Error al registrar el usuario (Better Auth)");
+    if (!signUpResponse.ok) {
+      const payload = await signUpResponse.json().catch(() => null);
+      throw new Error(
+        typeof payload?.message === "string" && payload.message.trim().length > 0
+          ? payload.message
+          : "Error al registrar el usuario (Better Auth)",
+      );
     }
 
-    const user = result.user;
+    const signUpPayload = await signUpResponse.json().catch(() => null) as { user?: { id?: string } } | null;
+    const user = signUpPayload?.user;
+    if (!user?.id) {
+      throw new Error("Error al registrar el usuario (Better Auth)");
+    }
 
     // Mark email as verified since we already verified via OTP
     await UserRepo.verifyUserEmail(user.id);
 
     // Update first_name / last_name
-    await UserRepo.updateUserNames(user.id, first_name, last_name);
+    const updatedUser = await UserRepo.updateUserNames(user.id, first_name, last_name);
+
+    let cookies = extractResponseCookies(signUpResponse);
+    let session = cookies.length > 0
+      ? await getSessionFromResponseCookies(reqHeaders, cookies)
+      : null;
+
+    if (!session?.user) {
+      const signInResponse = await auth.api.signInEmail({
+        body: {
+          email: normalizedEmail,
+          password: randomPassword,
+        },
+        headers: reqHeaders,
+        asResponse: true,
+      });
+
+      if (!signInResponse.ok) {
+        const payload = await signInResponse.json().catch(() => null);
+        throw new Error(
+          typeof payload?.message === "string" && payload.message.trim().length > 0
+            ? payload.message
+            : "No pudimos iniciar la sesión del cliente",
+        );
+      }
+
+      cookies = extractResponseCookies(signInResponse);
+      session = await getSessionFromResponseCookies(reqHeaders, cookies);
+    }
 
     mensaje = {
       code: 201,
       message: "Registro de cliente completado correctamente",
       error: false,
       data: {
-        user,
+        user: session?.user ?? updatedUser,
+        cookies,
       },
     };
   } catch (error: any) {
@@ -618,6 +657,7 @@ export async function verifyLoginOtpEmail(
       data: {
         user: session.user,
         token: session.token,
+        cookies: session.cookies,
       },
     };
   } catch (error: any) {

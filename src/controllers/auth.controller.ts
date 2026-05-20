@@ -69,6 +69,11 @@ export async function completeCustomerRegistrationEmail(req: Request, res: Respo
     req.headers
   );
 
+  if (Array.isArray((result as any)?.data?.cookies) && (result as any).data.cookies.length > 0) {
+    res.setHeader("set-cookie", (result as any).data.cookies);
+    delete (result as any).data.cookies;
+  }
+
   return res.status(result.code).json(result);
 }
 
