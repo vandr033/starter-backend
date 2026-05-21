@@ -8,6 +8,7 @@ import { getCurrentMonthInstallment } from './enrollment-installment.service';
 
 type ServiceResult = MensajeApi & { data?: unknown };
 type ScanStatus = 'VALID' | 'ALREADY_USED' | 'INVALID';
+type SessionAttendanceStatus = 'SHOW' | 'NO_SHOW';
 
 function buildScanResponse(
     scanStatus: ScanStatus,
@@ -117,6 +118,16 @@ export async function checkInClassSessionAttendance(
     userId: string,
     method: CheckInMethod = CheckInMethod.MANUAL,
 ): Promise<ServiceResult> {
+    return setClassSessionAttendanceStatus(companyId, sessionId, userId, 'SHOW', method);
+}
+
+export async function setClassSessionAttendanceStatus(
+    companyId: number,
+    sessionId: number,
+    userId: string,
+    status: SessionAttendanceStatus,
+    method: CheckInMethod = CheckInMethod.MANUAL,
+): Promise<ServiceResult> {
     const canUseClasses = await isFeatureEnabledForCompany(companyId, 'GROUP_CLASSES');
     if (!canUseClasses) {
         return { code: 403, error: true, message: 'Group classes require Pro plan' };
@@ -166,8 +177,54 @@ export async function checkInClassSessionAttendance(
         },
     });
 
-    if (existing?.checked_in_at) {
-        return { code: 200, error: false, message: 'Already checked in', data: existing };
+    if (status === 'SHOW') {
+        if (existing?.checked_in_at) {
+            return { code: 200, error: false, message: 'Already checked in', data: existing };
+        }
+
+        if (existing) {
+            const updated = await prisma.groupSessionAttendance.update({
+                where: { id: existing.id },
+                data: {
+                    enrollment_id: enrollment.id,
+                    customer_profile_id: enrollment.customer_profile_id,
+                    checked_in_at: new Date(),
+                    checked_in_method: method,
+                },
+            });
+
+            return { code: 200, error: false, message: 'Checked in', data: updated };
+        }
+
+        try {
+            const created = await prisma.groupSessionAttendance.create({
+                data: {
+                    company_id: companyId,
+                    group_class_session_id: sessionId,
+                    user_id: userId,
+                    enrollment_id: enrollment.id,
+                    customer_profile_id: enrollment.customer_profile_id,
+                    checked_in_at: new Date(),
+                    checked_in_method: method,
+                },
+            });
+
+            return { code: 201, error: false, message: 'Checked in', data: created };
+        } catch (error: any) {
+            if (error?.code === 'P2002') {
+                const concurrent = await prisma.groupSessionAttendance.findFirst({
+                    where: {
+                        company_id: companyId,
+                        group_class_session_id: sessionId,
+                        user_id: userId,
+                    },
+                });
+                if (concurrent) {
+                    return { code: 200, error: false, message: 'Already checked in', data: concurrent };
+                }
+            }
+            throw error;
+        }
     }
 
     if (existing) {
@@ -176,12 +233,12 @@ export async function checkInClassSessionAttendance(
             data: {
                 enrollment_id: enrollment.id,
                 customer_profile_id: enrollment.customer_profile_id,
-                checked_in_at: new Date(),
-                checked_in_method: method,
+                checked_in_at: null,
+                checked_in_method: null,
             },
         });
 
-        return { code: 200, error: false, message: 'Checked in', data: updated };
+        return { code: 200, error: false, message: 'Marked as no-show', data: updated };
     }
 
     try {
@@ -192,12 +249,12 @@ export async function checkInClassSessionAttendance(
                 user_id: userId,
                 enrollment_id: enrollment.id,
                 customer_profile_id: enrollment.customer_profile_id,
-                checked_in_at: new Date(),
-                checked_in_method: method,
+                checked_in_at: null,
+                checked_in_method: null,
             },
         });
 
-        return { code: 201, error: false, message: 'Checked in', data: created };
+        return { code: 201, error: false, message: 'Marked as no-show', data: created };
     } catch (error: any) {
         if (error?.code === 'P2002') {
             const concurrent = await prisma.groupSessionAttendance.findFirst({
@@ -208,7 +265,7 @@ export async function checkInClassSessionAttendance(
                 },
             });
             if (concurrent) {
-                return { code: 200, error: false, message: 'Already checked in', data: concurrent };
+                return { code: 200, error: false, message: 'Marked as no-show', data: concurrent };
             }
         }
         throw error;

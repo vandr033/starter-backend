@@ -125,6 +125,12 @@ export const checkInClassSessionSchema = z.object({
     method: z.enum(['QR_SCAN', 'MANUAL']).optional(),
 });
 
+export const setClassSessionAttendanceStatusSchema = z.object({
+    user_id: z.string().trim().min(1),
+    status: z.enum(['SHOW', 'NO_SHOW']),
+    method: z.enum(['QR_SCAN', 'MANUAL']).optional(),
+});
+
 export const checkInByTicketSchema = z.object({
     ticket_code: z.string().trim().min(1).max(2048).optional(),
     qr_token: z.string().trim().min(1).max(4096).optional(),

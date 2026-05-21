@@ -465,7 +465,19 @@ export const getCompanyPublicPageBySlug = async (slug: string) => {
         },
       },
       staff_profiles: {
-        where: { is_bookable: true, deleted_at: null },
+        where: {
+          is_bookable: true,
+          deleted_at: null,
+          staff_services: {
+            some: {
+              service: {
+                is_active: true,
+                deleted_at: null,
+                is_invite_only: false,
+              },
+            },
+          },
+        },
         select: {
           id: true,
           display_name: true,

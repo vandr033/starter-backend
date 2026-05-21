@@ -10,6 +10,7 @@ import {
     checkInClassSessionSchema,
     checkInEventSchema,
     checkInFreeEventByCodeSchema,
+    setClassSessionAttendanceStatusSchema,
 } from '../schemas/group.schema';
 import {
     adminListInterestedHandler,
@@ -139,6 +140,14 @@ router.post(
     requirePlanFeature('GROUP_CLASSES'),
     validate(checkInClassSessionSchema),
     AdminGroupBookingController.checkInClassSession,
+);
+router.post(
+    '/attendance/sessions/:sessionId/status',
+    requireAuth,
+    requireCompanyRole(staffRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    validate(setClassSessionAttendanceStatusSchema),
+    AdminGroupBookingController.setClassSessionAttendanceStatus,
 );
 router.post(
     '/attendance/tickets/check-in',

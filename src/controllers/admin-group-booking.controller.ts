@@ -322,6 +322,27 @@ export async function checkInClassSession(req: AuthenticatedRequest, res: Respon
     return res.status(result.code).json(result);
 }
 
+export async function setClassSessionAttendanceStatus(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const sessionId = parseId(req.params.sessionId);
+    if (!sessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid sessionId' });
+    }
+
+    const payload = (req as any).validated ?? req.body;
+    const result = await GroupAttendanceService.setClassSessionAttendanceStatus(
+        companyId,
+        sessionId,
+        payload.user_id,
+        payload.status,
+        parseCheckInMethod(payload.method),
+    );
+
+    return res.status(result.code).json(result);
+}
+
 export async function checkInByTicket(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;
