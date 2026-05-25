@@ -93,7 +93,15 @@ export async function getMyProfile(req: AuthenticatedRequest, res: Response) {
 export async function updateMyProfile(req: AuthenticatedRequest, res: Response) {
     const companyId = (req as any).companyID;
     const userId = req.authUser?.id;
-    const { display_name, bio, first_name, last_name, phone, phone_prefix } = req.body;
+    const {
+        display_name,
+        bio,
+        first_name,
+        last_name,
+        phoneNumber,
+        phonePrefix,
+        phone_prefix,
+    } = req.body;
 
     if (!companyId) {
         mensaje = {
@@ -159,19 +167,21 @@ export async function updateMyProfile(req: AuthenticatedRequest, res: Response) 
         return res.status(400).json(mensaje);
     }
 
-    if (phone !== undefined && typeof phone !== 'string') {
+    if (phoneNumber !== undefined && typeof phoneNumber !== 'string') {
         mensaje = {
             code: 400,
-            message: 'phone must be a string',
+            message: 'phoneNumber must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
     }
 
-    if (phone_prefix !== undefined && typeof phone_prefix !== 'string') {
+    const resolvedPhonePrefix = typeof phonePrefix === 'string' ? phonePrefix : phone_prefix;
+
+    if (resolvedPhonePrefix !== undefined && typeof resolvedPhonePrefix !== 'string') {
         mensaje = {
             code: 400,
-            message: 'phone_prefix must be a string',
+            message: 'phonePrefix must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -182,8 +192,8 @@ export async function updateMyProfile(req: AuthenticatedRequest, res: Response) 
         bio: bio === undefined ? undefined : (typeof bio === 'string' ? bio.trim() : ''),
         first_name: typeof first_name === 'string' ? first_name.trim() : undefined,
         last_name: typeof last_name === 'string' ? last_name.trim() : undefined,
-        phone: typeof phone === 'string' ? phone.trim() : undefined,
-        phone_prefix: typeof phone_prefix === 'string' ? phone_prefix.trim() : undefined,
+        phoneNumber: typeof phoneNumber === 'string' ? phoneNumber.trim() : undefined,
+        phonePrefix: typeof resolvedPhonePrefix === 'string' ? resolvedPhonePrefix.trim() : undefined,
     });
 
     return res.status(result.code).json(result);
@@ -205,7 +215,19 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { email, display_name, role, phone_prefix, phone, bio, is_bookable, service_ids, start_date, end_date } = req.body;
+    const {
+        email,
+        display_name,
+        role,
+        phonePrefix,
+        phone_prefix,
+        phoneNumber,
+        bio,
+        is_bookable,
+        service_ids,
+        start_date,
+        end_date,
+    } = req.body;
 
     // Validate required fields
     if (!email || typeof email !== 'string') {
@@ -278,19 +300,21 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         }
     }
 
-    if (phone_prefix !== undefined && typeof phone_prefix !== 'string') {
+    const resolvedPhonePrefix = typeof phonePrefix === 'string' ? phonePrefix : phone_prefix;
+
+    if (resolvedPhonePrefix !== undefined && typeof resolvedPhonePrefix !== 'string') {
         mensaje = {
             code: 400,
-            message: 'phone_prefix must be a string',
+            message: 'phonePrefix must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
     }
 
-    if (phone !== undefined && typeof phone !== 'string') {
+    if (phoneNumber !== undefined && typeof phoneNumber !== 'string') {
         mensaje = {
             code: 400,
-            message: 'phone must be a string',
+            message: 'phoneNumber must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -341,8 +365,8 @@ export async function createStaff(req: AuthenticatedRequest, res: Response) {
         email: email.toLowerCase().trim(),
         display_name: display_name.trim(),
         role: role as CompanyUserRole | undefined,
-        phone_prefix: phone_prefix?.trim(),
-        phone: phone?.trim(),
+        phonePrefix: typeof resolvedPhonePrefix === 'string' ? resolvedPhonePrefix.trim() : undefined,
+        phoneNumber: typeof phoneNumber === 'string' ? phoneNumber.trim() : undefined,
         bio: typeof bio === 'string' ? bio.trim() : '',
         is_bookable,
         service_ids,
@@ -409,7 +433,18 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
-    const { email, phone, phone_prefix, display_name, bio, image_url, is_bookable, service_ids, resource_type } = req.body;
+    const {
+        email,
+        phoneNumber,
+        phonePrefix,
+        phone_prefix,
+        display_name,
+        bio,
+        image_url,
+        is_bookable,
+        service_ids,
+        resource_type,
+    } = req.body;
 
     // Validate resource_type if provided
     const validResourceTypes = ['PERSON', 'ROOM', 'EQUIPMENT'];
@@ -471,19 +506,21 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
         }
     }
 
-    if (phone !== undefined && typeof phone !== 'string') {
+    if (phoneNumber !== undefined && typeof phoneNumber !== 'string') {
         mensaje = {
             code: 400,
-            message: 'phone must be a string',
+            message: 'phoneNumber must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
     }
 
-    if (phone_prefix !== undefined && typeof phone_prefix !== 'string') {
+    const resolvedPhonePrefix = typeof phonePrefix === 'string' ? phonePrefix : phone_prefix;
+
+    if (resolvedPhonePrefix !== undefined && typeof resolvedPhonePrefix !== 'string') {
         mensaje = {
             code: 400,
-            message: 'phone_prefix must be a string',
+            message: 'phonePrefix must be a string',
             error: true,
         };
         return res.status(400).json(mensaje);
@@ -542,8 +579,8 @@ export async function updateStaff(req: AuthenticatedRequest, res: Response) {
 
     const result = await StaffService.updateStaff(companyId, staffId, {
         email: email?.trim().toLowerCase(),
-        phone: phone?.trim(),
-        phone_prefix: phone_prefix?.trim(),
+        phoneNumber: phoneNumber?.trim(),
+        phonePrefix: typeof resolvedPhonePrefix === 'string' ? resolvedPhonePrefix.trim() : undefined,
         display_name: display_name?.trim(),
         bio: bio === undefined ? undefined : (typeof bio === 'string' ? bio.trim() : ''),
         image_url: image_url?.trim(),

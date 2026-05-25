@@ -245,7 +245,9 @@ function toFinalCustomer(row: CustomerAggregateMutable): CustomerWithStats {
 type BookingRow = Awaited<ReturnType<typeof fetchBookingsForCompany>>[number];
 
 function buildCustomerKeyFromBooking(booking: BookingRow): string {
-    const user = booking.customer?.user;
+    const user = booking.customer?.user && !booking.customer.user.deleted_at
+        ? booking.customer.user
+        : null;
     const email = normalizeEmail(user?.email || booking.client_email);
     const phone = normalizePhone(user?.phoneNumber || booking.client_phone_number);
     const phonePrefix = normalizePrefix(user?.phone_prefix || booking.client_phone_prefix || '591');
@@ -294,6 +296,7 @@ async function fetchBookingsForCompany(companyId: number) {
                             email: true,
                             phoneNumber: true,
                             phone_prefix: true,
+                            deleted_at: true,
                         },
                     },
                 },
@@ -331,6 +334,11 @@ export async function getCustomersWithBookingStats(
             where: {
                 company_id: companyId,
                 deleted_at: null,
+                user: {
+                    is: {
+                        deleted_at: null,
+                    },
+                },
             },
             include: {
                 user: {
@@ -378,7 +386,14 @@ export async function getCustomersWithBookingStats(
     }
 
     for (const booking of bookings) {
-        const user = booking.customer?.user;
+        const user = booking.customer?.user && !booking.customer.user.deleted_at
+            ? booking.customer.user
+            : null;
+
+        if (booking.customer?.user?.deleted_at) {
+            continue;
+        }
+
         const email = normalizeEmail(user?.email || booking.client_email);
         const phone = normalizePhone(user?.phoneNumber || booking.client_phone_number);
         const phonePrefix = normalizePrefix(user?.phone_prefix || booking.client_phone_prefix || '591');

@@ -373,7 +373,7 @@ interface User {
   first_name?: string;
   last_name?: string;
   phone_prefix?: string;       // e.g., "591"
-  phoneNumber?: string;        // e.g., "+59170000000"
+  phoneNumber?: string;        // e.g., "70000000"
   phoneNumberVerified?: boolean;
   is_super_admin: boolean;
   is_active: boolean;
@@ -754,6 +754,6 @@ The backend accepts requests from:
 
 5. **Phone Format**: 
    - `phone_prefix`: Country code without "+" (e.g., "591")
-   - `phoneNumber`: Full international format (e.g., "+59170000000")
+   - `phoneNumber`: Local phone number only, without prefix (e.g., "70000000")
 
 6. **Session Management**: Better Auth handles sessions via HTTP-only cookies. Include `credentials: 'include'` in fetch requests.

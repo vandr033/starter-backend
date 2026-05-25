@@ -41,7 +41,8 @@ export type NoShowNotificationChannel = DirectNotificationChannel;
 interface AdminCustomerInput {
     customer_id?: number;
     client_name?: string;
-    client_phone?: string;
+    client_phone_prefix?: string;
+    client_phone_number?: string;
     client_email?: string;
 }
 
@@ -256,29 +257,6 @@ function buildCustomerName(user?: {
     return full || user?.name?.trim() || fallback?.trim() || 'Customer';
 }
 
-function parseClientPhone(clientPhone?: string | null): {
-    phonePrefix: string | null;
-    phoneNumber: string | null;
-} {
-    const raw = (clientPhone || '').trim();
-    if (!raw) {
-        return { phonePrefix: null, phoneNumber: null };
-    }
-
-    const parts = raw.split(/\s+/);
-    if (parts.length > 1 && /^\+\d+$/.test(parts[0])) {
-        return {
-            phonePrefix: parts[0],
-            phoneNumber: parts.slice(1).join(' ') || null,
-        };
-    }
-
-    return {
-        phonePrefix: null,
-        phoneNumber: raw,
-    };
-}
-
 async function resolveAdminCustomer(
     companyId: number,
     input: AdminCustomerInput,
@@ -331,7 +309,8 @@ async function resolveAdminCustomer(
         };
     }
 
-    const { phonePrefix, phoneNumber } = parseClientPhone(input.client_phone);
+    const phonePrefix = normalizePhone(input.client_phone_prefix);
+    const phoneNumber = normalizePhone(input.client_phone_number);
 
     const normalizedEmail = normalizeEmail(input.client_email);
     if (normalizedEmail) {
@@ -1383,7 +1362,8 @@ export async function createBooking(
         session_slots?: AdminSessionSlotInput[];
         customer_id?: number;
         client_name?: string;
-        client_phone?: string;
+        client_phone_prefix?: string;
+        client_phone_number?: string;
         client_email?: string;
         notes?: string;
         is_paid?: boolean;
@@ -1405,7 +1385,8 @@ export async function createBooking(
         const customerResult = await resolveAdminCustomer(data.companyId, {
             customer_id: data.customer_id,
             client_name: data.client_name,
-            client_phone: data.client_phone,
+            client_phone_prefix: data.client_phone_prefix,
+            client_phone_number: data.client_phone_number,
             client_email: data.client_email,
         });
         if ('error' in customerResult) {
@@ -1501,7 +1482,8 @@ export async function createRecurringBookings(
         staff_id: number;
         customer_id?: number;
         client_name?: string;
-        client_phone?: string;
+        client_phone_prefix?: string;
+        client_phone_number?: string;
         client_email?: string;
         notes?: string;
         sessions: Array<{
@@ -1563,7 +1545,8 @@ export async function createRecurringBookings(
         const customerResult = await resolveAdminCustomer(data.companyId, {
             customer_id: data.customer_id,
             client_name: data.client_name,
-            client_phone: data.client_phone,
+            client_phone_prefix: data.client_phone_prefix,
+            client_phone_number: data.client_phone_number,
             client_email: data.client_email,
         });
         if ('error' in customerResult) {

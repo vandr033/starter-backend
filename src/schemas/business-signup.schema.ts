@@ -39,6 +39,8 @@ export const businessSignupSchema = z
         businessType: z.string().trim().min(1, 'Elegí un tipo de negocio.'),
         ownerName: z.string().trim().min(2, 'El nombre del dueño es obligatorio.'),
         email: z.string().trim().email('Ingresá un email válido.'),
+        phonePrefix: z.string().trim().min(1, 'Ingresá un prefijo válido.'),
+        countryCode: z.string().trim().min(2).max(3).optional(),
         phone: z.string().trim().min(6, 'Ingresá un teléfono o WhatsApp válido.'),
         password: z
             .string()

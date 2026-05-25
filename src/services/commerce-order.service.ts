@@ -1698,9 +1698,8 @@ export async function createPublicCommerceOrder(
                 order_number: orderNumber,
                 public_access_token: generateCommerceOrderPublicAccessToken(),
                 customer_name: input.customerName.trim(),
-                customer_phone: customer.customerPhonePrefix
-                    ? `${customer.customerPhonePrefix}${customer.customerPhone}`
-                    : customer.customerPhone,
+                customer_phone_prefix: customer.customerPhonePrefix,
+                customer_phone: customer.customerPhone,
                 customer_email: customer.customerEmail,
                 fulfillment_type: input.fulfillmentType,
                 pickup_point_id:

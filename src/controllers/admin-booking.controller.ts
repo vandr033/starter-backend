@@ -339,11 +339,12 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
     }
 
     // Extract customer info if provided
-    let client_name, client_email, client_phone;
+    let client_name, client_email, client_phone, client_phone_prefix;
     if (customer) {
         client_name = customer.full_name;
         client_email = customer.email;
-        client_phone = customer.phone;
+        client_phone = customer.phoneNumber;
+        client_phone_prefix = customer.phonePrefix;
     }
 
     const result = await AdminBookingService.createBooking({
@@ -360,7 +361,8 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
             : undefined,
         customer_id: customer_id ? Number(customer_id) : undefined,
         client_name,
-        client_phone,
+        client_phone_prefix,
+        client_phone_number: client_phone,
         client_email,
         notes,
         is_paid: Boolean(is_paid),
@@ -455,11 +457,12 @@ export async function createRecurringBookings(req: AuthenticatedRequest, res: Re
         });
     }
 
-    let client_name, client_email, client_phone;
+    let client_name, client_email, client_phone, client_phone_prefix;
     if (customer) {
         client_name = customer.full_name;
         client_email = customer.email;
-        client_phone = customer.phone;
+        client_phone = customer.phoneNumber;
+        client_phone_prefix = customer.phonePrefix;
     }
 
     const normalizedSessions = sessions.map((session: any) => ({
@@ -478,7 +481,8 @@ export async function createRecurringBookings(req: AuthenticatedRequest, res: Re
         staff_id: parsedStaffId,
         customer_id: customer_id ? Number(customer_id) : undefined,
         client_name,
-        client_phone,
+        client_phone_prefix,
+        client_phone_number: client_phone,
         client_email,
         notes,
         sessions: normalizedSessions,

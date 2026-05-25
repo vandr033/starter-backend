@@ -294,8 +294,8 @@ async function dispatchEmailOtp(email: string): Promise<boolean> {
     return !result.error && result.code < 400;
 }
 
-async function dispatchPhoneOtp(phoneNumber: string): Promise<boolean> {
-    const result = await sendLoginOtpPhone(phoneNumber);
+async function dispatchPhoneOtp(phoneNumber: string, phonePrefix: string): Promise<boolean> {
+    const result = await sendLoginOtpPhone({ phoneNumber, phonePrefix });
     return !result.error && result.code < 400;
 }
 
@@ -303,6 +303,7 @@ async function dispatchPreferredOtp(params: {
     preferredChannel?: OtpChannel;
     email?: string | null;
     phone?: string | null;
+    phonePrefix?: string | null;
 }): Promise<{
     sent: boolean;
     channel: OtpChannel | null;
@@ -310,11 +311,16 @@ async function dispatchPreferredOtp(params: {
     maskedDestination: string | null;
 }> {
     const email = params.email?.trim() || null;
-    const phone = params.phone?.trim() || null;
+    const canonicalPhone = params.phone
+        ? canonicalizePhoneParts({ phonePrefix: params.phonePrefix, phoneNumber: params.phone })
+        : { phoneNumber: null, phonePrefix: null, fullPhone: null };
+    const phone = canonicalPhone.phoneNumber;
+    const phonePrefix = canonicalPhone.phonePrefix;
+    const fullPhone = canonicalPhone.fullPhone ? `+${canonicalPhone.fullPhone}` : null;
 
     const availableChannels: OtpChannel[] = [
         ...(email ? ['email' as const] : []),
-        ...(phone ? ['phone' as const] : []),
+        ...(phone && phonePrefix ? ['phone' as const] : []),
     ];
 
     if (availableChannels.length === 0) {
@@ -345,14 +351,14 @@ async function dispatchPreferredOtp(params: {
             continue;
         }
 
-        if (channel === 'phone' && phone) {
-            const sent = await dispatchPhoneOtp(phone);
+        if (channel === 'phone' && phone && phonePrefix) {
+            const sent = await dispatchPhoneOtp(phone, phonePrefix);
             if (sent) {
                 return {
                     sent: true,
                     channel: 'phone',
                     availableChannels,
-                    maskedDestination: maskPhone(phone),
+                    maskedDestination: maskPhone(fullPhone),
                 };
             }
         }
@@ -363,7 +369,7 @@ async function dispatchPreferredOtp(params: {
         sent: false,
         channel: fallbackChannel,
         availableChannels,
-        maskedDestination: fallbackChannel === 'phone' ? maskPhone(phone) : maskEmail(email),
+        maskedDestination: fallbackChannel === 'phone' ? maskPhone(fullPhone) : maskEmail(email),
     };
 }
 
@@ -513,15 +519,15 @@ async function resolveAccountForFreeRegistration(input: {
             });
 
             const preferredChannel = input.otpChannelPreference;
-            const otpTargetPhone = buildE164Phone(input.phonePrefix, input.phoneNumber);
             const otpDispatch = await dispatchPreferredOtp({
                 preferredChannel,
                 email: input.email,
-                phone: otpTargetPhone,
+                phone: input.phoneNumber,
+                phonePrefix: input.phonePrefix,
             });
             if (!otpDispatch.sent) {
                 logger.warn(
-                    { email: input.email, phone: otpTargetPhone, preferredChannel },
+                    { email: input.email, phone: buildE164Phone(input.phonePrefix, input.phoneNumber), preferredChannel },
                     'Free event: account created but OTP dispatch failed',
                 );
             }
@@ -587,13 +593,18 @@ async function resolveAccountForFreeRegistration(input: {
     // CASE 3: account found by phone only.
     if (accountMatchCase === 'PHONE_ONLY' && phoneMatch) {
         const fallbackPhone = buildE164Phone(input.phonePrefix, input.phoneNumber);
-        const otpTarget = phoneMatch.phoneNumber ?? fallbackPhone;
+        const otpTargetPhone = phoneMatch.phoneNumber ?? input.phoneNumber;
+        const otpTargetPrefix = phoneMatch.phone_prefix ?? input.phonePrefix;
         const otpDispatch = await dispatchPreferredOtp({
             preferredChannel: 'phone',
-            phone: otpTarget,
+            phone: otpTargetPhone,
+            phonePrefix: otpTargetPrefix,
         });
         if (!otpDispatch.sent) {
-            logger.warn({ userId: phoneMatch.id, phoneNumber: otpTarget }, 'Free event: failed to dispatch OTP for existing phone account');
+            logger.warn(
+                { userId: phoneMatch.id, phoneNumber: fallbackPhone ?? otpTargetPhone },
+                'Free event: failed to dispatch OTP for existing phone account',
+            );
         }
 
         const hasMissingEmail = !phoneMatch.email || isTemporaryEmailAddress(phoneMatch.email) || phoneMatch.email.endsWith(TEMP_EMAIL_DOMAIN);
@@ -607,7 +618,7 @@ async function resolveAccountForFreeRegistration(input: {
                 mode: 'SIGN_IN_OTP',
                 primaryChannel: otpDispatch.channel ?? 'phone',
                 availableChannels: otpDispatch.availableChannels.length > 0 ? otpDispatch.availableChannels : ['phone'],
-                maskedDestination: otpDispatch.maskedDestination ?? maskPhone(otpTarget),
+                maskedDestination: otpDispatch.maskedDestination ?? maskPhone(fallbackPhone),
             },
             nextActions: {
                 canCompleteMissingEmailLater: hasMissingEmail,
@@ -620,12 +631,13 @@ async function resolveAccountForFreeRegistration(input: {
     // CASE 4: both channels belong to same user.
     const unifiedUser = (emailMatch ?? phoneMatch) as AccountCandidateUser;
     const hasPhone = Boolean(unifiedUser.phoneNumber);
-    const fallbackPhone = unifiedUser.phoneNumber ?? buildE164Phone(input.phonePrefix, input.phoneNumber);
+    const fallbackPhone = buildE164Phone(unifiedUser.phone_prefix ?? input.phonePrefix, unifiedUser.phoneNumber ?? input.phoneNumber);
 
     const otpDispatch = await dispatchPreferredOtp({
         preferredChannel: input.otpChannelPreference,
         email: unifiedUser.email,
-        phone: fallbackPhone,
+        phone: unifiedUser.phoneNumber ?? input.phoneNumber,
+        phonePrefix: unifiedUser.phone_prefix ?? input.phonePrefix,
     });
 
     if (!otpDispatch.sent) {

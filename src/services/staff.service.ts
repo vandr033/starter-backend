@@ -25,8 +25,8 @@ export interface UpdateMyStaffProfileInput {
     bio?: string;
     first_name?: string;
     last_name?: string;
-    phone?: string;
-    phone_prefix?: string;
+    phoneNumber?: string;
+    phonePrefix?: string;
 }
 
 function serializeStaff(staff: any) {
@@ -213,7 +213,7 @@ export async function updateMyProfile(
             }
 
             const shouldUpdateUserNames = input.first_name !== undefined || input.last_name !== undefined;
-            const shouldUpdatePhone = input.phone !== undefined || input.phone_prefix !== undefined;
+            const shouldUpdatePhone = input.phoneNumber !== undefined || input.phonePrefix !== undefined;
             if (shouldUpdateUserNames || shouldUpdatePhone) {
                 const nextFirstName =
                     input.first_name !== undefined ? input.first_name : (existing.user.first_name || '');
@@ -228,14 +228,14 @@ export async function updateMyProfile(
                     existing.display_name;
 
                 let nextPhone = existing.user.phoneNumber || null;
-                if (input.phone !== undefined) {
-                    const cleanPhone = input.phone.replace(/\D/g, '');
+                if (input.phoneNumber !== undefined) {
+                    const cleanPhone = input.phoneNumber.replace(/\D/g, '');
                     nextPhone = cleanPhone.length > 0 ? cleanPhone : null;
                 }
 
                 let nextPhonePrefix = existing.user.phone_prefix || null;
-                if (input.phone_prefix !== undefined) {
-                    const cleanPrefix = input.phone_prefix.replace(/\D/g, '');
+                if (input.phonePrefix !== undefined) {
+                    const cleanPrefix = input.phonePrefix.replace(/\D/g, '');
                     nextPhonePrefix = cleanPrefix.length > 0 ? cleanPrefix : null;
                 }
                 if (nextPhone && !nextPhonePrefix) {
@@ -299,8 +299,8 @@ export interface CreateStaffInput {
     email: string;
     display_name: string;
     role?: CompanyUserRole;
-    phone_prefix?: string;
-    phone?: string;
+    phonePrefix?: string;
+    phoneNumber?: string;
     bio?: string;
     is_bookable?: boolean;
     service_ids?: number[];
@@ -314,8 +314,8 @@ export async function createStaff(
 ): Promise<StaffResult> {
     try {
         const normalizedEmail = (input.email || '').trim().toLowerCase();
-        const cleanPhone = (input.phone || '').replace(/\D/g, '');
-        const cleanPhonePrefix = (input.phone_prefix || '591').replace(/\D/g, '') || '591';
+        const cleanPhone = (input.phoneNumber || '').replace(/\D/g, '');
+        const cleanPhonePrefix = (input.phonePrefix || '591').replace(/\D/g, '') || '591';
         const seatUsage = await getStaffSeatUsageForCompany(companyId);
         const entitlements = await getCompanyEntitlements(companyId);
         const hasBookingModule =
@@ -654,8 +654,8 @@ export async function resendStaffInvite(
  */
 export interface UpdateStaffInput {
     email?: string;
-    phone?: string;
-    phone_prefix?: string;
+    phoneNumber?: string;
+    phonePrefix?: string;
     display_name?: string;
     bio?: string;
     image_url?: string;
@@ -681,9 +681,9 @@ export async function updateStaff(
         }
 
         const normalizedEmail = input.email !== undefined ? input.email.trim().toLowerCase() : undefined;
-        const cleanPhone = input.phone !== undefined ? input.phone.replace(/\D/g, '') : undefined;
-        const cleanPhonePrefix = input.phone_prefix !== undefined
-            ? input.phone_prefix.replace(/\D/g, '')
+        const cleanPhone = input.phoneNumber !== undefined ? input.phoneNumber.replace(/\D/g, '') : undefined;
+        const cleanPhonePrefix = input.phonePrefix !== undefined
+            ? input.phonePrefix.replace(/\D/g, '')
             : undefined;
 
         await prisma.$transaction(async (tx) => {

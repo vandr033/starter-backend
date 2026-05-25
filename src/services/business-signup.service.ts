@@ -140,6 +140,8 @@ async function createOwnerUser(params: {
     password: string;
     ownerName: string;
     phone: string;
+    phonePrefix: string;
+    countryCode?: string;
     headers: Record<string, unknown>;
 }) {
     const existingUser = await prisma.user.findUnique({
@@ -152,8 +154,8 @@ async function createOwnerUser(params: {
     }
 
     const normalizedPhone = canonicalizePhoneParts({
+        phonePrefix: params.phonePrefix,
         phoneNumber: params.phone,
-        defaultPrefix: '591',
     });
 
     if (!normalizedPhone.phoneNumber) {
@@ -216,6 +218,7 @@ async function createOwnerUser(params: {
             first_name: firstName || null,
             last_name: lastName,
             name: displayName,
+            ...(params.countryCode?.trim() ? { country_code: params.countryCode.trim().toUpperCase() } : {}),
             phone_prefix: normalizedPhone.phonePrefix,
             phoneNumber: normalizedPhone.phoneNumber,
             emailVerified: true,
@@ -312,6 +315,8 @@ export async function signUpBusiness(
         password: input.password,
         ownerName: input.ownerName,
         phone: input.phone,
+        phonePrefix: input.phonePrefix,
+        countryCode: input.countryCode,
         headers,
     });
 

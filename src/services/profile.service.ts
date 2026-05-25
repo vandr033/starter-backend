@@ -326,10 +326,23 @@ export async function verifyEmailChange(
 
 export async function sendPhoneChangeOtp(
     userId: string,
-    newPhone: string
+    phone: {
+        phoneNumber: string;
+        phonePrefix: string;
+        countryCode?: string;
+    }
 ): Promise<MensajeApi> {
     try {
-        const identifier = `${userId}:${newPhone}`;
+        const canonicalPhone = canonicalizePhoneParts({
+            phonePrefix: phone.phonePrefix,
+            phoneNumber: phone.phoneNumber,
+        });
+        if (!canonicalPhone.phoneNumber || !canonicalPhone.phonePrefix) {
+            return { code: 400, message: "Phone number and prefix are required", error: true };
+        }
+
+        const fullPhone = `+${canonicalPhone.phonePrefix}${canonicalPhone.phoneNumber}`;
+        const identifier = `${userId}:${fullPhone}`;
 
         const resendGuard = await ensureProfileOtpResendAllowed({
             channel: VerificationChannel.WHATSAPP,
@@ -341,7 +354,8 @@ export async function sendPhoneChangeOtp(
 
         // Check if phone is already taken
         const existing = await UserRepo.findActiveUserByPhone({
-            phoneNumber: newPhone,
+            phoneNumber: canonicalPhone.phoneNumber,
+            phonePrefix: canonicalPhone.phonePrefix,
             excludeUserId: userId,
         });
         if (existing && existing.id !== userId) {
@@ -360,7 +374,7 @@ export async function sendPhoneChangeOtp(
             expires_at,
         });
 
-        const result = await sendWhatsappCode(newPhone, code);
+        const result = await sendWhatsappCode(fullPhone, code);
         if (result === -1) {
             throw new Error("Failed to send WhatsApp verification");
         }
@@ -382,13 +396,24 @@ export async function sendPhoneChangeOtp(
 
 export async function verifyPhoneChange(
     userId: string,
-    newPhone: string,
-    code: string,
-    phone_prefix?: string,
-    country_code?: string
+    phone: {
+        phoneNumber: string;
+        phonePrefix: string;
+        countryCode?: string;
+    },
+    code: string
 ): Promise<MensajeApi> {
     try {
-        const identifier = `${userId}:${newPhone}`;
+        const canonicalPhone = canonicalizePhoneParts({
+            phonePrefix: phone.phonePrefix,
+            phoneNumber: phone.phoneNumber,
+        });
+        if (!canonicalPhone.phoneNumber || !canonicalPhone.phonePrefix) {
+            return { code: 400, message: "Phone number and prefix are required", error: true };
+        }
+
+        const fullPhone = `+${canonicalPhone.phonePrefix}${canonicalPhone.phoneNumber}`;
+        const identifier = `${userId}:${fullPhone}`;
 
         const verificationCode = await VerificationRepo.getVerificationCode(
             VerificationChannel.WHATSAPP,
@@ -415,7 +440,12 @@ export async function verifyPhoneChange(
             return { code: 400, message: "Invalid code", error: true };
         }
 
-        const updated = await UserRepo.updateUserPhone(userId, newPhone, phone_prefix, country_code);
+        const updated = await UserRepo.updateUserPhone(
+            userId,
+            canonicalPhone.phoneNumber,
+            canonicalPhone.phonePrefix,
+            phone.countryCode,
+        );
 
         return {
             code: 200,

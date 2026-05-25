@@ -676,12 +676,30 @@ export async function verifyLoginOtpEmail(
 // which is already configured in auth.ts
 // ────────────────────────────────────────────
 
-export async function sendLoginOtpPhone(phoneNumber: string): Promise<MensajeApi> {
+export async function sendLoginOtpPhone(params: {
+  phoneNumber: string;
+  phonePrefix: string;
+  countryCode?: string;
+}): Promise<MensajeApi> {
   try {
+    const canonicalPhone = canonicalizePhoneParts({
+      phonePrefix: params.phonePrefix,
+      phoneNumber: params.phoneNumber,
+    });
+
+    if (!canonicalPhone.phoneNumber || !canonicalPhone.phonePrefix) {
+      return {
+        code: 400,
+        message: "Phone number and prefix are required",
+        error: true,
+      };
+    }
+
+    const fullPhone = `+${canonicalPhone.phonePrefix}${canonicalPhone.phoneNumber}`;
     const auth = await getAuth();
     // Better Auth's phone number plugin handles OTP send + storage
     await auth.api.sendPhoneNumberOTP({
-      body: { phoneNumber },
+      body: { phoneNumber: fullPhone },
     });
 
     return {
@@ -700,19 +718,40 @@ export async function sendLoginOtpPhone(phoneNumber: string): Promise<MensajeApi
 }
 
 export async function verifyLoginOtpPhone(
-  phoneNumber: string,
+  phone: {
+    phoneNumber: string;
+    phonePrefix: string;
+    countryCode?: string;
+  },
   code: string,
   reqHeaders: any
 ): Promise<MensajeApi> {
   try {
+    const canonicalPhone = canonicalizePhoneParts({
+      phonePrefix: phone.phonePrefix,
+      phoneNumber: phone.phoneNumber,
+    });
+
+    if (!canonicalPhone.phoneNumber || !canonicalPhone.phonePrefix) {
+      return {
+        code: 400,
+        message: "Phone number and prefix are required",
+        error: true,
+      };
+    }
+
+    const fullPhone = `+${canonicalPhone.phonePrefix}${canonicalPhone.phoneNumber}`;
     const existingUser =
-      await UserRepo.findActiveUserByPhone({ phoneNumber }) ??
-      await UserRepo.getUserByEmail(buildTempPhoneEmail(phoneNumber));
+      await UserRepo.findActiveUserByPhone({
+        phoneNumber: canonicalPhone.phoneNumber,
+        phonePrefix: canonicalPhone.phonePrefix,
+      }) ??
+      await UserRepo.getUserByEmail(buildTempPhoneEmail(fullPhone));
 
     if (existingUser && !existingUser.deleted_at) {
       const verification = await prisma.verification.findFirst({
         where: {
-          identifier: phoneNumber,
+          identifier: fullPhone,
         },
         orderBy: {
           createdAt: "desc",
@@ -790,7 +829,7 @@ export async function verifyLoginOtpPhone(
 
     const auth = await getAuth();
     const verificationResponse = await auth.api.verifyPhoneNumber({
-      body: { phoneNumber, code },
+      body: { phoneNumber: fullPhone, code },
       headers: reqHeaders,
       asResponse: true,
     });

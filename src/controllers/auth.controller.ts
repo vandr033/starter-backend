@@ -104,20 +104,20 @@ export async function verifyLoginOtpEmail(req: Request, res: Response) {
 // ── Phone login (OTP) — clients only ──
 
 export async function sendLoginOtpPhone(req: Request, res: Response) {
-  const { phoneNumber } = req.body;
-  if (!phoneNumber) {
-    return res.status(400).json({ code: 400, message: "Phone number is required", error: true });
+  const { phoneNumber, phonePrefix, countryCode } = req.body;
+  if (!phoneNumber || !phonePrefix) {
+    return res.status(400).json({ code: 400, message: "Phone number and prefix are required", error: true });
   }
-  const result = await AuthService.sendLoginOtpPhone(phoneNumber);
+  const result = await AuthService.sendLoginOtpPhone({ phoneNumber, phonePrefix, countryCode });
   return res.status(result.code).json(result);
 }
 
 export async function verifyLoginOtpPhone(req: Request, res: Response) {
-  const { phoneNumber, code } = req.body;
-  if (!phoneNumber || !code) {
-    return res.status(400).json({ code: 400, message: "Phone number and code are required", error: true });
+  const { phoneNumber, phonePrefix, countryCode, code } = req.body;
+  if (!phoneNumber || !phonePrefix || !code) {
+    return res.status(400).json({ code: 400, message: "Phone number, prefix and code are required", error: true });
   }
-  const result = await AuthService.verifyLoginOtpPhone(phoneNumber, code, req.headers);
+  const result = await AuthService.verifyLoginOtpPhone({ phoneNumber, phonePrefix, countryCode }, code, req.headers);
   if (Array.isArray((result as any)?.data?.cookies) && (result as any).data.cookies.length > 0) {
     res.setHeader("set-cookie", (result as any).data.cookies);
     delete (result as any).data.cookies;
@@ -132,19 +132,40 @@ export async function completePhoneProfile(req: Request, res: Response) {
   const userId = authReq.authUser?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  const { first_name, last_name, phone_prefix, country_code } = req.body;
+  const {
+    first_name,
+    last_name,
+    phoneNumber,
+    phonePrefix,
+    phone_prefix,
+    countryCode,
+    country_code,
+  } = req.body;
   if (!first_name) {
     return res.status(400).json({ code: 400, message: "First name is required", error: true });
   }
 
   try {
     await UserRepo.updateUserNames(userId, first_name, last_name);
-    if (phone_prefix) {
+    const resolvedPhonePrefix =
+      typeof phonePrefix === "string"
+        ? phonePrefix
+        : typeof phone_prefix === "string"
+          ? phone_prefix
+          : "";
+    const resolvedCountryCode =
+      typeof countryCode === "string"
+        ? countryCode
+        : typeof country_code === "string"
+          ? country_code
+          : undefined;
+
+    if (resolvedPhonePrefix) {
       await UserRepo.updateUserPhone(
         userId,
-        authReq.authUser.phoneNumber || '',
-        phone_prefix,
-        country_code,
+        typeof phoneNumber === 'string' ? phoneNumber : (authReq.authUser.phoneNumber || ''),
+        resolvedPhonePrefix,
+        resolvedCountryCode,
       );
     }
     return res.status(200).json({

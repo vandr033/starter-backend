@@ -2,6 +2,7 @@ import { prisma } from '../prisma/client';
 import { sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 import crypto from 'crypto';
+import { buildFullPhone } from '../utils/notificationBranding';
 
 function buildOrderPublicUrl(companySlug: string, orderNumber: string, accessToken: string): string {
     const base =
@@ -63,8 +64,9 @@ export async function notifyCommerceOrderCustomer(params: {
         ).catch(() => undefined);
     }
 
-    if (order.customer_phone) {
-        await sendWhatsappText(order.customer_phone, text, {
+    const fullCustomerPhone = buildFullPhone(order.customer_phone_prefix, order.customer_phone);
+    if (fullCustomerPhone) {
+        await sendWhatsappText(fullCustomerPhone, text, {
             companyId: params.companyId,
             branding: { companyName: order.company.name },
         }).catch(() => undefined);
