@@ -202,6 +202,14 @@ export async function createClassEnrollmentAdmin(req: AuthenticatedRequest, res:
             name: typeof req.body.new_member.name === 'string' ? req.body.new_member.name.trim() : '',
             email: typeof req.body.new_member.email === 'string' ? req.body.new_member.email.trim() : '',
             phone: typeof req.body.new_member.phone === 'string' ? req.body.new_member.phone.trim() : '',
+            phone_prefix:
+                typeof req.body.new_member.phone_prefix === 'string'
+                    ? req.body.new_member.phone_prefix.trim()
+                    : '',
+            country_code:
+                typeof req.body.new_member.country_code === 'string'
+                    ? req.body.new_member.country_code.trim().toUpperCase()
+                    : '',
         }
         : null;
 

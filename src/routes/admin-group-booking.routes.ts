@@ -217,6 +217,13 @@ router.get(
     requirePlanFeature('GROUP_CLASSES'),
     AdminGroupBookingController.listEnrollmentInstallments,
 );
+router.put(
+    '/classes/enrollments/:enrollmentId/installments',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    AdminGroupBookingController.updateEnrollmentInstallments,
+);
 router.post(
     '/classes/enrollments/:enrollmentId/installments/:installmentId/mark-paid',
     requireAuth,

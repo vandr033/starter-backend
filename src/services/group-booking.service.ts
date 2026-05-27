@@ -1875,6 +1875,8 @@ export interface AdminCreateClassEnrollmentInput {
         name: string;
         email: string;
         phone: string;
+        phone_prefix?: string;
+        country_code?: string;
     };
     payment_method: 'NONE' | 'CASH' | 'QR';
     mark_as_paid: boolean;
@@ -1915,6 +1917,8 @@ export async function adminCreateClassEnrollment(
             fullName: input.new_member.name,
             email: input.new_member.email,
             phone: input.new_member.phone,
+            phonePrefix: input.new_member.phone_prefix,
+            countryCode: input.new_member.country_code,
         });
 
         if ('error' in provisioned && provisioned.error) {

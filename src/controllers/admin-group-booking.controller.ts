@@ -460,6 +460,25 @@ export async function markInstallmentPaid(req: AuthenticatedRequest, res: Respon
     return res.status(result.code).json(result);
 }
 
+export async function updateEnrollmentInstallments(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const enrollmentId = parseId(req.params.enrollmentId);
+    if (!enrollmentId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid enrollmentId' });
+    }
+
+    const adminUserId = req.authUser?.id;
+    if (!adminUserId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const installments = Array.isArray(req.body?.installments) ? req.body.installments : [];
+    const result = await InstallmentService.updateInstallments(companyId, enrollmentId, adminUserId, installments);
+    return res.status(result.code).json(result);
+}
+
 export async function confirmInstallmentQrPayment(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;
