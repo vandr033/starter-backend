@@ -5,11 +5,13 @@ import {
     getCustomersWithBookingStats,
     type CustomerWithStats,
 } from '../repositories/customer.repo';
+import * as UserRepo from '../repositories/user.repo';
 import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 import { logger } from '../config/logger';
 import axios from 'axios';
 import * as GroupPaymentsService from './group-payments.service';
+import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 
 // Runtime import to avoid compile-time type dependency in environments without installed typings.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -76,6 +78,24 @@ function normalizePhone(phone?: string | null): string | null {
 function normalizePrefix(prefix?: string | null): string {
     const value = (prefix || '591').replace(/\D/g, '');
     return value || '591';
+}
+
+function splitFullName(fullName: string): { firstName: string | null; lastName: string | null; displayName: string } {
+    const cleaned = fullName.trim().replace(/\s+/g, ' ');
+    if (!cleaned) {
+        return {
+            firstName: null,
+            lastName: null,
+            displayName: '',
+        };
+    }
+
+    const parts = cleaned.split(' ');
+    return {
+        firstName: parts[0] || null,
+        lastName: parts.length > 1 ? parts.slice(1).join(' ') : null,
+        displayName: cleaned,
+    };
 }
 
 function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
@@ -540,6 +560,232 @@ export async function getCustomerGroupPayments(
         params.page,
         params.limit,
     );
+}
+
+export async function getCustomerByKey(companyId: number, customerKey: string) {
+    const normalizedKey = (customerKey || '').trim();
+    if (!normalizedKey) {
+        return {
+            code: 400,
+            error: true,
+            message: 'customer_key is required',
+        };
+    }
+
+    const customers = await getCustomersWithBookingStats(companyId);
+    const customer = customers.find((row) => row.customerKey === normalizedKey) || null;
+
+    if (!customer) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Customer not found',
+        };
+    }
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Customer retrieved successfully',
+        data: customer,
+    };
+}
+
+export async function updateCustomerByKey(
+    companyId: number,
+    customerKey: string,
+    input: {
+        name?: string;
+        email?: string | null;
+        phone?: string | null;
+        phone_prefix?: string | null;
+        country_code?: string | null;
+        notes?: string | null;
+    },
+) {
+    const normalizedKey = (customerKey || '').trim();
+    if (!normalizedKey) {
+        return {
+            code: 400,
+            error: true,
+            message: 'customer_key is required',
+        };
+    }
+
+    const currentResult = await getCustomerByKey(companyId, normalizedKey);
+    if (currentResult.error || !currentResult.data) {
+        return currentResult;
+    }
+
+    const customer = currentResult.data as CustomerWithStats;
+    if (!customer.userId) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Only customers linked to an account can be edited',
+        };
+    }
+
+    const existingProfile = await prisma.customerProfile.findFirst({
+        where: {
+            company_id: companyId,
+            user_id: customer.userId,
+            deleted_at: null,
+        },
+        include: {
+            user: {
+                select: {
+                    id: true,
+                    email: true,
+                    name: true,
+                    first_name: true,
+                    last_name: true,
+                    country_code: true,
+                    phoneNumber: true,
+                    phone_prefix: true,
+                },
+            },
+        },
+    });
+
+    if (!existingProfile) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Customer profile not found',
+        };
+    }
+
+    const trimmedName = typeof input.name === 'string' ? input.name.trim() : '';
+    if (!trimmedName) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Customer name is required',
+        };
+    }
+
+    const normalizedEmail = normalizeEmail(input.email);
+    const canonicalPhone = canonicalizePhoneParts({
+        phonePrefix: input.phone_prefix,
+        phoneNumber: input.phone,
+    });
+    const hasPhone = Boolean(canonicalPhone.phoneNumber);
+    if (!normalizedEmail && !hasPhone) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Provide at least an email or phone number',
+        };
+    }
+
+    if (normalizedEmail && !EMAIL_REGEX.test(normalizedEmail)) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Provide a valid email address',
+        };
+    }
+
+    if (normalizedEmail) {
+        const existingEmailOwner = await UserRepo.getUserByEmail(normalizedEmail);
+        if (existingEmailOwner && existingEmailOwner.id !== existingProfile.user.id) {
+            return {
+                code: 409,
+                error: true,
+                message: 'Email is already in use',
+            };
+        }
+    }
+
+    if (hasPhone) {
+        const existingPhoneOwner = await UserRepo.findActiveUserByPhone({
+            phoneNumber: canonicalPhone.phoneNumber!,
+            phonePrefix: canonicalPhone.phonePrefix || undefined,
+            excludeUserId: existingProfile.user.id,
+        });
+        if (existingPhoneOwner && existingPhoneOwner.id !== existingProfile.user.id) {
+            return {
+                code: 409,
+                error: true,
+                message: 'Phone number is already in use',
+            };
+        }
+    }
+
+    const currentEmail = normalizeEmail(existingProfile.user.email);
+    const currentEmailIsTemporary =
+        Boolean(currentEmail?.endsWith('@tmppriconpri.com')) ||
+        Boolean(currentEmail?.endsWith('@temp.priconpri.com'));
+    const finalEmail =
+        normalizedEmail ||
+        (currentEmailIsTemporary
+            ? existingProfile.user.email
+            : await ensureUniqueTempEmail(canonicalPhone.phoneNumber || existingProfile.user.id.slice(-6)));
+    const finalCountryCode = hasPhone
+        ? ((input.country_code || existingProfile.user.country_code || '').trim().toUpperCase() || null)
+        : null;
+    const nameParts = splitFullName(trimmedName);
+    const emailChanged = finalEmail !== existingProfile.user.email;
+    const phoneChanged =
+        (canonicalPhone.phoneNumber || null) !== (existingProfile.user.phoneNumber || null) ||
+        (canonicalPhone.phonePrefix || null) !== (existingProfile.user.phone_prefix || null);
+
+    try {
+        await prisma.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: existingProfile.user.id },
+                data: {
+                    name: nameParts.displayName,
+                    first_name: nameParts.firstName,
+                    last_name: nameParts.lastName,
+                    email: finalEmail,
+                    emailVerified: emailChanged ? false : undefined,
+                    phoneNumber: canonicalPhone.phoneNumber || null,
+                    phone_prefix: canonicalPhone.phoneNumber ? (canonicalPhone.phonePrefix || null) : null,
+                    country_code: finalCountryCode,
+                    phoneNumberVerified: phoneChanged ? false : undefined,
+                },
+            });
+
+            await tx.customerProfile.update({
+                where: { id: existingProfile.id },
+                data: {
+                    notes: input.notes?.trim() || null,
+                },
+            });
+
+            const credentialAccount = await tx.account.findFirst({
+                where: {
+                    userId: existingProfile.user.id,
+                    providerId: { in: ['credential', 'credentials'] },
+                },
+                orderBy: { createdAt: 'asc' },
+                select: { id: true, accountId: true },
+            });
+
+            if (credentialAccount && credentialAccount.accountId !== finalEmail) {
+                await tx.account.update({
+                    where: { id: credentialAccount.id },
+                    data: {
+                        providerId: 'credential',
+                        accountId: finalEmail,
+                    },
+                });
+            }
+        });
+    } catch (error: any) {
+        if (error?.code === 'P2002') {
+            return {
+                code: 409,
+                error: true,
+                message: 'Email or phone number is already in use',
+            };
+        }
+        throw error;
+    }
+
+    return getCustomerByKey(companyId, normalizedKey);
 }
 
 export async function exportCustomers(

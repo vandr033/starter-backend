@@ -217,8 +217,8 @@ export async function createClassEnrollmentAdmin(req: AuthenticatedRequest, res:
         return res.status(400).json({ code: 400, error: true, message: 'customer_id or new_member is required' });
     }
 
-    if (newMember && (!newMember.name || !newMember.email || !newMember.phone)) {
-        return res.status(400).json({ code: 400, error: true, message: 'new_member requires name, email, and phone' });
+    if (newMember && (!newMember.name || (!newMember.email && !newMember.phone))) {
+        return res.status(400).json({ code: 400, error: true, message: 'new_member requires a name and at least an email or phone' });
     }
 
     const paymentMethod = req.body?.payment_method;

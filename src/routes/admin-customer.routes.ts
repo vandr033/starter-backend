@@ -71,5 +71,19 @@ router.post(
     requireCompanyCapability('MENSAJERIA_PRO'),
     AdminCustomerController.sendMassMessage,
 );
+router.get(
+    '/:customerKey',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('CRM_BASE'),
+    AdminCustomerController.getCustomerByKey,
+);
+router.put(
+    '/:customerKey',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('CRM_BASE'),
+    AdminCustomerController.updateCustomerByKey,
+);
 
 export default router;

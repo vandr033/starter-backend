@@ -45,6 +45,22 @@ function isValidEmail(email: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+async function ensureUniqueTempEmail(basePhone: string): Promise<string> {
+    let attempt = 0;
+    while (attempt < 1000) {
+        const suffix = attempt === 0 ? '' : `.${attempt}`;
+        const email = `${basePhone}${suffix}@tmppriconpri.com`;
+        const existing = await prisma.user.findFirst({
+            where: { email, deleted_at: null },
+            select: { id: true },
+        });
+        if (!existing) return email;
+        attempt += 1;
+    }
+
+    return `${basePhone}.${Date.now()}@tmppriconpri.com`;
+}
+
 function splitFullName(fullName: string): { firstName: string | null; lastName: string | null; displayName: string } {
     const cleaned = fullName.trim().replace(/\s+/g, ' ');
     if (!cleaned) {
@@ -145,7 +161,7 @@ async function ensureCustomerProfile(companyId: number, userId: string): Promise
 export async function ensureCustomerProfileWithAccount(params: {
     companyId: number;
     fullName: string;
-    email: string;
+    email?: string | null;
     phone?: string | null;
     phonePrefix?: string | null;
     countryCode?: string | null;
@@ -163,11 +179,6 @@ export async function ensureCustomerProfileWithAccount(params: {
         return { error: true, code: 404, message: 'Company not found' };
     }
 
-    const normalizedEmail = normalizeEmail(params.email);
-    if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
-        return { error: true, code: 400, message: 'A valid email is required to create a member account' };
-    }
-
     const nameParts = splitFullName(params.fullName);
     if (!nameParts.displayName) {
         return { error: true, code: 400, message: 'Member name is required' };
@@ -178,23 +189,39 @@ export async function ensureCustomerProfileWithAccount(params: {
         phoneNumber: params.phone,
         defaultPrefix: company.phone_prefix || '591',
     });
+    const normalizedEmail = normalizeEmail(params.email);
+    const hasEmail = Boolean(normalizedEmail);
+    const hasPhone = Boolean(canonicalPhone.phoneNumber);
+
+    if (!hasEmail && !hasPhone) {
+        return {
+            error: true,
+            code: 400,
+            message: 'Provide at least an email or phone number to create a member account',
+        };
+    }
+    if (normalizedEmail && !isValidEmail(normalizedEmail)) {
+        return { error: true, code: 400, message: 'Provide a valid email address' };
+    }
 
     const phoneCandidates = buildPhoneCandidates(canonicalPhone.phonePrefix, canonicalPhone.phoneNumber);
 
     const [emailUser, phoneUser] = await Promise.all([
-        prisma.user.findUnique({
-            where: { email: normalizedEmail },
-            select: {
-                id: true,
-                email: true,
-                name: true,
-                first_name: true,
-                last_name: true,
-                country_code: true,
-                phone_prefix: true,
-                phoneNumber: true,
-            },
-        }),
+        normalizedEmail
+            ? prisma.user.findUnique({
+                where: { email: normalizedEmail },
+                select: {
+                    id: true,
+                    email: true,
+                    name: true,
+                    first_name: true,
+                    last_name: true,
+                    country_code: true,
+                    phone_prefix: true,
+                    phoneNumber: true,
+                },
+            })
+            : Promise.resolve(null),
         phoneCandidates.length
             ? prisma.user.findFirst({
                 where: {
@@ -231,10 +258,12 @@ export async function ensureCustomerProfileWithAccount(params: {
         const temporaryPassword = crypto.randomBytes(9).toString('base64url');
         const passwordHash = await hash(temporaryPassword);
         const normalizedCountryCode = params.countryCode?.trim().toUpperCase() || null;
+        const resolvedEmail =
+            normalizedEmail || await ensureUniqueTempEmail(canonicalPhone.phoneNumber || 'member');
 
         user = await prisma.user.create({
             data: {
-                email: normalizedEmail,
+                email: resolvedEmail,
                 name: nameParts.displayName,
                 first_name: nameParts.firstName ?? undefined,
                 last_name: nameParts.lastName ?? undefined,
@@ -259,17 +288,19 @@ export async function ensureCustomerProfileWithAccount(params: {
             data: {
                 userId: user.id,
                 providerId: 'credential',
-                accountId: normalizedEmail,
+                accountId: resolvedEmail,
                 password: passwordHash,
             },
         });
 
-        inviteContext = {
-            mode: 'TEMP_PASSWORD',
-            email: normalizedEmail,
-            companyName: company.name,
-            temporaryPassword,
-        };
+        if (normalizedEmail && !isTemporaryEmailAddress(resolvedEmail)) {
+            inviteContext = {
+                mode: 'TEMP_PASSWORD',
+                email: normalizedEmail,
+                companyName: company.name,
+                temporaryPassword,
+            };
+        }
     } else {
         const updateData: Record<string, string | null> = {};
         const normalizedCountryCode = params.countryCode?.trim().toUpperCase() || null;
@@ -290,7 +321,7 @@ export async function ensureCustomerProfileWithAccount(params: {
         if (!user.country_code && normalizedCountryCode) {
             updateData.country_code = normalizedCountryCode;
         }
-        if (isTemporaryEmailAddress(user.email) && user.email !== normalizedEmail) {
+        if (normalizedEmail && isTemporaryEmailAddress(user.email) && user.email !== normalizedEmail) {
             updateData.email = normalizedEmail;
         }
 
@@ -346,7 +377,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                 data: {
                     userId: user.id,
                     providerId: 'credential',
-                    accountId: currentEmail || normalizedEmail,
+                    accountId: currentEmail || normalizedEmail || user.email,
                     password: passwordHash,
                 },
             });
@@ -358,12 +389,14 @@ export async function ensureCustomerProfileWithAccount(params: {
                 },
             });
 
-            inviteContext = {
-                mode: 'TEMP_PASSWORD',
-                email: currentEmail || normalizedEmail,
-                companyName: company.name,
-                temporaryPassword,
-            };
+            if (currentEmail && !isTemporaryEmailAddress(currentEmail)) {
+                inviteContext = {
+                    mode: 'TEMP_PASSWORD',
+                    email: currentEmail,
+                    companyName: company.name,
+                    temporaryPassword,
+                };
+            }
         } else if (currentEmail && !isTemporaryEmailAddress(currentEmail)) {
             inviteContext = {
                 mode: 'EXISTING_ACCOUNT',

@@ -21,6 +21,7 @@ import { buildWaitlistSpotOpenedTemplate, notifyGroupBookingCreated } from '../u
 import { isTemporaryEmailAddress, sendCustomerMassMessageEmail, sendGenericEmail } from '../utils/sendEmail';
 import { sendWhatsappText } from '../utils/whatsappSender';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
+import { buildCustomerKey } from '../repositories/customer.repo';
 
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
@@ -1873,8 +1874,8 @@ export interface AdminCreateClassEnrollmentInput {
     customer_id?: number;
     new_member?: {
         name: string;
-        email: string;
-        phone: string;
+        email?: string;
+        phone?: string;
         phone_prefix?: string;
         country_code?: string;
     };
@@ -2145,11 +2146,25 @@ export async function listClassEnrollments(companyId: number, classId: number): 
     const enrollments = await prisma.groupClassEnrollment.findMany({
         where: { company_id: companyId, group_class_id: classId },
         include: {
-            user: { select: { id: true, name: true, email: true, phoneNumber: true } },
+            user: { select: { id: true, name: true, email: true, phoneNumber: true, phone_prefix: true } },
         },
         orderBy: { created_at: 'desc' },
     });
-    return { code: 200, error: false, message: 'Enrollments retrieved', data: enrollments };
+    return {
+        code: 200,
+        error: false,
+        message: 'Enrollments retrieved',
+        data: enrollments.map((enrollment) => ({
+            ...enrollment,
+            customer_key: buildCustomerKey({
+                userId: enrollment.user?.id || enrollment.user_id,
+                email: enrollment.user?.email || null,
+                phone: enrollment.user?.phoneNumber || null,
+                phonePrefix: enrollment.user?.phone_prefix || null,
+                fallbackName: enrollment.user?.name || null,
+            }),
+        })),
+    };
 }
 
 /**

@@ -93,6 +93,41 @@ export async function getCustomerGroupPayments(req: AuthenticatedRequest, res: R
     }
 }
 
+export async function getCustomerByKey(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const customerKey = decodeURIComponent((req.params.customerKey as string | undefined) || '');
+
+        const result = await CustomerService.getCustomerByKey(companyId, customerKey);
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error getting customer profile:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
+export async function updateCustomerByKey(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        const customerKey = decodeURIComponent((req.params.customerKey as string | undefined) || '');
+        const payload = req.body || {};
+
+        const result = await CustomerService.updateCustomerByKey(companyId, customerKey, {
+            name: typeof payload.name === 'string' ? payload.name : undefined,
+            email: typeof payload.email === 'string' ? payload.email : null,
+            phone: typeof payload.phone === 'string' ? payload.phone : null,
+            phone_prefix: typeof payload.phone_prefix === 'string' ? payload.phone_prefix : null,
+            country_code: typeof payload.country_code === 'string' ? payload.country_code : null,
+            notes: typeof payload.notes === 'string' ? payload.notes : null,
+        });
+
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error updating customer profile:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
 export async function exportCustomers(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
