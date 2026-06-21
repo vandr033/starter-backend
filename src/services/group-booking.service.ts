@@ -4,6 +4,7 @@ import {
     PaymentStatus,
     GroupItemStatus,
     Prisma,
+    ClassEnrollmentSource,
 } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
@@ -1823,6 +1824,7 @@ export async function createClassEnrollment(
                 payment_method: isFullCourse ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                 payment_status: paymentStatus,
                 qr_proof_image_url: isFullCourse ? null : (input.qr_proof_image_url ?? null),
+                source: ClassEnrollmentSource.PUBLIC_CHECKOUT,
                 valid_from: validFrom,
                 valid_until: validUntil,
             },
@@ -2048,6 +2050,7 @@ export async function adminCreateClassEnrollment(
                 payment_method: enrollmentPaymentMethod,
                 payment_status: enrollmentPaymentStatus,
                 qr_proof_image_url: enrollmentQrProofImageUrl,
+                source: ClassEnrollmentSource.ADMIN_CREATE,
                 valid_from: validFrom,
                 valid_until: validUntil,
             },

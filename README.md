@@ -99,15 +99,65 @@ Uses [better-auth](https://github.com/better-auth/better-auth) for authenticatio
 - JWT refresh tokens stored in database
 
 ## 🔧 Environment Variables
-`
 ```env
 DATABASE_URL="mysql://user:password@localhost:3306/database_name"
 PORT=3000
 NODE_ENV=development
+WAHA_BASE_URL="https://waha.priconpri.com"
+WAHA_API_KEY=""
+WAHA_SESSION="default"
+WAHA_TIMEOUT_MS=15000
+```
+
+`WAHA_BASE_URL` must point to the API origin, not the dashboard URL. If your WAHA instance does not require API auth, you can leave `WAHA_API_KEY` empty and the backend will omit `X-Api-Key`.
+
+Quick WAHA smoke test:
+```bash
+curl -X POST https://waha.priconpri.com/api/sendText \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -d '{"session":"default","chatId":"591XXXXXXXX@c.us","text":"Test from WAHA"}'
 ```
 
 See `.env.example` for all available options.
-`
+
+## 📲 Super Admin WAHA Dashboard
+
+The backend exposes a protected WAHA admin module for the Super Admin dashboard.
+
+### Required env vars
+- `WAHA_BASE_URL`
+- `WAHA_API_KEY`
+- `WAHA_SESSION`
+
+Optional but recommended:
+- `WAHA_TIMEOUT_MS`
+
+`WAHA_API_KEY` is used only by the backend. It is never sent to the frontend.
+
+### Backend endpoints
+- `GET /api/super-admin/waha/status`
+- `GET /api/super-admin/waha/qr`
+- `POST /api/super-admin/waha/session/start`
+- `POST /api/super-admin/waha/session/restart`
+- `POST /api/super-admin/waha/session/logout`
+
+All of these routes reuse the existing auth stack and return `403` for non-super-admin users.
+
+### How to test the WAHA connection
+1. Start the backend with the WAHA env vars configured.
+2. Sign in to the frontend as a super admin.
+3. Open `/admin/super-admin/waha`.
+4. If the session is missing or stopped, click `Start Session`.
+5. If WAHA requests authentication, scan the QR code with WhatsApp.
+6. Use `Refresh Status` to verify that the session moves to `Connected`.
+
+### Troubleshooting disconnected sessions
+- If the session does not exist yet, use `Start Session` from the dashboard to create and start the configured WAHA session.
+- If the QR expires before anyone scans it, use `Refresh QR` instead of reloading the whole admin panel.
+- If the session stays disconnected after scanning, use `Restart Session` and verify that `WAHA_API_KEY` matches the hosted WAHA instance.
+- If the dashboard shows upstream WAHA errors, confirm that `WAHA_BASE_URL` points to the WAHA API origin and not to a separate dashboard URL.
+
 ## 📚 API Routes
 
 | Prefix | Description |

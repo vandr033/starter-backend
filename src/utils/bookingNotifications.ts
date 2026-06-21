@@ -1,5 +1,4 @@
 import nodemailer from "nodemailer";
-import { createWasender, RetryConfig, TextOnlyMessage } from "wasenderapi";
 import { prisma } from "../prisma/client";
 import { logger } from "../config/logger";
 import { CompanyUserRole } from "@prisma/client";
@@ -10,7 +9,7 @@ import {
     renderBrandedEmail,
     type NotificationBranding,
 } from "./notificationBranding";
-import { getWasenderPersonalAccessToken } from "./env-aliases";
+import { wahaClient } from "../services/waha.service";
 
 const smtpHost = process.env.MAIL_HOST || "smtp.gmail.com";
 const smtpPort = Number(process.env.MAIL_PORT || 587);
@@ -30,11 +29,6 @@ const emailTransporter = nodemailer.createTransport({
     greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 15000),
     socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000),
 });
-
-const wasenderApiKey = process.env.WASENDER_API_KEY!;
-const wasenderToken = getWasenderPersonalAccessToken()!;
-const retryOptions: RetryConfig = { enabled: true, maxRetries: 3 };
-const wasender = createWasender(wasenderApiKey, wasenderToken, undefined, undefined, retryOptions);
 
 interface BookingNotificationData {
     companyId: number;
@@ -593,9 +587,8 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
 
 async function sendWhatsapp(phone: string, text: string): Promise<boolean> {
     try {
-        const payload: TextOnlyMessage = { messageType: "text", to: phone, text };
-        await wasender.send(payload);
-        return true;
+        const result = await wahaClient.sendText(phone, text);
+        return result.status >= 200 && result.status < 300;
     } catch (err) {
         logger.error({ err, phone }, "Failed to send booking WhatsApp notification");
         return false;

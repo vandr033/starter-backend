@@ -169,6 +169,46 @@ export async function cancelSession(req: AuthenticatedRequest, res: Response) {
     return res.status(result.code).json(result);
 }
 
+export async function getSessionPublicAttendance(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const sessionId = parseId(req.params.sessionId);
+    if (!sessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid sessionId' });
+    }
+
+    const result = await GroupSessionService.getSessionPublicAttendanceSettings(companyId, sessionId);
+    return res.status(result.code).json(result);
+}
+
+export async function updateSessionPublicAttendance(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const sessionId = parseId(req.params.sessionId);
+    if (!sessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid sessionId' });
+    }
+
+    const payload = (req as any).validated ?? req.body;
+    const result = await GroupSessionService.updateSessionPublicAttendanceSettings(companyId, sessionId, payload);
+    return res.status(result.code).json(result);
+}
+
+export async function rotateSessionPublicAttendance(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const sessionId = parseId(req.params.sessionId);
+    if (!sessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid sessionId' });
+    }
+
+    const result = await GroupSessionService.rotateSessionPublicAttendanceToken(companyId, sessionId);
+    return res.status(result.code).json(result);
+}
+
 export async function listClassEnrollments(req: AuthenticatedRequest, res: Response) {
     const companyId = requireCompanyId(req, res);
     if (!companyId) return;

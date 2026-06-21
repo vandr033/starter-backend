@@ -9,6 +9,7 @@ import * as GroupPaymentsService from '../services/group-payments.service';
 import { resendTicketByCode } from '../services/group-ticket.service';
 import * as PaidEventGuestCheckoutService from '../services/paid-event-guest-checkout.service';
 import * as ClassGuestEnrollmentService from '../services/class-guest-enrollment.service';
+import * as PublicSessionAttendanceService from '../services/public-class-session-attendance.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -97,6 +98,30 @@ export async function listPublicClassSessions(req: AuthenticatedRequest, res: Re
         upcoming: true,
         includeCancelled: false,
     });
+
+    if (!result.error && Array.isArray(result.data)) {
+        const sanitized = result.data.map((session: any) => ({
+            id: session.id,
+            company_id: session.company_id,
+            group_class_id: session.group_class_id,
+            start_at: session.start_at,
+            end_at: session.end_at,
+            status: session.status,
+            max_capacity_override: session.max_capacity_override ?? null,
+            cancelled_at: session.cancelled_at,
+            cancel_reason: session.cancel_reason,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            max_capacity: session.max_capacity,
+            booked_count: session.booked_count,
+            attendance_count: session.attendance_count,
+        }));
+
+        return res.status(result.code).json({
+            ...result,
+            data: sanitized,
+        });
+    }
 
     return res.status(result.code).json(result);
 }
@@ -246,6 +271,122 @@ export async function verifyClassGuestEnrollment(req: AuthenticatedRequest, res:
     if (result.cookies && result.cookies.length > 0) {
         res.setHeader('Set-Cookie', result.cookies);
     }
+
+    return res.status(result.code).json(result);
+}
+
+export async function getPublicSessionAttendanceState(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+    if (!token) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid token' });
+    }
+
+    const result = await PublicSessionAttendanceService.getPublicSessionAttendanceState(
+        token,
+        req.authUser,
+        (req.headers['x-forwarded-for'] as string | undefined) ?? req.ip,
+    );
+    return res.status(result.code).json(result);
+}
+
+export async function startPublicSessionAttendanceVerification(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+    if (!token) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid token' });
+    }
+
+    const payload = (req as any).validated ?? req.body;
+    const result = await PublicSessionAttendanceService.startPublicSessionAttendanceGuestVerification(
+        token,
+        {
+            full_name: typeof payload?.full_name === 'string' ? payload.full_name : '',
+            email: typeof payload?.email === 'string' ? payload.email : '',
+            countryCode: typeof payload?.countryCode === 'string' ? payload.countryCode : undefined,
+            phonePrefix: typeof payload?.phonePrefix === 'string' ? payload.phonePrefix : '',
+            phoneNumber: typeof payload?.phoneNumber === 'string' ? payload.phoneNumber : '',
+        },
+        (req.headers['x-forwarded-for'] as string | undefined) ?? req.ip,
+    );
+
+    return res.status(result.code).json(result);
+}
+
+export async function resendPublicSessionAttendanceVerification(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+    const payload = (req as any).validated ?? req.body;
+    const checkoutSessionId =
+        typeof payload?.checkout_session_id === 'string'
+            ? payload.checkout_session_id.trim()
+            : '';
+
+    if (!token || !checkoutSessionId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid token or checkout_session_id' });
+    }
+
+    const result = await PublicSessionAttendanceService.resendPublicSessionAttendanceGuestVerification(
+        token,
+        checkoutSessionId,
+        (req.headers['x-forwarded-for'] as string | undefined) ?? req.ip,
+    );
+
+    return res.status(result.code).json(result);
+}
+
+export async function verifyPublicSessionAttendanceVerification(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+    const payload = (req as any).validated ?? req.body;
+    const checkoutSessionId =
+        typeof payload?.checkout_session_id === 'string'
+            ? payload.checkout_session_id.trim()
+            : '';
+    const code = typeof payload?.code === 'string' ? payload.code : '';
+
+    if (!token || !checkoutSessionId || !code.trim()) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid token, checkout_session_id or code' });
+    }
+
+    const result = await PublicSessionAttendanceService.verifyPublicSessionAttendanceGuestVerification(
+        token,
+        checkoutSessionId,
+        code,
+        req.headers as HeadersInit,
+        (req.headers['x-forwarded-for'] as string | undefined) ?? req.ip,
+    );
+
+    if (result.cookies && result.cookies.length > 0) {
+        res.setHeader('Set-Cookie', result.cookies);
+    }
+
+    return res.status(result.code).json(result);
+}
+
+export async function submitPublicSessionAttendance(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+    if (!token) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid token' });
+    }
+
+    const payload = (req as any).validated ?? req.body;
+    const result = await PublicSessionAttendanceService.submitPublicSessionAttendance(
+        token,
+        {
+            checkout_session_id:
+                typeof payload?.checkout_session_id === 'string' && payload.checkout_session_id.trim()
+                    ? payload.checkout_session_id.trim()
+                    : undefined,
+            access_code:
+                typeof payload?.access_code === 'string'
+                    ? payload.access_code
+                    : null,
+            full_name: typeof payload?.full_name === 'string' ? payload.full_name : undefined,
+            email: typeof payload?.email === 'string' ? payload.email : undefined,
+            countryCode: typeof payload?.countryCode === 'string' ? payload.countryCode : undefined,
+            phonePrefix: typeof payload?.phonePrefix === 'string' ? payload.phonePrefix : undefined,
+            phoneNumber: typeof payload?.phoneNumber === 'string' ? payload.phoneNumber : undefined,
+        },
+        req.authUser,
+        (req.headers['x-forwarded-for'] as string | undefined) ?? req.ip,
+    );
 
     return res.status(result.code).json(result);
 }

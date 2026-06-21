@@ -1,55 +1,11 @@
-import { createWasender, RetryConfig, TextOnlyMessage, ImageUrlMessage } from "wasenderapi";
-import { logger } from "../config/logger";
+import { logger } from '../config/logger';
+import { wahaClient } from '../services/waha.service';
 import {
   appendCompanyContactLine,
   getCompanyNotificationBranding,
   mergeBranding,
   type NotificationBranding,
-} from "./notificationBranding";
-import { getWasenderPersonalAccessToken } from "./env-aliases";
-
-
-const apiKey = process.env.WASENDER_API_KEY!;
-const personalAccessToken = getWasenderPersonalAccessToken()!;
-const configuredMinIntervalMs = Number(process.env.WASENDER_MIN_INTERVAL_MS || "5000");
-const minIntervalMs = Math.max(5000, Number.isFinite(configuredMinIntervalMs) ? configuredMinIntervalMs : 5000);
-
-const retryOptions: RetryConfig = {
-  enabled: true,
-  maxRetries: 3,
-}
-
-const wasender = createWasender(
-  apiKey,
-  personalAccessToken,
-  undefined,
-  undefined,
-  retryOptions,
-)
-
-let lastSendAt = 0;
-let sendQueue: Promise<unknown> = Promise.resolve();
-let sendSequence = 0;
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForRateLimitWindow() {
-  const elapsed = Date.now() - lastSendAt;
-  const waitMs = Math.max(0, minIntervalMs - elapsed);
-  if (waitMs > 0) {
-    logger.debug(
-      {
-        event: "whatsapp_send_waiting_for_rate_limit",
-        waitMs,
-        minIntervalMs,
-      },
-      "Waiting before next WhatsApp send",
-    );
-    await sleep(waitMs);
-  }
-}
+} from './notificationBranding';
 
 function maskPhone(phone: string): string {
   const trimmed = phone.trim();
@@ -59,7 +15,12 @@ function maskPhone(phone: string): string {
 
 function buildErrorLog(error: unknown) {
   if (error instanceof Error) {
-    const errorWithCause = error as Error & { cause?: unknown; code?: string | number; status?: number };
+    const errorWithCause = error as Error & {
+      cause?: unknown;
+      code?: string | number;
+      status?: number;
+    };
+
     return {
       name: error.name,
       message: error.message,
@@ -71,129 +32,75 @@ function buildErrorLog(error: unknown) {
   }
 
   return {
-    message: typeof error === "string" ? error : "Unknown WhatsApp sender error",
+    message: typeof error === 'string' ? error : 'Unknown WhatsApp sender error',
     raw: error,
   };
 }
 
-function enqueueWhatsappSend<T>(
-  task: () => Promise<T>,
-  meta: { phone: string; messageType: "text" | "image" },
-): Promise<T> {
-  const sendId = ++sendSequence;
-  const nextTask = sendQueue.then(async () => {
-    logger.info(
-      {
-        event: "whatsapp_send_started",
-        sendId,
-        phone: maskPhone(meta.phone),
-        messageType: meta.messageType,
-      },
-      "Starting WhatsApp send",
-    );
-    await waitForRateLimitWindow();
-    const attemptStartedAt = Date.now();
-    try {
-      const result = await task();
-      lastSendAt = Date.now();
-      logger.info(
-        {
-          event: "whatsapp_send_succeeded",
-          sendId,
-          phone: maskPhone(meta.phone),
-          messageType: meta.messageType,
-          minIntervalMs,
-          elapsedMs: lastSendAt - attemptStartedAt,
-        },
-        "WhatsApp send succeeded",
-      );
-      return result;
-    } catch (error) {
-      lastSendAt = Date.now();
-      logger.error(
-        {
-          event: "whatsapp_send_failed",
-          sendId,
-          phone: maskPhone(meta.phone),
-          messageType: meta.messageType,
-          minIntervalMs,
-          elapsedMs: lastSendAt - attemptStartedAt,
-          error: buildErrorLog(error),
-        },
-        "WhatsApp send failed",
-      );
-      throw error;
-    }
-  });
+async function buildBrandedText(
+  text: string,
+  options?: { companyId?: number; branding?: NotificationBranding | null },
+): Promise<string> {
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    throw new Error('WhatsApp message text is required.');
+  }
 
-  sendQueue = nextTask.catch(() => undefined);
-  return nextTask;
+  const companyBranding = options?.companyId
+    ? await getCompanyNotificationBranding(options.companyId)
+    : null;
+  const branding = mergeBranding(companyBranding, options?.branding);
+
+  return branding
+    ? appendCompanyContactLine(trimmedText, branding)
+    : trimmedText.includes('Priconpri')
+      ? trimmedText
+      : `${trimmedText}\n\nPriconpri`;
 }
 
 export const sendWhatsappCode = async (phone: string, code: string) => {
-  return sendWhatsappText(phone, `Priconpri\n\nTu codigo de verificacion es: ${code}`)
-}
+  return sendWhatsappText(phone, `Priconpri\n\nTu codigo de verificacion es: ${code}`);
+};
 
 export const sendWhatsappText = async (
   phone: string,
   text: string,
   options?: { companyId?: number; branding?: NotificationBranding | null },
 ) => {
-  try{
-    const companyBranding = options?.companyId
-      ? await getCompanyNotificationBranding(options.companyId)
-      : null;
-    const branding = mergeBranding(companyBranding, options?.branding);
-    const brandedText = branding
-      ? appendCompanyContactLine(text, branding)
-      : text.includes("Priconpri")
-        ? text
-        : `${text.trim()}\n\nPriconpri`;
-    const textPayload: TextOnlyMessage = {
-      messageType: "text",
-      to: phone,
-      text: brandedText,
-    }
-    const result = await enqueueWhatsappSend(() => wasender.send(textPayload), {
-      phone,
-      messageType: "text",
-    })
-    return result
-  }catch(error){
+  try {
+    const brandedText = await buildBrandedText(text, options);
+    return await wahaClient.sendText(phone, brandedText);
+  } catch (error) {
     logger.error(
       {
-        event: "whatsapp_text_send_failed",
+        event: 'whatsapp_text_send_failed',
         phone: maskPhone(phone),
         error: buildErrorLog(error),
       },
-      "sendWhatsappText returned failure",
+      'sendWhatsappText returned failure',
     );
-    return -1
+    return -1;
   }
-}
+};
 
-export const createWhatsappGroup = async (name: string, participantPhones: string[]): Promise<{ jid: string; name: string } | null> => {
-  const participants = participantPhones.map((p) => `${p.replace(/\D/g, "")}@c.us`);
+export const createWhatsappGroup = async (
+  name: string,
+  participantPhones: string[],
+): Promise<{ jid: string; name: string } | null> => {
   try {
-    const res = await fetch("https://www.wasenderapi.com/api/groups", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ name, participants }),
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      logger.error({ event: "whatsapp_create_group_failed", status: res.status, body }, "WhatsApp group creation failed");
-      return null;
-    }
-    const data = (await res.json()) as { data?: { id?: string } };
-    const jid = data?.data?.id ?? null;
-    if (!jid) return null;
-    return { jid, name };
+    const group = await wahaClient.createGroup(name, participantPhones);
+    return {
+      jid: group.jid,
+      name: group.name,
+    };
   } catch (error) {
-    logger.error({ event: "whatsapp_create_group_error", error: buildErrorLog(error) }, "createWhatsappGroup threw");
+    logger.error(
+      {
+        event: 'whatsapp_create_group_error',
+        error: buildErrorLog(error),
+      },
+      'createWhatsappGroup threw',
+    );
     return null;
   }
 };
@@ -209,38 +116,21 @@ export const sendWhatsappImage = async (
   options?: { companyId?: number; branding?: NotificationBranding | null },
 ) => {
   try {
-    const companyBranding = options?.companyId
-      ? await getCompanyNotificationBranding(options.companyId)
-      : null;
-    const branding = mergeBranding(companyBranding, options?.branding);
     const brandedCaption = caption
-      ? branding
-        ? appendCompanyContactLine(caption, branding)
-        : caption.includes("Priconpri")
-          ? caption
-          : `${caption.trim()}\n\nPriconpri`
-      : caption;
-    const imagePayload: ImageUrlMessage = {
-      messageType: "image",
-      to: phone,
-      imageUrl,
-      text: brandedCaption,
-    }
-    const result = await enqueueWhatsappSend(() => wasender.send(imagePayload), {
-      phone,
-      messageType: "image",
-    })
-    return result
+      ? await buildBrandedText(caption, options)
+      : undefined;
+
+    return await wahaClient.sendImage(phone, imageUrl, brandedCaption);
   } catch (error) {
     logger.error(
       {
-        event: "whatsapp_image_send_failed",
+        event: 'whatsapp_image_send_failed',
         phone: maskPhone(phone),
         imageUrl,
         error: buildErrorLog(error),
       },
-      "sendWhatsappImage returned failure",
+      'sendWhatsappImage returned failure',
     );
-    return -1
+    return -1;
   }
-}
+};

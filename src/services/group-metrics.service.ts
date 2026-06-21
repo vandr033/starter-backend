@@ -270,6 +270,7 @@ export async function getGroupMetrics(companyId: number, filters: GroupMetricsFi
                     user_id: true,
                     status: true,
                     price_cents_snapshot: true,
+                    is_admin_sponsored: true,
                     valid_from: true,
                     valid_until: true,
                 },
@@ -323,7 +324,9 @@ export async function getGroupMetrics(companyId: number, filters: GroupMetricsFi
         const confirmedEnrollments = classEnrollments.filter((enrollment) => enrollment.status === 'CONFIRMED');
         const pendingEnrollments = classEnrollments.filter((enrollment) => enrollment.status === 'PENDING');
         const activePassHolders = confirmedEnrollments.filter((enrollment) => enrollment.valid_until >= now).length;
-        const revenueCents = confirmedEnrollments.reduce((sum, enrollment) => sum + enrollment.price_cents_snapshot, 0);
+        const revenueCents = confirmedEnrollments
+            .filter((enrollment) => !enrollment.is_admin_sponsored)
+            .reduce((sum, enrollment) => sum + enrollment.price_cents_snapshot, 0);
 
         let totalSessionCapacity = 0;
         let totalPotentialAttendances = 0;

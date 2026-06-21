@@ -131,6 +131,39 @@ export const setClassSessionAttendanceStatusSchema = z.object({
     method: z.enum(['QR_SCAN', 'MANUAL']).optional(),
 });
 
+export const updateSessionPublicAttendanceSchema = z.object({
+    public_attendance_enabled: z.boolean().optional(),
+    attendance_access_code_enabled: z.boolean(),
+    attendance_access_code: z.string().trim().max(64).optional().nullable(),
+});
+
+export const publicSessionAttendanceStartSchema = z.object({
+    full_name: z.string().trim().min(1).max(191),
+    email: z.string().trim().email().max(254),
+    countryCode: z.string().trim().length(2).optional(),
+    phonePrefix: z.string().trim().min(1).max(8),
+    phoneNumber: z.string().trim().min(1).max(32),
+});
+
+export const publicSessionAttendanceResendSchema = z.object({
+    checkout_session_id: z.string().trim().min(1),
+});
+
+export const publicSessionAttendanceVerifySchema = z.object({
+    checkout_session_id: z.string().trim().min(1),
+    code: z.string().trim().min(1).max(16),
+});
+
+export const publicSessionAttendanceSubmitSchema = z.object({
+    checkout_session_id: z.string().trim().min(1).optional(),
+    access_code: z.string().trim().max(64).optional().nullable(),
+    full_name: z.string().trim().min(1).max(191).optional(),
+    email: z.string().trim().email().max(254).optional(),
+    countryCode: z.string().trim().length(2).optional(),
+    phonePrefix: z.string().trim().min(1).max(8).optional(),
+    phoneNumber: z.string().trim().min(1).max(32).optional(),
+});
+
 export const checkInByTicketSchema = z.object({
     ticket_code: z.string().trim().min(1).max(2048).optional(),
     qr_token: z.string().trim().min(1).max(4096).optional(),
@@ -153,3 +186,4 @@ export type CreateGroupClassDTO = z.infer<typeof createGroupClassSchema>;
 export type UpdateGroupClassDTO = z.infer<typeof updateGroupClassSchema>;
 export type CreateEventBookingDTO = z.infer<typeof createEventBookingSchema>;
 export type CreateClassEnrollmentDTO = z.infer<typeof createClassEnrollmentSchema>;
+export type UpdateSessionPublicAttendanceDTO = z.infer<typeof updateSessionPublicAttendanceSchema>;

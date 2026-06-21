@@ -1,8 +1,30 @@
+import crypto from 'crypto';
 import { prisma } from '../prisma/client';
+import { hashCode } from '../utils/hash';
 import { MensajeApi } from '../types/MensajeApi';
 import { generateSessionDates, combineDateAndTimeInTimezone, RecurrenceConfig } from '../utils/recurrence';
+import type { UpdateSessionPublicAttendanceDTO } from '../schemas/group.schema';
 
 type ServiceResult = MensajeApi & { data?: any };
+
+function generateAttendanceToken(): string {
+    return crypto.randomBytes(24).toString('hex');
+}
+
+function sanitizeSession<T extends {
+    attendance_access_code_hash?: string | null;
+    [key: string]: unknown;
+}>(session: T) {
+    const {
+        attendance_access_code_hash: _attendanceAccessCodeHash,
+        ...rest
+    } = session;
+
+    return {
+        ...rest,
+        attendance_access_code_configured: Boolean(session.attendance_access_code_hash),
+    };
+}
 
 /**
  * Delete future sessions without attendance, then regenerate from current class config.
@@ -151,7 +173,7 @@ export async function listClassSessions(companyId: number, classId: number, filt
 
     // Attach capacity info
     const enriched = sessions.map((s) => ({
-        ...s,
+        ...sanitizeSession(s),
         max_capacity: s.max_capacity_override ?? gc.max_capacity_per_session,
         booked_count: enrollments.filter(
             (enrollment) => enrollment.valid_from <= s.start_at && enrollment.valid_until >= s.start_at,
@@ -216,5 +238,151 @@ export async function getSessionDetail(companyId: number, sessionId: number): Pr
         return { code: 404, error: true, message: 'Session not found' };
     }
 
-    return { code: 200, error: false, message: 'Session retrieved', data: session };
+    return { code: 200, error: false, message: 'Session retrieved', data: sanitizeSession(session) };
+}
+
+export async function getSessionPublicAttendanceSettings(companyId: number, sessionId: number): Promise<ServiceResult> {
+    const session = await prisma.groupClassSession.findFirst({
+        where: {
+            id: sessionId,
+            company_id: companyId,
+        },
+        include: {
+            group_class: {
+                select: {
+                    id: true,
+                    title: true,
+                    slug: true,
+                },
+            },
+        },
+    });
+
+    if (!session) {
+        return { code: 404, error: true, message: 'Session not found' };
+    }
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Public attendance settings retrieved',
+        data: sanitizeSession(session),
+    };
+}
+
+export async function updateSessionPublicAttendanceSettings(
+    companyId: number,
+    sessionId: number,
+    input: UpdateSessionPublicAttendanceDTO,
+): Promise<ServiceResult> {
+    const session = await prisma.groupClassSession.findFirst({
+        where: {
+            id: sessionId,
+            company_id: companyId,
+        },
+    });
+
+    if (!session) {
+        return { code: 404, error: true, message: 'Session not found' };
+    }
+
+    const accessCodeEnabled = input.attendance_access_code_enabled;
+    const rawAccessCode = typeof input.attendance_access_code === 'string' ? input.attendance_access_code.trim() : '';
+    const wantsPublicAttendanceEnabled = input.public_attendance_enabled ?? session.public_attendance_enabled;
+
+    if (accessCodeEnabled && !rawAccessCode && !session.attendance_access_code_hash) {
+        return {
+            code: 400,
+            error: true,
+            message: 'codigo de acceso is required when access code is enabled',
+        };
+    }
+
+    const now = new Date();
+    const data: Record<string, unknown> = {
+        public_attendance_enabled: wantsPublicAttendanceEnabled,
+        attendance_access_code_enabled: accessCodeEnabled,
+    };
+
+    if (wantsPublicAttendanceEnabled && !session.attendance_public_token) {
+        data.attendance_public_token = generateAttendanceToken();
+        data.attendance_public_token_created_at = now;
+    }
+
+    if (!accessCodeEnabled) {
+        data.attendance_access_code_hash = null;
+        data.attendance_access_code_updated_at = now;
+    } else if (rawAccessCode) {
+        data.attendance_access_code_hash = await hashCode(rawAccessCode);
+        data.attendance_access_code_updated_at = now;
+    }
+
+    const updated = await prisma.groupClassSession.update({
+        where: { id: sessionId },
+        data,
+        include: {
+            group_class: {
+                select: {
+                    id: true,
+                    title: true,
+                    slug: true,
+                },
+            },
+        },
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Public attendance settings updated',
+        data: sanitizeSession(updated),
+    };
+}
+
+export async function rotateSessionPublicAttendanceToken(companyId: number, sessionId: number): Promise<ServiceResult> {
+    const session = await prisma.groupClassSession.findFirst({
+        where: {
+            id: sessionId,
+            company_id: companyId,
+        },
+        include: {
+            group_class: {
+                select: {
+                    id: true,
+                    title: true,
+                    slug: true,
+                },
+            },
+        },
+    });
+
+    if (!session) {
+        return { code: 404, error: true, message: 'Session not found' };
+    }
+
+    const now = new Date();
+    const updated = await prisma.groupClassSession.update({
+        where: { id: sessionId },
+        data: {
+            attendance_public_token: generateAttendanceToken(),
+            attendance_public_token_created_at: session.attendance_public_token_created_at ?? now,
+            attendance_public_token_rotated_at: now,
+        },
+        include: {
+            group_class: {
+                select: {
+                    id: true,
+                    title: true,
+                    slug: true,
+                },
+            },
+        },
+    });
+
+    return {
+        code: 200,
+        error: false,
+        message: 'Public attendance link rotated',
+        data: sanitizeSession(updated),
+    };
 }

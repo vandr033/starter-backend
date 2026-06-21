@@ -78,6 +78,7 @@ model Company {
   free_event_registrations              FreeEventRegistration[]
   paid_event_guest_checkout_sessions    PaidEventGuestCheckoutSession[]
   group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
+  group_session_public_attendance_attempts GroupSessionPublicAttendanceAttempt[]
   service_required_resources            ServiceRequiredResource[]
   installment_reminder_logs             InstallmentReminderLog[]
   booking_groups                        BookingGroup[]
@@ -196,6 +197,8 @@ model User {
   free_event_registrations              FreeEventRegistration[]
   paid_event_guest_checkout_sessions    PaidEventGuestCheckoutSession[]
   group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
+  sponsored_group_class_enrollments     GroupClassEnrollment[]            @relation("ClassEnrollmentSponsoredByAdmin")
+  group_session_public_attendance_attempts GroupSessionPublicAttendanceAttempt[]
   marked_paid_installments              EnrollmentInstallment[]            @relation("InstallmentMarkedPaidBy")
   sent_installment_reminders            InstallmentReminderLog[]           @relation("InstallmentReminderSentBy")
   commerce_guest_checkout_sessions      CommerceGuestCheckoutSession[]
@@ -1582,6 +1585,22 @@ enum TicketStatus {
 enum CheckInMethod {
   QR_SCAN
   MANUAL
+  PUBLIC_LINK
+}
+
+enum ClassEnrollmentSource {
+  PUBLIC_CHECKOUT
+  ADMIN_CREATE
+  PUBLIC_ATTENDANCE_LINK
+}
+
+enum PublicAttendanceAttemptType {
+  TOKEN_LOOKUP
+  OTP_START
+  OTP_RESEND
+  OTP_VERIFY
+  ACCESS_CODE_SUBMIT
+  SUBMIT
 }
 
 enum Gender {
@@ -1697,19 +1716,30 @@ model GroupClassSession {
   end_at                DateTime
   status                GroupItemStatus @default(PUBLISHED)
   max_capacity_override Int?
+  public_attendance_enabled         Boolean   @default(false)
+  attendance_public_token           String?   @unique @db.VarChar(191)
+  attendance_public_token_created_at DateTime?
+  attendance_public_token_rotated_at DateTime?
+  attendance_access_code_enabled    Boolean   @default(false)
+  attendance_access_code_hash       String?   @db.VarChar(255)
+  attendance_access_code_updated_at DateTime?
   cancelled_at          DateTime?
   cancel_reason         String?         @db.VarChar(500)
   created_at            DateTime        @default(now())
   updated_at            DateTime        @updatedAt
 
-  company     Company                  @relation(fields: [company_id], references: [id])
-  group_class GroupClass               @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
-  attendances GroupSessionAttendance[]
-  tickets     GroupTicket[]
+  company                           Company                              @relation(fields: [company_id], references: [id])
+  group_class                       GroupClass                           @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
+  attendances                       GroupSessionAttendance[]
+  tickets                           GroupTicket[]
+  sponsored_enrollments             GroupClassEnrollment[]               @relation("SponsoredBySession")
+  guest_enrollment_sessions         GroupClassGuestEnrollmentSession[]
+  public_attendance_attempts        GroupSessionPublicAttendanceAttempt[]
 
   @@unique([group_class_id, start_at])
   @@index([company_id, group_class_id, start_at])
   @@index([group_class_id, start_at])
+  @@index([company_id, attendance_public_token], map: "gcs_company_token_idx")
   @@map("group_class_session")
 }
 
@@ -1786,26 +1816,37 @@ model GroupClassEnrollment {
   payment_method       PaymentMethod      @default(NONE)
   payment_status       PaymentStatus      @default(UNPAID)
   qr_proof_image_url   String?            @db.VarChar(512)
+  source               ClassEnrollmentSource @default(PUBLIC_CHECKOUT)
+  is_admin_sponsored   Boolean            @default(false)
+  sponsorship_reason   String?            @db.VarChar(255)
+  sponsored_by_group_class_session_id Int?
+  sponsored_by_admin_user_id String?
   valid_from           DateTime
   valid_until          DateTime
   created_at           DateTime           @default(now())
   updated_at           DateTime           @updatedAt
   cancelled_at         DateTime?
 
-  company                   Company                  @relation(fields: [company_id], references: [id])
-  group_class               GroupClass               @relation(fields: [group_class_id], references: [id])
-  customer_profile          CustomerProfile?         @relation(fields: [customer_profile_id], references: [id])
-  user                      User                     @relation(fields: [user_id], references: [id])
-  attendances               GroupSessionAttendance[]
-  tickets                   GroupTicket[]
-  installments              EnrollmentInstallment[]
-  installment_reminder_logs InstallmentReminderLog[]
+  company                           Company                  @relation(fields: [company_id], references: [id])
+  group_class                       GroupClass               @relation(fields: [group_class_id], references: [id])
+  customer_profile                  CustomerProfile?         @relation(fields: [customer_profile_id], references: [id])
+  user                              User                     @relation(fields: [user_id], references: [id])
+  attendances                       GroupSessionAttendance[]
+  tickets                           GroupTicket[]
+  installments                      EnrollmentInstallment[]
+  installment_reminder_logs         InstallmentReminderLog[]
+  sponsored_by_group_class_session  GroupClassSession?       @relation("SponsoredBySession", fields: [sponsored_by_group_class_session_id], references: [id], onDelete: SetNull)
+  sponsored_by_admin                User?                    @relation("ClassEnrollmentSponsoredByAdmin", fields: [sponsored_by_admin_user_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, group_class_id, status])
   @@index([company_id, group_class_id, user_id, status, valid_until], map: "gce_cmp_cls_usr_sts_vu_idx")
   @@index([company_id, group_class_id, status, valid_from, valid_until], map: "gce_cmp_cls_sts_vf_vu_idx")
   @@index([user_id, group_class_id])
   @@index([customer_profile_id])
+  @@index([is_admin_sponsored, status], map: "gce_sponsored_status_idx")
+  @@index([source], map: "gce_source_idx")
+  @@index([sponsored_by_group_class_session_id], map: "gce_sponsored_session_idx")
+  @@index([sponsored_by_admin_user_id], map: "gce_sponsored_admin_idx")
   @@map("group_class_enrollment")
 }
 
@@ -2047,6 +2088,7 @@ model GroupClassGuestEnrollmentSession {
   id                       String    @id @default(cuid())
   company_id               Int
   group_class_id           Int
+  group_class_session_id   Int?
   resolved_user_id         String?
   full_name                String    @db.VarChar(191)
   first_name               String?   @db.VarChar(100)
@@ -2068,15 +2110,40 @@ model GroupClassGuestEnrollmentSession {
   created_at               DateTime  @default(now())
   updated_at               DateTime  @updatedAt
 
-  company     Company    @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  group_class GroupClass @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
-  user        User?      @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+  company       Company            @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  group_class   GroupClass         @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
+  group_session GroupClassSession? @relation(fields: [group_class_session_id], references: [id], onDelete: Cascade)
+  user          User?              @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, group_class_id, consumed_at], map: "gcges_company_class_consumed_idx")
+  @@index([company_id, group_class_session_id, consumed_at], map: "gcges_company_session_consumed_idx")
   @@index([email, phone_number], map: "gcges_email_phone_idx")
   @@index([resolved_user_id], map: "gcges_user_idx")
   @@index([otp_expires_at], map: "gcges_otp_expires_idx")
   @@map("group_class_guest_enrollment_session")
+}
+
+model GroupSessionPublicAttendanceAttempt {
+  id                Int                         @id @default(autoincrement())
+  company_id        Int
+  group_class_session_id Int
+  resolved_user_id  String?
+  attempt_type      PublicAttendanceAttemptType
+  token_fingerprint String                      @db.VarChar(128)
+  ip_fingerprint    String                      @db.VarChar(128)
+  success           Boolean                     @default(false)
+  detail_code       String?                     @db.VarChar(64)
+  created_at        DateTime                    @default(now())
+
+  company       Company           @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  group_session GroupClassSession @relation(fields: [group_class_session_id], references: [id], onDelete: Cascade)
+  user          User?             @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, group_class_session_id, created_at], map: "gspaa_company_session_created_idx")
+  @@index([group_class_session_id, attempt_type, created_at], map: "gspaa_session_type_created_idx")
+  @@index([token_fingerprint, ip_fingerprint, attempt_type, created_at], map: "gspaa_token_ip_type_created_idx")
+  @@index([resolved_user_id], map: "gspaa_user_idx")
+  @@map("group_session_public_attendance_attempt")
 }
 
 model CommerceGuestCheckoutSession {

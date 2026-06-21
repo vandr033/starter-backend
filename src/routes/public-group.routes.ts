@@ -8,6 +8,10 @@ import {
     companyScopedActionSchema,
     createClassEnrollmentSchema,
     createEventBookingSchema,
+    publicSessionAttendanceResendSchema,
+    publicSessionAttendanceStartSchema,
+    publicSessionAttendanceSubmitSchema,
+    publicSessionAttendanceVerifySchema,
 } from '../schemas/group.schema';
 import { optionalAuth } from '../middlewares/optionalAuth';
 import {
@@ -47,6 +51,35 @@ router.get(
     requireActiveCompany({ source: 'query', key: 'company_id' }),
     requireCompanyCapability('CLASES_BASE'),
     PublicGroupController.listPublicClassSessions,
+);
+router.get(
+    '/classes/sessions/attendance/:token',
+    optionalAuth,
+    PublicGroupController.getPublicSessionAttendanceState,
+);
+router.post(
+    '/classes/sessions/attendance/:token/start',
+    optionalAuth,
+    validate(publicSessionAttendanceStartSchema),
+    PublicGroupController.startPublicSessionAttendanceVerification,
+);
+router.post(
+    '/classes/sessions/attendance/:token/resend',
+    optionalAuth,
+    validate(publicSessionAttendanceResendSchema),
+    PublicGroupController.resendPublicSessionAttendanceVerification,
+);
+router.post(
+    '/classes/sessions/attendance/:token/verify',
+    optionalAuth,
+    validate(publicSessionAttendanceVerifySchema),
+    PublicGroupController.verifyPublicSessionAttendanceVerification,
+);
+router.post(
+    '/classes/sessions/attendance/:token/submit',
+    optionalAuth,
+    validate(publicSessionAttendanceSubmitSchema),
+    PublicGroupController.submitPublicSessionAttendance,
 );
 
 router.post(

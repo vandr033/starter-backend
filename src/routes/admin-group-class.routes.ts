@@ -4,7 +4,12 @@ import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
 import { validate } from '../middlewares/validate';
 import * as AdminGroupClassController from '../controllers/admin-group-class.controller';
-import { createGroupClassSchema, setGroupItemStatusSchema, updateGroupClassSchema } from '../schemas/group.schema';
+import {
+    createGroupClassSchema,
+    setGroupItemStatusSchema,
+    updateGroupClassSchema,
+    updateSessionPublicAttendanceSchema,
+} from '../schemas/group.schema';
 
 const router = Router();
 const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
@@ -23,6 +28,13 @@ router.get('/:classId/sessions', AdminGroupClassController.listClassSessions);
 router.get('/sessions/:sessionId', AdminGroupClassController.getSessionDetail);
 router.post('/sessions/:sessionId/cancel', AdminGroupClassController.cancelSession);
 router.get('/sessions/:sessionId/attendance', AdminGroupClassController.listClassSessionAttendance);
+router.get('/sessions/:sessionId/public-attendance', AdminGroupClassController.getSessionPublicAttendance);
+router.put(
+    '/sessions/:sessionId/public-attendance',
+    validate(updateSessionPublicAttendanceSchema),
+    AdminGroupClassController.updateSessionPublicAttendance,
+);
+router.post('/sessions/:sessionId/public-attendance/rotate', AdminGroupClassController.rotateSessionPublicAttendance);
 
 router.get('/:classId/enrollments', AdminGroupClassController.listClassEnrollments);
 router.post('/:classId/enrollments', AdminGroupClassController.createClassEnrollmentAdmin);

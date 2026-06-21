@@ -147,6 +147,32 @@ function parseDateOnlyToUtc(value: string): Date | null {
     return parsed;
 }
 
+function sanitizeSessionForClassPayload<T extends {
+    public_attendance_enabled?: boolean;
+    attendance_public_token?: string | null;
+    attendance_public_token_created_at?: Date | null;
+    attendance_public_token_rotated_at?: Date | null;
+    attendance_access_code_enabled?: boolean;
+    attendance_access_code_hash?: string | null;
+    attendance_access_code_updated_at?: Date | null;
+    attendance_access_code_configured?: boolean;
+    [key: string]: unknown;
+}>(session: T) {
+    const {
+        public_attendance_enabled: _publicAttendanceEnabled,
+        attendance_public_token: _attendancePublicToken,
+        attendance_public_token_created_at: _attendancePublicTokenCreatedAt,
+        attendance_public_token_rotated_at: _attendancePublicTokenRotatedAt,
+        attendance_access_code_enabled: _attendanceAccessCodeEnabled,
+        attendance_access_code_hash: _attendanceAccessCodeHash,
+        attendance_access_code_updated_at: _attendanceAccessCodeUpdatedAt,
+        attendance_access_code_configured: _attendanceAccessCodeConfigured,
+        ...rest
+    } = session;
+
+    return rest;
+}
+
 // ─── Service ────────────────────────────────────────────────────────────────
 
 export async function createGroupClass(companyId: number, userId: string, input: CreateGroupClassInput): Promise<ServiceResult> {
@@ -500,6 +526,7 @@ async function getClassWithRelations(classId: number, companyId: number) {
 
     return {
         ...groupClass,
+        sessions: (groupClass.sessions ?? []).map((session) => sanitizeSessionForClassPayload(session)),
         description: sanitizeRichText(groupClass.description) ?? null,
     };
 }

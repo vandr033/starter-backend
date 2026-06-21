@@ -25,6 +25,7 @@ export async function getEnrollmentInstallmentPlan(params: {
         where: {
             id: params.enrollmentId,
             company_id: params.companyId,
+            is_admin_sponsored: false,
             ...(params.userId ? { user_id: params.userId } : {}),
         },
         include: {
@@ -90,6 +91,7 @@ export async function listFullCoursePaymentPlansForUser(userId: string) {
         where: {
             user_id: userId,
             pricing_mode: 'FULL_COURSE',
+            is_admin_sponsored: false,
         },
         include: {
             company: {
@@ -178,7 +180,10 @@ export async function listCompanyGroupPaymentSourceData(companyId: number) {
             orderBy: { created_at: 'desc' },
         }),
         prisma.groupClassEnrollment.findMany({
-            where: { company_id: companyId },
+            where: {
+                company_id: companyId,
+                is_admin_sponsored: false,
+            },
             include: {
                 group_class: {
                     select: {
