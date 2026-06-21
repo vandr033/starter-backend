@@ -289,10 +289,14 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
     return { sent: true, channels: successfulChannels };
 }
 
-function mapTicketWithQr<T extends { company_id: number; ticket_code: string; issued_at: Date }>(ticket: T): T & { qr_token: string } {
+function mapTicketWithQr<T extends { company_id: number; ticket_code: string; issued_at: Date }>(
+    ticket: T,
+): T & { qr_token: string; qr_image_url: string } {
+    const qrToken = buildGroupTicketQrToken(ticket.company_id, ticket.ticket_code, ticket.issued_at);
     return {
         ...ticket,
-        qr_token: buildGroupTicketQrToken(ticket.company_id, ticket.ticket_code, ticket.issued_at),
+        qr_token: qrToken,
+        qr_image_url: buildGroupTicketQrImageUrl(qrToken),
     };
 }
 

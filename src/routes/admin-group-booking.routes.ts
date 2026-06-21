@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { CompanyUserRole } from '@prisma/client';
 import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
-import { requirePlanFeature } from '../middlewares/requirePlanFeature';
+import { requireAnyPlanFeature, requirePlanFeature } from '../middlewares/requirePlanFeature';
 import { requireCompanyCapability } from '../middlewares/requireCompanyCapability';
 import { validate } from '../middlewares/validate';
 import * as AdminGroupBookingController from '../controllers/admin-group-booking.controller';
@@ -71,6 +71,15 @@ router.post(
     requirePlanFeature('GROUP_EVENTS'),
     requirePlanFeature('BULK_WHATSAPP_MESSAGING'),
     AdminGroupBookingController.streamEventMassMessage,
+);
+
+router.post(
+    '/classes/:classId/mass-message',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requirePlanFeature('GROUP_CLASSES'),
+    requirePlanFeature('BULK_WHATSAPP_MESSAGING'),
+    AdminGroupBookingController.sendClassMassMessage,
 );
 
 router.post(
@@ -176,7 +185,7 @@ router.get(
     '/attendance/summary',
     requireAuth,
     requireCompanyRole(staffRoles),
-    requirePlanFeature('GROUP_EVENTS'),
+    requireAnyPlanFeature(['GROUP_EVENTS', 'GROUP_CLASSES']),
     AdminGroupBookingController.getAttendanceSummary,
 );
 

@@ -56,6 +56,14 @@ type EventMassMessagePayload = {
     }>;
 };
 
+type ClassMassMessagePayload = {
+    message: string;
+    delivery_mode?: EventMassMessageDeliveryMode;
+    selected_targets?: Array<{
+        id: number;
+    }>;
+};
+
 function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
     const cleanPhone = normalizePhoneDigits(phone);
     if (!cleanPhone) return null;
@@ -1031,6 +1039,233 @@ export async function sendEventMassMessageWithProgress(
     onProgress: (progress: EventMassMessageProgress) => Promise<void> | void,
 ): Promise<ServiceResult> {
     return runEventMassMessage(companyId, eventId, payload, onProgress);
+}
+
+export async function sendClassMassMessage(
+    companyId: number,
+    classId: number,
+    payload: ClassMassMessagePayload,
+): Promise<ServiceResult> {
+    const message = (payload.message || '').trim();
+    if (!message) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Message body is required',
+        };
+    }
+
+    if (message.length > 1500) {
+        return {
+            code: 400,
+            error: true,
+            message: 'Message body cannot exceed 1500 characters',
+        };
+    }
+
+    const [company, groupClass, localeConfig] = await Promise.all([
+        prisma.company.findUnique({
+            where: { id: companyId, deleted_at: null },
+            select: { id: true, name: true },
+        }),
+        prisma.groupClass.findFirst({
+            where: { id: classId, company_id: companyId, deleted_at: null },
+            select: { id: true, title: true },
+        }),
+        prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        }),
+    ]);
+
+    if (!company) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Company not found',
+        };
+    }
+
+    if (!groupClass) {
+        return {
+            code: 404,
+            error: true,
+            message: 'Class not found',
+        };
+    }
+
+    const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+    const deliveryMode: EventMassMessageDeliveryMode =
+        payload.delivery_mode === 'WHATSAPP'
+        || payload.delivery_mode === 'EMAIL'
+        || payload.delivery_mode === 'BOTH'
+        || payload.delivery_mode === 'AUTO'
+            ? payload.delivery_mode
+            : 'BOTH';
+    const selectedTargetIds =
+        Array.isArray(payload.selected_targets) && payload.selected_targets.length > 0
+            ? new Set(
+                payload.selected_targets
+                    .filter((target) => Number.isInteger(target.id) && target.id > 0)
+                    .map((target) => target.id),
+            )
+            : null;
+
+    const enrollments = await prisma.groupClassEnrollment.findMany({
+        where: {
+            company_id: companyId,
+            group_class_id: classId,
+            status: {
+                in: [GroupBookingStatus.PENDING, GroupBookingStatus.CONFIRMED, GroupBookingStatus.WAITLISTED],
+            },
+        },
+        include: {
+            user: {
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone_prefix: true,
+                    phoneNumber: true,
+                },
+            },
+        },
+        orderBy: { created_at: 'desc' },
+    });
+
+    const recipients = enrollments
+        .filter((enrollment) => (selectedTargetIds ? selectedTargetIds.has(enrollment.id) : true))
+        .map((enrollment) => ({
+            id: enrollment.id,
+            email: normalizeEmail(enrollment.user?.email),
+            phone: enrollment.user?.phoneNumber || null,
+            phonePrefix: enrollment.user?.phone_prefix || null,
+        }));
+
+    const seenWhatsappTargets = new Set<string>();
+    const seenEmailTargets = new Set<string>();
+    let whatsappSent = 0;
+    let emailSent = 0;
+    let noContact = 0;
+    let failed = 0;
+    let duplicatesSkipped = 0;
+
+    const whatsappText =
+        locale === 'en'
+            ? `${company.name} · ${groupClass.title}\n\n${message}`
+            : `${company.name} · ${groupClass.title}\n\n${message}`;
+
+    logger.info(
+        {
+            event: 'group_class_mass_message_started',
+            companyId,
+            companyName: company.name,
+            groupClassId: classId,
+            groupClassTitle: groupClass.title,
+            locale,
+            totalRecipients: recipients.length,
+            selectedRecipients: selectedTargetIds?.size ?? null,
+            deliveryMode,
+            messageLength: message.length,
+        },
+        'Group class mass message started',
+    );
+
+    for (const recipient of recipients) {
+        const whatsappTarget = buildFullPhone(recipient.phonePrefix, recipient.phone);
+        const emailTarget = normalizeEmail(recipient.email);
+        const wantsWhatsapp = deliveryMode === 'AUTO' || deliveryMode === 'WHATSAPP' || deliveryMode === 'BOTH';
+        const wantsEmail = deliveryMode === 'EMAIL' || deliveryMode === 'BOTH';
+        let attemptedChannel = false;
+        let hasSelectedContact = false;
+
+        if (wantsWhatsapp && whatsappTarget) {
+            hasSelectedContact = true;
+
+            if (seenWhatsappTargets.has(whatsappTarget)) {
+                duplicatesSkipped += 1;
+            } else {
+                attemptedChannel = true;
+                const waResult = await sendWhatsappText(whatsappTarget, whatsappText, { companyId });
+                if (waResult !== -1) {
+                    whatsappSent += 1;
+                    seenWhatsappTargets.add(whatsappTarget);
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+
+        if (wantsEmail && emailTarget) {
+            hasSelectedContact = true;
+
+            if (seenEmailTargets.has(emailTarget)) {
+                duplicatesSkipped += 1;
+            } else {
+                attemptedChannel = true;
+                const emailResult = await sendCustomerMassMessageEmail({
+                    email: emailTarget,
+                    companyName: company.name,
+                    message,
+                    locale,
+                    companyId,
+                });
+
+                if (emailResult === 1) {
+                    emailSent += 1;
+                    seenEmailTargets.add(emailTarget);
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+
+        if (!attemptedChannel && !hasSelectedContact) {
+            noContact += 1;
+        }
+    }
+
+    const totalSent = whatsappSent + emailSent;
+    logger.info(
+        {
+            event: 'group_class_mass_message_completed',
+            companyId,
+            companyName: company.name,
+            groupClassId: classId,
+            groupClassTitle: groupClass.title,
+            locale,
+            totalRecipients: recipients.length,
+            totalSent,
+            whatsappSent,
+            emailSent,
+            noContact,
+            failed,
+            duplicatesSkipped,
+            deliveryMode,
+            messageLength: message.length,
+        },
+        'Group class mass message completed',
+    );
+
+    return {
+        code: 200,
+        error: false,
+        message: totalSent > 0 ? 'Mass message sent' : 'No messages sent',
+        data: {
+            total_customers: recipients.length,
+            sent_total: totalSent,
+            sent_whatsapp: whatsappSent,
+            sent_email: emailSent,
+            skipped_no_contact: noContact,
+            skipped_duplicates: duplicatesSkipped,
+            failed,
+        },
+    };
 }
 
 export async function listEventInterests(companyId: number, eventId: number): Promise<ServiceResult> {

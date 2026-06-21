@@ -104,6 +104,34 @@ function parseEventMassMessagePayload(body: unknown): {
     };
 }
 
+function parseClassMassMessagePayload(body: unknown): {
+    message: string;
+    delivery_mode?: 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
+    selected_targets?: Array<{ id: number }>;
+} {
+    const { message, delivery_mode, selected_targets } = (body ?? {}) as {
+        message?: string;
+        delivery_mode?: string;
+        selected_targets?: Array<{ id?: number }>;
+    };
+
+    return {
+        message: message || '',
+        delivery_mode:
+            delivery_mode === 'WHATSAPP'
+            || delivery_mode === 'EMAIL'
+            || delivery_mode === 'BOTH'
+            || delivery_mode === 'AUTO'
+                ? delivery_mode
+                : undefined,
+        selected_targets: Array.isArray(selected_targets)
+            ? selected_targets
+                .filter((target) => Number.isInteger(target?.id) && Number(target.id) > 0)
+                .map((target) => ({ id: Number(target.id) }))
+            : undefined,
+    };
+}
+
 function writeSseEvent(res: Response, event: string, payload: unknown) {
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -215,6 +243,23 @@ export async function streamEventMassMessage(req: AuthenticatedRequest, res: Res
     } finally {
         res.end();
     }
+}
+
+export async function sendClassMassMessage(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+
+    const classId = parseId(req.params.classId);
+    if (!classId) {
+        return res.status(400).json({ code: 400, error: true, message: 'Invalid classId' });
+    }
+
+    const result = await GroupBookingService.sendClassMassMessage(
+        companyId,
+        classId,
+        parseClassMassMessagePayload(req.body),
+    );
+    return res.status(result.code).json(result);
 }
 
 export async function confirmClassEnrollment(req: AuthenticatedRequest, res: Response) {
