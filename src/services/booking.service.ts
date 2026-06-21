@@ -65,11 +65,18 @@ async function validatePaymentMethod(companyId: number, paymentMethod: string): 
 async function resolveBookingFlowSettings(companyId: number): Promise<{
     requireComprobante: boolean;
     autoConfirm: boolean;
+    allowCash: boolean;
+    allowQr: boolean;
 }> {
     const [settings, canCustomizeFlow] = await Promise.all([
         prisma.companySettings.findUnique({
             where: { company_id: companyId },
-            select: { require_comprobante_for_qr: true, auto_confirm_bookings: true },
+            select: {
+                require_comprobante_for_qr: true,
+                auto_confirm_bookings: true,
+                allow_cash_payment: true,
+                allow_qr_payment: true,
+            },
         }),
         isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION'),
     ]);
@@ -77,7 +84,17 @@ async function resolveBookingFlowSettings(companyId: number): Promise<{
     return {
         requireComprobante: canCustomizeFlow ? (settings?.require_comprobante_for_qr ?? true) : true,
         autoConfirm: canCustomizeFlow ? (settings?.auto_confirm_bookings ?? true) : true,
+        allowCash: settings?.allow_cash_payment ?? true,
+        allowQr: settings?.allow_qr_payment ?? true,
     };
+}
+
+function shouldRequireQrProof(settings: {
+    requireComprobante: boolean;
+    allowCash: boolean;
+    allowQr: boolean;
+}): boolean {
+    return settings.requireComprobante && !(settings.allowQr && !settings.allowCash);
 }
 
 function buildServiceSnapshots(
@@ -672,7 +689,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
         const bookingFlowSettings = await resolveBookingFlowSettings(company_id);
 
         // 1.7 Validate comprobante if required for QR
-        if (payment_method === 'QR' && bookingFlowSettings.requireComprobante && !qr_proof_image_url) {
+        if (payment_method === 'QR' && shouldRequireQrProof(bookingFlowSettings) && !qr_proof_image_url) {
             return { code: 400, message: 'Comprobante is required for QR payment bookings', error: true };
         }
 
@@ -1522,7 +1539,7 @@ async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Pro
     const bookingFlowSettings = await resolveBookingFlowSettings(params.company.id);
     if (
         params.payment_method === 'QR' &&
-        bookingFlowSettings.requireComprobante &&
+        shouldRequireQrProof(bookingFlowSettings) &&
         !params.qr_proof_image_url
     ) {
         return {
