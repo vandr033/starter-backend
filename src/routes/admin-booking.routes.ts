@@ -27,6 +27,22 @@ router.post('/', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingCon
 // POST /api/admin/bookings/batch - Create multiple recurring bookings
 router.post('/batch', requireAuth, requireCompanyRole(allStaffRoles), AdminBookingController.createRecurringBookings);
 
+// GET /api/admin/bookings/:id/reschedule-options - Suggested valid reschedule slots
+router.get(
+    '/:id/reschedule-options',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    AdminBookingController.getRescheduleOptions
+);
+
+// POST /api/admin/bookings/:id/reschedule - Change only booking date/time
+router.post(
+    '/:id/reschedule',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    AdminBookingController.rescheduleBooking
+);
+
 // POST /api/admin/bookings/:id/reminders/today - Send today's reminder for one booking
 router.post(
     '/:id/reminders/today',

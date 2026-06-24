@@ -1,7 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as AdminBookingRepo from '../repositories/admin-booking.repo';
 import * as BookingRepo from '../repositories/booking.repo';
-import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole } from '@prisma/client';
+import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, CompanyUserRole, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
 import {
@@ -20,6 +20,8 @@ import { resolveEffectiveServicePrice } from './service-pricing.service';
 import { sendReviewRequestReminder } from '../utils/reviewNotifications';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
+import { sendGenericEmail } from '../utils/sendEmail';
+import { sendWhatsappText } from '../utils/whatsappSender';
 import {
     hasLegacyNoShowMarker,
     isNoShowBooking,
@@ -32,8 +34,15 @@ interface AdminBookingResult extends MensajeApi {
 
 const REMINDER_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
+const SHORT_NOTICE_RESCHEDULE_MS = 24 * 60 * 60 * 1000;
+const RESCHEDULE_NOTIFICATION_MAX_ATTEMPTS = 3;
+const RESCHEDULE_NOTIFICATION_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 const reminderSentAtCache = new Map<string, number>();
+const reschedulableStatuses = new Set<BookingStatus>([
+    BookingStatus.PENDING,
+    BookingStatus.CONFIRMED,
+]);
 
 type CustomerReminderChannel = ReminderChannel | 'NONE';
 export type NoShowNotificationChannel = DirectNotificationChannel;
@@ -88,6 +97,33 @@ interface PreparedAdminBookingSession {
     }>;
     payment: ResolvedAdminPayment;
 }
+
+interface RescheduleSuggestion {
+    date: string;
+    time: string;
+    start_at: string;
+    end_at: string;
+}
+
+interface RescheduleNotificationDraft {
+    recipient_type: 'STUDENT' | 'TEACHER';
+    recipient_user_id?: string | null;
+    channel: 'EMAIL' | 'WHATSAPP';
+    target?: string | null;
+    status: 'PENDING' | 'SKIPPED';
+    reason?: string | null;
+    payload: Prisma.InputJsonValue;
+}
+
+type RescheduleValidationResult =
+    | { available: true }
+    | {
+        available: false;
+        code: number;
+        message: string;
+        reason?: string;
+        data?: Record<string, unknown>;
+    };
 
 function buildAdminServiceSnapshots(
     services: Array<{
@@ -255,6 +291,927 @@ function buildCustomerName(user?: {
     const last = user?.last_name?.trim();
     const full = [first, last].filter(Boolean).join(' ').trim();
     return full || user?.name?.trim() || fallback?.trim() || 'Customer';
+}
+
+function timeToMinutes(time: string): number {
+    const [hours, minutes] = time.split(':').map(Number);
+    return hours * 60 + minutes;
+}
+
+function minutesToTime(minutes: number): string {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+}
+
+function parseDateOnlyParts(date: string): { year: number; month: number; day: number } | null {
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return {
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3]),
+    };
+}
+
+function addDaysToDateString(date: string, days: number): string {
+    const parts = parseDateOnlyParts(date);
+    if (!parts) return date;
+    const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12, 0, 0));
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+}
+
+function getDateKeyAndMinutesInTimeZone(date: Date, timeZone: string): { dateKey: string; minutes: number } {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date);
+
+    const value = (type: string): string => parts.find((part) => part.type === type)?.value || '00';
+
+    return {
+        dateKey: `${value('year')}-${value('month')}-${value('day')}`,
+        minutes: Number(value('hour')) * 60 + Number(value('minute')),
+    };
+}
+
+function getDayOfWeekFromDateKey(dateKey: string): number | null {
+    const parts = parseDateOnlyParts(dateKey);
+    if (!parts) return null;
+    return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0)).getUTCDay();
+}
+
+function isIntervalWithinWindows(
+    startMinutes: number,
+    endMinutes: number,
+    windows: Array<{ start_time: string; end_time: string }>
+): boolean {
+    return windows.some((window) => {
+        const windowStart = timeToMinutes(window.start_time);
+        const windowEnd = timeToMinutes(window.end_time);
+        return startMinutes >= windowStart && endMinutes <= windowEnd;
+    });
+}
+
+function buildFullPhone(prefix?: string | null, phone?: string | null): string | null {
+    const cleanPhone = normalizePhone(phone);
+    if (!cleanPhone) return null;
+    const cleanPrefix = normalizePhone(prefix) || '591';
+    return `${cleanPrefix}${cleanPhone}`;
+}
+
+function getFrontendBaseUrl(): string {
+    return (
+        process.env.FRONTEND_URL ||
+        process.env.NEXT_PUBLIC_FRONTEND_URL ||
+        'http://localhost:3000'
+    ).replace(/\/$/, '');
+}
+
+function getAdminBookingUrl(bookingId: number): string {
+    return `${getFrontendBaseUrl()}/admin/dashboard/bookings?bookingId=${bookingId}`;
+}
+
+function getPublicCompanyUrl(slug?: string | null): string | null {
+    const normalizedSlug = (slug || '').trim();
+    return normalizedSlug ? `${getFrontendBaseUrl()}/shop/${encodeURIComponent(normalizedSlug)}` : null;
+}
+
+function formatRescheduleDateTimeRange(startAt: Date, endAt: Date, timeZone: string): string {
+    const date = startAt.toLocaleDateString('es-BO', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        timeZone,
+    });
+    const start = startAt.toLocaleTimeString('es-BO', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone,
+    });
+    const end = endAt.toLocaleTimeString('es-BO', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone,
+    });
+    return `${date}, ${start} - ${end}`;
+}
+
+function getBookingDurationMinutes(booking: any): number {
+    const diffMinutes = Math.round((booking.end_at.getTime() - booking.start_at.getTime()) / 60_000);
+    if (diffMinutes > 0) return diffMinutes;
+
+    const serviceDuration = (booking.booking_services || []).reduce((sum: number, bs: any) => {
+        const snapshotDuration = Number(bs.duration_minutes_snapshot);
+        const serviceDuration = Number(bs.service?.duration_minutes);
+        return sum + (Number.isFinite(snapshotDuration) && snapshotDuration > 0
+            ? snapshotDuration
+            : Number.isFinite(serviceDuration) && serviceDuration > 0
+                ? serviceDuration
+                : 0);
+    }, 0);
+
+    return serviceDuration > 0 ? serviceDuration : 30;
+}
+
+function getBookingServiceIds(booking: any): number[] {
+    return Array.from(new Set(
+        (booking.booking_services || [])
+            .map((bs: any) => Number(bs.service_id ?? bs.service?.id))
+            .filter((id: number) => Number.isInteger(id) && id > 0),
+    ));
+}
+
+async function getRequiredSecondaryResourceIds(companyId: number, booking: any): Promise<number[]> {
+    const serviceIds = getBookingServiceIds(booking);
+    const resourceIds = new Set<number>();
+
+    if (booking.secondary_staff_id) {
+        resourceIds.add(booking.secondary_staff_id);
+    }
+
+    if (serviceIds.length === 0) {
+        return Array.from(resourceIds);
+    }
+
+    const requiredResources = await prisma.serviceRequiredResource.findMany({
+        where: {
+            company_id: companyId,
+            service_id: { in: serviceIds },
+            staff_profile: {
+                deleted_at: null,
+                resource_type: { in: ['ROOM', 'EQUIPMENT'] },
+            },
+        },
+        select: {
+            staff_profile_id: true,
+        },
+    });
+
+    for (const resource of requiredResources) {
+        resourceIds.add(resource.staff_profile_id);
+    }
+
+    return Array.from(resourceIds);
+}
+
+async function isResourceAvailableForInterval(params: {
+    companyId: number;
+    resourceId: number;
+    startAt: Date;
+    endAt: Date;
+    timezone: string;
+    label: 'staff' | 'resource';
+}): Promise<{ available: boolean; message?: string; reason?: string }> {
+    const { companyId, resourceId, startAt, endAt, timezone, label } = params;
+    const resourceList = await BookingRepo.getBookableStaff(companyId, resourceId);
+    if (resourceList.length === 0) {
+        return {
+            available: false,
+            reason: 'RESOURCE_NOT_BOOKABLE',
+            message: label === 'staff'
+                ? 'No encontramos el profesor o ya no acepta reservas.'
+                : 'La sala o recurso requerido ya no acepta reservas.',
+        };
+    }
+
+    const resource = resourceList[0];
+    const startInfo = getDateKeyAndMinutesInTimeZone(startAt, timezone);
+    const endInfo = getDateKeyAndMinutesInTimeZone(endAt, timezone);
+
+    if (
+        resource.start_date &&
+        startInfo.dateKey < getDateKeyAndMinutesInTimeZone(new Date(resource.start_date), timezone).dateKey
+    ) {
+        return {
+            available: false,
+            reason: 'RESOURCE_NOT_ACTIVE_YET',
+            message: label === 'staff'
+                ? 'El profesor todavía no está activo para esa fecha.'
+                : 'La sala o recurso todavía no está activo para esa fecha.',
+        };
+    }
+
+    if (
+        resource.end_date &&
+        startInfo.dateKey > getDateKeyAndMinutesInTimeZone(new Date(resource.end_date), timezone).dateKey
+    ) {
+        return {
+            available: false,
+            reason: 'RESOURCE_ENDED',
+            message: label === 'staff'
+                ? 'El profesor no está disponible para esa fecha.'
+                : 'La sala o recurso no está disponible para esa fecha.',
+        };
+    }
+
+    const dayOfWeek = getDayOfWeekFromDateKey(startInfo.dateKey) ?? startAt.getUTCDay();
+    const companyHours = await BookingRepo.getCompanyHourWindowsForDay(companyId, dayOfWeek);
+    const companyWindows = companyHours
+        .filter((window) => !window.is_closed && window.open_time && window.close_time)
+        .map((window) => ({ start_time: window.open_time as string, end_time: window.close_time as string }));
+
+    if (companyWindows.length === 0) {
+        return {
+            available: false,
+            reason: 'COMPANY_CLOSED',
+            message: 'El negocio está cerrado ese día.',
+        };
+    }
+
+    const startMinutes = startInfo.minutes;
+    const endMinutes = endInfo.dateKey === startInfo.dateKey ? endInfo.minutes : 24 * 60;
+    if (!isIntervalWithinWindows(startMinutes, endMinutes, companyWindows)) {
+        return {
+            available: false,
+            reason: 'OUTSIDE_COMPANY_HOURS',
+            message: 'El horario elegido está fuera del horario de atención del negocio.',
+        };
+    }
+
+    const [availabilityCounts, dayAvailability, timeOff, groupCommitments] = await Promise.all([
+        BookingRepo.getStaffAvailabilityCounts(companyId, [resourceId]),
+        BookingRepo.getStaffAvailabilityForDay(companyId, [resourceId], dayOfWeek),
+        BookingRepo.getApprovedStaffTimeOffOverlaps(companyId, [resourceId], startAt, endAt),
+        BookingRepo.getGroupStaffCommitmentsForDateRange(companyId, [resourceId], startAt, endAt),
+    ]);
+
+    const hasCustomSchedule = (availabilityCounts[0]?._count?.id || 0) > 0;
+    if (hasCustomSchedule) {
+        const resourceWindows = dayAvailability.map((slot) => ({
+            start_time: slot.start_time,
+            end_time: slot.end_time,
+        }));
+        if (!isIntervalWithinWindows(startMinutes, endMinutes, resourceWindows)) {
+            return {
+                available: false,
+                reason: 'OUTSIDE_RESOURCE_HOURS',
+                message: label === 'staff'
+                    ? 'El profesor no trabaja en ese día u horario.'
+                    : 'La sala o recurso no está disponible en ese día u horario.',
+            };
+        }
+    }
+
+    if (timeOff.length > 0) {
+        return {
+            available: false,
+            reason: 'RESOURCE_TIME_OFF',
+            message: label === 'staff'
+                ? 'El profesor tiene una ausencia en ese horario.'
+                : 'La sala o recurso está bloqueado en ese horario.',
+        };
+    }
+
+    if (groupCommitments.length > 0) {
+        return {
+            available: false,
+            reason: 'GROUP_COMMITMENT',
+            message: label === 'staff'
+                ? 'El profesor ya está asignado a un evento o clase grupal en ese horario.'
+                : 'La sala o recurso ya está asignado a un evento o clase grupal en ese horario.',
+        };
+    }
+
+    return { available: true };
+}
+
+async function validateRescheduleSlot(params: {
+    companyId: number;
+    bookingId: number;
+    staffId: number;
+    secondaryResourceIds: number[];
+    startAt: Date;
+    endAt: Date;
+    timezone: string;
+}): Promise<RescheduleValidationResult> {
+    const primaryAvailability = await isResourceAvailableForInterval({
+        companyId: params.companyId,
+        resourceId: params.staffId,
+        startAt: params.startAt,
+        endAt: params.endAt,
+        timezone: params.timezone,
+        label: 'staff',
+    });
+
+    if (!primaryAvailability.available) {
+        return {
+            available: false,
+            code: 400,
+            message: primaryAvailability.message || 'El profesor no está disponible en ese horario.',
+            reason: primaryAvailability.reason,
+        };
+    }
+
+    for (const resourceId of params.secondaryResourceIds) {
+        const resourceAvailability = await isResourceAvailableForInterval({
+            companyId: params.companyId,
+            resourceId,
+            startAt: params.startAt,
+            endAt: params.endAt,
+            timezone: params.timezone,
+            label: 'resource',
+        });
+
+        if (!resourceAvailability.available) {
+            return {
+                available: false,
+                code: 400,
+                message: resourceAvailability.message || 'La sala o recurso no está disponible en ese horario.',
+                reason: resourceAvailability.reason,
+            };
+        }
+    }
+
+    const settings = await BookingRepo.getCompanySettings(params.companyId);
+    const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
+    const blockingResourceIds = Array.from(new Set([params.staffId, ...params.secondaryResourceIds]));
+
+    for (const resourceId of blockingResourceIds) {
+        const conflict = await BookingRepo.checkSlotConflictExcludingBooking(
+            params.companyId,
+            resourceId,
+            params.startAt,
+            params.endAt,
+            params.bookingId,
+            bufferMinutes,
+        );
+
+        if (conflict) {
+            return {
+                available: false,
+                code: 409,
+                message: resourceId === params.staffId
+                    ? 'El profesor ya tiene otra reserva en ese horario.'
+                    : 'La sala o recurso requerido ya está reservado en ese horario.',
+                reason: 'BOOKING_CONFLICT',
+                data: {
+                    conflicting_booking_id: conflict.id,
+                    conflicting_start: conflict.start_at,
+                    conflicting_end: conflict.end_at,
+                },
+            };
+        }
+    }
+
+    const groupConflict = await BookingRepo.checkGroupSlotConflict(
+        params.companyId,
+        params.staffId,
+        params.startAt,
+        params.endAt,
+        bufferMinutes,
+    );
+
+    if (groupConflict) {
+        return {
+            available: false,
+            code: 409,
+            message: 'El profesor está bloqueado por una clase o evento grupal en ese horario.',
+            reason: 'GROUP_CONFLICT',
+            data: {
+                conflict_type: groupConflict.type,
+                conflict_id: groupConflict.id,
+                conflict_title: groupConflict.title,
+                conflicting_start: groupConflict.start_at,
+                conflicting_end: groupConflict.end_at,
+            },
+        };
+    }
+
+    return { available: true };
+}
+
+async function buildRescheduleSuggestions(params: {
+    companyId: number;
+    bookingId: number;
+    staffId: number;
+    secondaryResourceIds: number[];
+    durationMinutes: number;
+    preferredStartAt: Date;
+    timezone: string;
+    limit?: number;
+}): Promise<RescheduleSuggestion[]> {
+    const limit = params.limit ?? 6;
+    const settings = await BookingRepo.getCompanySettings(params.companyId);
+    const granularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+    const preferredInfo = getDateKeyAndMinutesInTimeZone(params.preferredStartAt, params.timezone);
+    const now = new Date();
+    const nowInfo = getDateKeyAndMinutesInTimeZone(now, params.timezone);
+    const suggestions: RescheduleSuggestion[] = [];
+    let checkedCandidates = 0;
+    const maxCandidates = 250;
+
+    for (let offset = 0; offset < 14 && suggestions.length < limit && checkedCandidates < maxCandidates; offset += 1) {
+        const dateKey = addDaysToDateString(preferredInfo.dateKey, offset);
+        const dayOfWeek = getDayOfWeekFromDateKey(dateKey);
+        if (dayOfWeek === null) continue;
+
+        const companyHours = await BookingRepo.getCompanyHourWindowsForDay(params.companyId, dayOfWeek);
+        const windows = companyHours
+            .filter((window) => !window.is_closed && window.open_time && window.close_time)
+            .map((window) => ({ start_time: window.open_time as string, end_time: window.close_time as string }));
+
+        const candidateMinutes: number[] = [];
+        for (const window of windows) {
+            const openMinutes = timeToMinutes(window.start_time);
+            const closeMinutes = timeToMinutes(window.end_time);
+            for (
+                let slotMinutes = openMinutes;
+                slotMinutes + params.durationMinutes <= closeMinutes;
+                slotMinutes += granularityMinutes
+            ) {
+                if (dateKey === nowInfo.dateKey && slotMinutes <= nowInfo.minutes) continue;
+                candidateMinutes.push(slotMinutes);
+            }
+        }
+
+        candidateMinutes.sort((a, b) => Math.abs(a - preferredInfo.minutes) - Math.abs(b - preferredInfo.minutes));
+
+        for (const slotMinutes of candidateMinutes) {
+            if (suggestions.length >= limit || checkedCandidates >= maxCandidates) break;
+            checkedCandidates += 1;
+            const time = minutesToTime(slotMinutes);
+            const startAt = parseDateTimeInTimeZone(`${dateKey}T${time}:00`, params.timezone);
+            const endAt = new Date(startAt.getTime() + params.durationMinutes * 60_000);
+
+            const validation = await validateRescheduleSlot({
+                companyId: params.companyId,
+                bookingId: params.bookingId,
+                staffId: params.staffId,
+                secondaryResourceIds: params.secondaryResourceIds,
+                startAt,
+                endAt,
+                timezone: params.timezone,
+            });
+
+            if (!validation.available) continue;
+
+            suggestions.push({
+                date: dateKey,
+                time,
+                start_at: startAt.toISOString(),
+                end_at: endAt.toISOString(),
+            });
+        }
+    }
+
+    return suggestions;
+}
+
+function escapeHtml(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function buildRescheduleEmailHtml(params: {
+    recipientName: string;
+    recipientRole: 'STUDENT' | 'TEACHER';
+    companyName: string;
+    teacherName: string;
+    studentName: string;
+    serviceNames: string[];
+    oldTimeLabel: string;
+    newTimeLabel: string;
+    supportUrl: string | null;
+    companyEmail: string | null;
+    companyPhone: string | null;
+    manageUrl: string;
+}) {
+    const services = params.serviceNames.map((service) => `<li>${escapeHtml(service)}</li>`).join('');
+    const roleMessage = params.recipientRole === 'TEACHER'
+        ? 'Una reserva asignada a tu agenda fue reagendada.'
+        : 'Tu reserva fue reagendada por el negocio.';
+    const supportLines = [
+        params.companyPhone ? `<p><strong>Teléfono:</strong> ${escapeHtml(params.companyPhone)}</p>` : '',
+        params.companyEmail ? `<p><strong>Email:</strong> ${escapeHtml(params.companyEmail)}</p>` : '',
+        params.supportUrl ? `<p><a href="${escapeHtml(params.supportUrl)}">Ver página del negocio</a></p>` : '',
+    ].filter(Boolean).join('');
+
+    return `
+        <h2 style="margin-top:0;">Reserva reagendada</h2>
+        <p>Hola ${escapeHtml(params.recipientName)}, ${roleMessage}</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:16px 0;">
+            <p><strong>Negocio:</strong> ${escapeHtml(params.companyName)}</p>
+            <p><strong>Cliente:</strong> ${escapeHtml(params.studentName)}</p>
+            <p><strong>Profesor:</strong> ${escapeHtml(params.teacherName)}</p>
+            <p><strong>Antes:</strong> ${escapeHtml(params.oldTimeLabel)}</p>
+            <p><strong>Ahora:</strong> ${escapeHtml(params.newTimeLabel)}</p>
+            <p><strong>Servicios:</strong></p>
+            <ul>${services}</ul>
+        </div>
+        ${supportLines ? `<div>${supportLines}</div>` : ''}
+        <p><a href="${escapeHtml(params.manageUrl)}">Ver reserva</a></p>
+    `;
+}
+
+function buildRescheduleWhatsappText(params: {
+    recipientName: string;
+    recipientRole: 'STUDENT' | 'TEACHER';
+    companyName: string;
+    teacherName: string;
+    studentName: string;
+    serviceNames: string[];
+    oldTimeLabel: string;
+    newTimeLabel: string;
+    supportUrl: string | null;
+    companyEmail: string | null;
+    companyPhone: string | null;
+    manageUrl: string;
+}) {
+    const roleMessage = params.recipientRole === 'TEACHER'
+        ? 'Una reserva asignada a tu agenda fue reagendada.'
+        : 'Tu reserva fue reagendada por el negocio.';
+    const supportLines = [
+        params.companyPhone ? `Teléfono: ${params.companyPhone}` : null,
+        params.companyEmail ? `Email: ${params.companyEmail}` : null,
+        params.supportUrl ? `Página: ${params.supportUrl}` : null,
+    ].filter((line): line is string => Boolean(line));
+
+    return [
+        `Hola ${params.recipientName}, ${roleMessage}`,
+        ``,
+        `Negocio: ${params.companyName}`,
+        `Cliente: ${params.studentName}`,
+        `Profesor: ${params.teacherName}`,
+        `Antes: ${params.oldTimeLabel}`,
+        `Ahora: ${params.newTimeLabel}`,
+        `Servicios: ${params.serviceNames.join(', ')}`,
+        ...supportLines,
+        `Ver reserva: ${params.manageUrl}`,
+    ].join('\n');
+}
+
+function makeRescheduleAttemptDraft(params: {
+    recipientType: 'STUDENT' | 'TEACHER';
+    recipientUserId?: string | null;
+    channel: 'EMAIL' | 'WHATSAPP';
+    target?: string | null;
+    enabled: boolean;
+    verified: boolean;
+    skipReasonWhenMissing: string;
+    payload: Prisma.InputJsonValue;
+}): RescheduleNotificationDraft {
+    if (!params.enabled) {
+        return {
+            recipient_type: params.recipientType,
+            recipient_user_id: params.recipientUserId,
+            channel: params.channel,
+            target: params.target,
+            status: 'SKIPPED',
+            reason: 'CHANNEL_DISABLED',
+            payload: params.payload,
+        };
+    }
+
+    if (!params.target || !params.verified) {
+        return {
+            recipient_type: params.recipientType,
+            recipient_user_id: params.recipientUserId,
+            channel: params.channel,
+            target: params.target,
+            status: 'SKIPPED',
+            reason: params.skipReasonWhenMissing,
+            payload: params.payload,
+        };
+    }
+
+    return {
+        recipient_type: params.recipientType,
+        recipient_user_id: params.recipientUserId,
+        channel: params.channel,
+        target: params.target,
+        status: 'PENDING',
+        reason: null,
+        payload: params.payload,
+    };
+}
+
+async function buildRescheduleNotificationDrafts(params: {
+    companyId: number;
+    booking: any;
+    oldStartAt: Date;
+    oldEndAt: Date;
+    newStartAt: Date;
+    newEndAt: Date;
+    timeZone: string;
+}): Promise<{
+    attempts: RescheduleNotificationDraft[];
+    metadata: Prisma.InputJsonValue;
+}> {
+    const [company, settings, canSendTransactionalNotifications, staffProfile] = await Promise.all([
+        prisma.company.findUnique({
+            where: { id: params.companyId },
+            select: {
+                name: true,
+                slug: true,
+                email: true,
+                phone_prefix: true,
+                phone: true,
+            },
+        }),
+        prisma.companySettings.findUnique({
+            where: { company_id: params.companyId },
+            select: {
+                send_email_notifications: true,
+                send_whatsapp_notifications: true,
+            },
+        }),
+        isFeatureEnabledForCompany(params.companyId, 'TRANSACTIONAL_BOOKING_NOTIFICATIONS'),
+        prisma.staffProfile.findFirst({
+            where: {
+                id: params.booking.staff_id,
+                company_id: params.companyId,
+                deleted_at: null,
+            },
+            select: {
+                display_name: true,
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        emailVerified: true,
+                        phoneNumber: true,
+                        phone_prefix: true,
+                        phoneNumberVerified: true,
+                        first_name: true,
+                        name: true,
+                    },
+                },
+            },
+        }),
+    ]);
+
+    const channelEmailEnabled =
+        canSendTransactionalNotifications && (settings?.send_email_notifications ?? true);
+    const channelWhatsappEnabled =
+        canSendTransactionalNotifications && (settings?.send_whatsapp_notifications ?? false);
+    const companyName = company?.name || '';
+    const supportUrl = getPublicCompanyUrl(company?.slug);
+    const companyPhone = buildFullPhone(company?.phone_prefix, company?.phone);
+    const oldTimeLabel = formatRescheduleDateTimeRange(params.oldStartAt, params.oldEndAt, params.timeZone);
+    const newTimeLabel = formatRescheduleDateTimeRange(params.newStartAt, params.newEndAt, params.timeZone);
+    const serviceNames = (params.booking.booking_services || [])
+        .map((bs: any) => bs.service_name_snapshot || bs.service?.name || '')
+        .filter((name: string) => name.trim().length > 0);
+    const studentUser = params.booking.customer?.user;
+    const studentName =
+        studentUser?.first_name && studentUser?.last_name
+            ? `${studentUser.first_name} ${studentUser.last_name}`
+            : studentUser?.name || params.booking.client_name || 'Cliente';
+    const teacherName = staffProfile?.display_name || staffProfile?.user?.name || 'Profesor';
+    const manageUrl = getAdminBookingUrl(params.booking.id);
+
+    const baseTemplate = {
+        companyName,
+        teacherName,
+        studentName,
+        serviceNames,
+        oldTimeLabel,
+        newTimeLabel,
+        supportUrl,
+        companyEmail: normalizeEmail(company?.email),
+        companyPhone,
+        manageUrl,
+    };
+
+    const studentEmail = normalizeEmail(studentUser?.email);
+    const studentPhone = buildFullPhone(studentUser?.phone_prefix, studentUser?.phoneNumber);
+    const teacherEmail = normalizeEmail(staffProfile?.user?.email);
+    const teacherPhone = buildFullPhone(staffProfile?.user?.phone_prefix, staffProfile?.user?.phoneNumber);
+
+    const studentEmailPayload = {
+        subject: `Reserva reagendada - ${companyName}`,
+        html: buildRescheduleEmailHtml({
+            ...baseTemplate,
+            recipientName: studentName,
+            recipientRole: 'STUDENT',
+        }),
+    } as Prisma.InputJsonValue;
+    const studentWhatsappPayload = {
+        text: buildRescheduleWhatsappText({
+            ...baseTemplate,
+            recipientName: studentName,
+            recipientRole: 'STUDENT',
+        }),
+    } as Prisma.InputJsonValue;
+    const teacherEmailPayload = {
+        subject: `Reserva reagendada - ${companyName}`,
+        html: buildRescheduleEmailHtml({
+            ...baseTemplate,
+            recipientName: staffProfile?.user?.first_name || teacherName,
+            recipientRole: 'TEACHER',
+        }),
+    } as Prisma.InputJsonValue;
+    const teacherWhatsappPayload = {
+        text: buildRescheduleWhatsappText({
+            ...baseTemplate,
+            recipientName: staffProfile?.user?.first_name || teacherName,
+            recipientRole: 'TEACHER',
+        }),
+    } as Prisma.InputJsonValue;
+
+    const attempts = canSendTransactionalNotifications
+        ? [
+            makeRescheduleAttemptDraft({
+                recipientType: 'STUDENT',
+                recipientUserId: studentUser?.id,
+                channel: 'EMAIL',
+                target: studentEmail,
+                enabled: channelEmailEnabled,
+                verified: Boolean(studentEmail && studentUser?.emailVerified),
+                skipReasonWhenMissing: studentUser ? 'NO_VERIFIED_EMAIL' : 'NO_LINKED_STUDENT',
+                payload: studentEmailPayload,
+            }),
+            makeRescheduleAttemptDraft({
+                recipientType: 'STUDENT',
+                recipientUserId: studentUser?.id,
+                channel: 'WHATSAPP',
+                target: studentPhone,
+                enabled: channelWhatsappEnabled,
+                verified: Boolean(studentPhone && studentUser?.phoneNumberVerified),
+                skipReasonWhenMissing: studentUser ? 'NO_VERIFIED_PHONE' : 'NO_LINKED_STUDENT',
+                payload: studentWhatsappPayload,
+            }),
+            makeRescheduleAttemptDraft({
+                recipientType: 'TEACHER',
+                recipientUserId: staffProfile?.user?.id,
+                channel: 'EMAIL',
+                target: teacherEmail,
+                enabled: channelEmailEnabled,
+                verified: Boolean(teacherEmail && staffProfile?.user?.emailVerified),
+                skipReasonWhenMissing: staffProfile?.user ? 'NO_VERIFIED_EMAIL' : 'NO_TEACHER_USER',
+                payload: teacherEmailPayload,
+            }),
+            makeRescheduleAttemptDraft({
+                recipientType: 'TEACHER',
+                recipientUserId: staffProfile?.user?.id,
+                channel: 'WHATSAPP',
+                target: teacherPhone,
+                enabled: channelWhatsappEnabled,
+                verified: Boolean(teacherPhone && staffProfile?.user?.phoneNumberVerified),
+                skipReasonWhenMissing: staffProfile?.user ? 'NO_VERIFIED_PHONE' : 'NO_TEACHER_USER',
+                payload: teacherWhatsappPayload,
+            }),
+        ]
+        : [
+            {
+                recipient_type: 'STUDENT',
+                recipient_user_id: studentUser?.id,
+                channel: 'EMAIL',
+                target: studentEmail,
+                status: 'SKIPPED',
+                reason: 'FEATURE_DISABLED',
+                payload: studentEmailPayload,
+            },
+            {
+                recipient_type: 'STUDENT',
+                recipient_user_id: studentUser?.id,
+                channel: 'WHATSAPP',
+                target: studentPhone,
+                status: 'SKIPPED',
+                reason: 'FEATURE_DISABLED',
+                payload: studentWhatsappPayload,
+            },
+            {
+                recipient_type: 'TEACHER',
+                recipient_user_id: staffProfile?.user?.id,
+                channel: 'EMAIL',
+                target: teacherEmail,
+                status: 'SKIPPED',
+                reason: 'FEATURE_DISABLED',
+                payload: teacherEmailPayload,
+            },
+            {
+                recipient_type: 'TEACHER',
+                recipient_user_id: staffProfile?.user?.id,
+                channel: 'WHATSAPP',
+                target: teacherPhone,
+                status: 'SKIPPED',
+                reason: 'FEATURE_DISABLED',
+                payload: teacherWhatsappPayload,
+            },
+        ] as RescheduleNotificationDraft[];
+
+    return {
+        attempts,
+        metadata: {
+            notification_plan_enabled: canSendTransactionalNotifications,
+            send_email_notifications: settings?.send_email_notifications ?? true,
+            send_whatsapp_notifications: settings?.send_whatsapp_notifications ?? false,
+            company_timezone: params.timeZone,
+        } as Prisma.InputJsonValue,
+    };
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+}
+
+function scheduleRescheduleNotificationRetry(attemptId: number, delayMs: number) {
+    const timer = setTimeout(() => {
+        void dispatchRescheduleNotificationAttempt(attemptId);
+    }, delayMs);
+    if (typeof (timer as any).unref === 'function') {
+        (timer as any).unref();
+    }
+}
+
+async function dispatchRescheduleNotificationAttempt(attemptId: number): Promise<void> {
+    const attempt = await prisma.bookingNotificationAttempt.findUnique({
+        where: { id: attemptId },
+        select: {
+            id: true,
+            company_id: true,
+            channel: true,
+            target: true,
+            status: true,
+            attempt_count: true,
+            payload: true,
+        },
+    });
+
+    if (!attempt || attempt.status !== 'PENDING' || !attempt.target) {
+        return;
+    }
+
+    const payload = toRecord(attempt.payload);
+    const now = new Date();
+    let ok = false;
+    let failureReason = 'SEND_FAILED';
+
+    try {
+        if (attempt.channel === 'EMAIL') {
+            const subject = typeof payload?.subject === 'string' ? payload.subject : 'Reserva reagendada';
+            const html = typeof payload?.html === 'string' ? payload.html : '';
+            await sendGenericEmail(attempt.target, subject, html, { companyId: attempt.company_id });
+            ok = true;
+        } else if (attempt.channel === 'WHATSAPP') {
+            const text = typeof payload?.text === 'string' ? payload.text : '';
+            const result = await sendWhatsappText(attempt.target, text, { companyId: attempt.company_id });
+            ok = result !== -1 && typeof result === 'object' && result.status >= 200 && result.status < 300;
+            if (!ok) failureReason = 'WHATSAPP_SEND_FAILED';
+        } else {
+            failureReason = 'UNSUPPORTED_CHANNEL';
+        }
+    } catch (error) {
+        failureReason = attempt.channel === 'EMAIL' ? 'EMAIL_SEND_FAILED' : 'WHATSAPP_SEND_FAILED';
+        logger.warn({ attemptId, channel: attempt.channel, error }, 'Booking reschedule notification attempt failed');
+    }
+
+    const nextAttemptCount = attempt.attempt_count + 1;
+    if (ok) {
+        await prisma.bookingNotificationAttempt.update({
+            where: { id: attempt.id },
+            data: {
+                status: 'SENT',
+                reason: null,
+                attempt_count: nextAttemptCount,
+                last_attempted_at: now,
+                sent_at: now,
+                next_retry_at: null,
+            },
+        });
+        return;
+    }
+
+    const shouldRetry = nextAttemptCount < RESCHEDULE_NOTIFICATION_MAX_ATTEMPTS && failureReason !== 'UNSUPPORTED_CHANNEL';
+    const nextRetryAt = shouldRetry
+        ? new Date(now.getTime() + RESCHEDULE_NOTIFICATION_RETRY_DELAY_MS)
+        : null;
+
+    await prisma.bookingNotificationAttempt.update({
+        where: { id: attempt.id },
+        data: {
+            status: shouldRetry ? 'PENDING' : 'FAILED',
+            reason: failureReason,
+            attempt_count: nextAttemptCount,
+            last_attempted_at: now,
+            next_retry_at: nextRetryAt,
+        },
+    });
+
+    if (shouldRetry) {
+        scheduleRescheduleNotificationRetry(attempt.id, RESCHEDULE_NOTIFICATION_RETRY_DELAY_MS);
+    }
+}
+
+function dispatchRescheduleNotificationAttempts(attemptIds: number[]): void {
+    for (const attemptId of attemptIds) {
+        void dispatchRescheduleNotificationAttempt(attemptId);
+    }
 }
 
 async function resolveAdminCustomer(
@@ -962,6 +1919,310 @@ export async function getBookings(params: {
         };
     } catch (error: any) {
         console.error('Error getting bookings:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+export async function getBookingRescheduleOptions(params: {
+    companyId: number;
+    bookingId: number;
+    date?: string;
+}): Promise<AdminBookingResult> {
+    try {
+        const existingBooking = await AdminBookingRepo.getBookingById(params.bookingId, params.companyId);
+        if (!existingBooking) {
+            return {
+                code: 404,
+                message: 'Booking not found',
+                error: true,
+            };
+        }
+
+        if (!reschedulableStatuses.has(existingBooking.status)) {
+            return {
+                code: 400,
+                message: 'Solo se pueden reagendar reservas pendientes o confirmadas.',
+                error: true,
+            };
+        }
+
+        const company = await BookingRepo.getCompanyById(params.companyId);
+        const timeZone = company?.timezone || 'America/La_Paz';
+        const durationMinutes = getBookingDurationMinutes(existingBooking);
+        const currentDateKey = getDateKeyAndMinutesInTimeZone(existingBooking.start_at, timeZone).dateKey;
+        const dateKey = params.date && parseDateOnlyParts(params.date) ? params.date : currentDateKey;
+        const currentTime = getDateKeyAndMinutesInTimeZone(existingBooking.start_at, timeZone);
+        const preferredStartAt = parseDateTimeInTimeZone(
+            `${dateKey}T${minutesToTime(currentTime.minutes)}:00`,
+            timeZone,
+        );
+        const secondaryResourceIds = await getRequiredSecondaryResourceIds(params.companyId, existingBooking);
+        const suggestions = await buildRescheduleSuggestions({
+            companyId: params.companyId,
+            bookingId: params.bookingId,
+            staffId: existingBooking.staff_id,
+            secondaryResourceIds,
+            durationMinutes,
+            preferredStartAt,
+            timezone: timeZone,
+            limit: 8,
+        });
+
+        return {
+            code: 200,
+            message: 'Reschedule options generated',
+            error: false,
+            data: {
+                timezone: timeZone,
+                duration_minutes: durationMinutes,
+                current_start_at: existingBooking.start_at,
+                current_end_at: existingBooking.end_at,
+                suggestions,
+            },
+        };
+    } catch (error: any) {
+        console.error('Error getting reschedule options:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+
+export async function rescheduleBookingDateTime(
+    bookingId: number,
+    companyId: number,
+    input: {
+        start_at: string;
+        confirm_short_notice?: boolean;
+    },
+    updatedByUserId: string,
+): Promise<AdminBookingResult> {
+    try {
+        const existingBooking = await AdminBookingRepo.getBookingById(bookingId, companyId);
+        if (!existingBooking) {
+            return {
+                code: 404,
+                message: 'Booking not found',
+                error: true,
+            };
+        }
+
+        if (!reschedulableStatuses.has(existingBooking.status)) {
+            return {
+                code: 400,
+                message: 'Solo se pueden reagendar reservas pendientes o confirmadas.',
+                error: true,
+            };
+        }
+
+        const now = new Date();
+        if (existingBooking.start_at.getTime() < now.getTime()) {
+            return {
+                code: 400,
+                message: 'No se puede reagendar una reserva que ya empezó o está en el pasado.',
+                error: true,
+            };
+        }
+
+        const company = await BookingRepo.getCompanyById(companyId);
+        const timeZone = company?.timezone || 'America/La_Paz';
+        const startAt = parseDateTimeInTimeZone(input.start_at, timeZone);
+
+        if (isNaN(startAt.getTime())) {
+            return {
+                code: 400,
+                message: 'Invalid date format for start_at',
+                error: true,
+            };
+        }
+
+        if (startAt.getTime() <= now.getTime()) {
+            const secondaryResourceIds = await getRequiredSecondaryResourceIds(companyId, existingBooking);
+            const suggestions = await buildRescheduleSuggestions({
+                companyId,
+                bookingId,
+                staffId: existingBooking.staff_id,
+                secondaryResourceIds,
+                durationMinutes: getBookingDurationMinutes(existingBooking),
+                preferredStartAt: now,
+                timezone: timeZone,
+                limit: 6,
+            });
+
+            return {
+                code: 400,
+                message: 'La nueva fecha y hora debe estar en el futuro.',
+                error: true,
+                data: { suggestions },
+            };
+        }
+
+        if (
+            startAt.getTime() - now.getTime() < SHORT_NOTICE_RESCHEDULE_MS &&
+            input.confirm_short_notice !== true
+        ) {
+            const secondaryResourceIds = await getRequiredSecondaryResourceIds(companyId, existingBooking);
+            const suggestions = await buildRescheduleSuggestions({
+                companyId,
+                bookingId,
+                staffId: existingBooking.staff_id,
+                secondaryResourceIds,
+                durationMinutes: getBookingDurationMinutes(existingBooking),
+                preferredStartAt: startAt,
+                timezone: timeZone,
+                limit: 6,
+            });
+
+            return {
+                code: 409,
+                message: 'Esta reserva queda dentro de las próximas 24 horas. Confirma para continuar.',
+                error: true,
+                reason: 'SHORT_NOTICE_CONFIRMATION_REQUIRED',
+                data: {
+                    requires_confirmation: true,
+                    suggestions,
+                },
+            } as AdminBookingResult & { reason: string };
+        }
+
+        if (startAt.getTime() === existingBooking.start_at.getTime()) {
+            return {
+                code: 400,
+                message: 'La reserva ya está en esa fecha y hora.',
+                error: true,
+            };
+        }
+
+        const durationMinutes = getBookingDurationMinutes(existingBooking);
+        const endAt = new Date(startAt.getTime() + durationMinutes * 60_000);
+        const secondaryResourceIds = await getRequiredSecondaryResourceIds(companyId, existingBooking);
+        const validation = await validateRescheduleSlot({
+            companyId,
+            bookingId,
+            staffId: existingBooking.staff_id,
+            secondaryResourceIds,
+            startAt,
+            endAt,
+            timezone: timeZone,
+        });
+
+        if (!validation.available) {
+            const suggestions = await buildRescheduleSuggestions({
+                companyId,
+                bookingId,
+                staffId: existingBooking.staff_id,
+                secondaryResourceIds,
+                durationMinutes,
+                preferredStartAt: startAt,
+                timezone: timeZone,
+                limit: 6,
+            });
+
+            return {
+                code: validation.code,
+                message: validation.message,
+                error: true,
+                data: {
+                    ...(validation.data || {}),
+                    reason: validation.reason,
+                    suggestions,
+                },
+            };
+        }
+
+        const notificationDrafts = await buildRescheduleNotificationDrafts({
+            companyId,
+            booking: existingBooking,
+            oldStartAt: existingBooking.start_at,
+            oldEndAt: existingBooking.end_at,
+            newStartAt: startAt,
+            newEndAt: endAt,
+            timeZone,
+        });
+
+        const transactionResult = await prisma.$transaction(async (tx) => {
+            await tx.booking.update({
+                where: { id: bookingId },
+                data: {
+                    start_at: startAt,
+                    end_at: endAt,
+                    updated_by_user_id: updatedByUserId,
+                },
+            });
+
+            const auditLog = await tx.bookingAuditLog.create({
+                data: {
+                    company_id: companyId,
+                    booking_id: bookingId,
+                    action: 'RESCHEDULE',
+                    actor_user_id: updatedByUserId,
+                    old_start_at: existingBooking.start_at,
+                    old_end_at: existingBooking.end_at,
+                    new_start_at: startAt,
+                    new_end_at: endAt,
+                    metadata: {
+                        ...(notificationDrafts.metadata as Record<string, unknown>),
+                        short_notice_confirmed: input.confirm_short_notice === true,
+                        secondary_resource_ids: secondaryResourceIds,
+                    } as Prisma.InputJsonValue,
+                    notification_attempts: {
+                        create: notificationDrafts.attempts.map((attempt) => ({
+                            company_id: companyId,
+                            booking_id: bookingId,
+                            event: 'RESCHEDULE',
+                            recipient_type: attempt.recipient_type,
+                            recipient_user_id: attempt.recipient_user_id,
+                            channel: attempt.channel,
+                            target: attempt.target,
+                            status: attempt.status,
+                            reason: attempt.reason,
+                            payload: attempt.payload,
+                        })),
+                    },
+                },
+                include: {
+                    notification_attempts: {
+                        select: { id: true, status: true },
+                    },
+                },
+            });
+
+            return {
+                auditLogId: auditLog.id,
+                pendingAttemptIds: auditLog.notification_attempts
+                    .filter((attempt) => attempt.status === 'PENDING')
+                    .map((attempt) => attempt.id),
+                notificationAttemptCount: auditLog.notification_attempts.length,
+            };
+        });
+
+        dispatchRescheduleNotificationAttempts(transactionResult.pendingAttemptIds);
+
+        const updatedBooking = await AdminBookingRepo.getBookingById(bookingId, companyId);
+
+        return {
+            code: 200,
+            message: 'Booking rescheduled successfully',
+            error: false,
+            data: {
+                booking: updatedBooking,
+                audit_log_id: transactionResult.auditLogId,
+                notification_attempts: {
+                    total: transactionResult.notificationAttemptCount,
+                    queued: transactionResult.pendingAttemptIds.length,
+                },
+            },
+        };
+    } catch (error: any) {
+        console.error('Error rescheduling booking:', error);
         return {
             code: 500,
             message: 'Internal server error',

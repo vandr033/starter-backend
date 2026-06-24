@@ -324,6 +324,38 @@ export async function checkSlotConflict(
 }
 
 /**
+ * Check for a staff/resource conflict while ignoring the booking being moved.
+ */
+export async function checkSlotConflictExcludingBooking(
+    companyId: number,
+    staffId: number,
+    startAt: Date,
+    endAt: Date,
+    excludeBookingId: number,
+    bufferMinutes: number = 0
+) {
+    const endWithBuffer = new Date(endAt.getTime() + bufferMinutes * 60 * 1000);
+
+    return prisma.booking.findFirst({
+        where: {
+            id: { not: excludeBookingId },
+            company_id: companyId,
+            status: { in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+            deleted_at: null,
+            OR: [
+                { staff_id: staffId },
+                { secondary_staff_id: staffId },
+            ],
+            AND: [
+                { start_at: { lt: endWithBuffer } },
+                { end_at: { gt: startAt } },
+            ],
+        },
+        select: { id: true, start_at: true, end_at: true },
+    });
+}
+
+/**
  * Check if a customer already has another booking overlapping the requested slot.
  */
 export async function checkCustomerSlotConflict(

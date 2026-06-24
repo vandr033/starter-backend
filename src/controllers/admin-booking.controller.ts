@@ -255,6 +255,104 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
 }
 
 /**
+ * GET /api/admin/bookings/:id/reschedule-options
+ * Suggest valid date/time alternatives for an existing booking
+ */
+export async function getRescheduleOptions(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const bookingId = parseInt(req.params.id as string);
+
+    if (!companyId) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        });
+    }
+
+    if (isNaN(bookingId)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Invalid booking ID',
+            error: true,
+        });
+    }
+
+    const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+    const result = await AdminBookingService.getBookingRescheduleOptions({
+        companyId,
+        bookingId,
+        date,
+    });
+
+    return res.status(result.code).json(result);
+}
+
+/**
+ * POST /api/admin/bookings/:id/reschedule
+ * Change only the start date/time of a booking
+ */
+export async function rescheduleBooking(req: AuthenticatedRequest, res: Response) {
+    const companyId = (req as any).companyID;
+    const bookingId = parseInt(req.params.id as string);
+    const userId = req.authUser?.id;
+
+    if (!companyId) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Company context not found',
+            error: true,
+        });
+    }
+
+    if (isNaN(bookingId)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'Invalid booking ID',
+            error: true,
+        });
+    }
+
+    if (!userId) {
+        return res.status(401).json({ code: 401, error: true, message: 'Unauthorized' });
+    }
+
+    const startAt = typeof req.body?.start_at === 'string' ? req.body.start_at : '';
+    if (!startAt.trim()) {
+        return res.status(400).json({
+            code: 400,
+            message: 'start_at is required',
+            error: true,
+        });
+    }
+
+    const result = await AdminBookingService.rescheduleBookingDateTime(
+        bookingId,
+        companyId,
+        {
+            start_at: startAt,
+            confirm_short_notice: req.body?.confirm_short_notice === true,
+        },
+        userId,
+    );
+
+    if (!result.error && result.data?.booking) {
+        return res.status(result.code).json({
+            code: result.code,
+            message: result.message,
+            error: false,
+            data: {
+                booking: transformAdminBooking(result.data.booking),
+                audit_log_id: result.data.audit_log_id,
+                notification_attempts: result.data.notification_attempts,
+            },
+        });
+    }
+
+    return res.status(result.code).json(result);
+}
+
+/**
  * POST /api/admin/bookings
  * Create booking on behalf of customer (for walk-ins)
  */

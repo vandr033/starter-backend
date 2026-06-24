@@ -43,6 +43,8 @@ model Company {
   availableUntil                        DateTime                           @default(dbgenerated("'2027-03-12 23:59:59.000'")) @map("available_until")
   isMarketplaceVisible                  Boolean                            @default(true) @map("is_marketplace_visible")
   bookings                              Booking[]
+  booking_audit_logs                    BookingAuditLog[]
+  booking_notification_attempts         BookingNotificationAttempt[]
   booking_discounts                     BookingDiscount[]
   booking_services                      BookingService[]
   categories                            Category[]
@@ -611,6 +613,8 @@ model Booking {
   secondary_staff     StaffProfile?     @relation("BookingSecondaryStaff", fields: [secondary_staff_id], references: [id])
   updated_by          User?             @relation("BookingUpdatedBy", fields: [updated_by_user_id], references: [id])
   booking_discounts   BookingDiscount[]
+  audit_logs          BookingAuditLog[]
+  notification_attempts BookingNotificationAttempt[]
   booking_services    BookingService[]
   booking_review      Review?
 
@@ -624,6 +628,56 @@ model Booking {
   @@index([customer_id], map: "booking_customer_id_fkey")
   @@index([updated_by_user_id], map: "booking_updated_by_user_id_fkey")
   @@map("booking")
+}
+
+model BookingAuditLog {
+  id                    Int                          @id @default(autoincrement())
+  company_id            Int
+  booking_id            Int
+  action                String                       @db.VarChar(64)
+  actor_user_id         String?                      @db.VarChar(191)
+  old_start_at          DateTime?
+  old_end_at            DateTime?
+  new_start_at          DateTime?
+  new_end_at            DateTime?
+  metadata              Json?
+  created_at            DateTime                     @default(now())
+  booking               Booking                      @relation(fields: [booking_id], references: [id])
+  company               Company                      @relation(fields: [company_id], references: [id])
+  notification_attempts BookingNotificationAttempt[]
+
+  @@index([company_id, booking_id, created_at], map: "booking_audit_company_booking_created_idx")
+  @@index([actor_user_id], map: "booking_audit_actor_user_id_idx")
+  @@map("booking_audit_log")
+}
+
+model BookingNotificationAttempt {
+  id                 Int              @id @default(autoincrement())
+  company_id         Int
+  booking_id         Int
+  audit_log_id       Int?
+  event              String           @db.VarChar(64)
+  recipient_type     String           @db.VarChar(32)
+  recipient_user_id  String?          @db.VarChar(191)
+  channel            String           @db.VarChar(16)
+  target             String?          @db.VarChar(255)
+  status             String           @default("PENDING") @db.VarChar(32)
+  reason             String?          @db.VarChar(255)
+  attempt_count      Int              @default(0)
+  next_retry_at      DateTime?
+  last_attempted_at  DateTime?
+  sent_at            DateTime?
+  payload            Json?
+  created_at         DateTime         @default(now())
+  updated_at         DateTime         @updatedAt
+  audit_log          BookingAuditLog? @relation(fields: [audit_log_id], references: [id])
+  booking            Booking          @relation(fields: [booking_id], references: [id])
+  company            Company          @relation(fields: [company_id], references: [id])
+
+  @@index([company_id, booking_id, created_at], map: "booking_notification_company_booking_idx")
+  @@index([status, next_retry_at], map: "booking_notification_status_retry_idx")
+  @@index([audit_log_id], map: "booking_notification_audit_log_idx")
+  @@map("booking_notification_attempt")
 }
 
 model BookingGroup {
