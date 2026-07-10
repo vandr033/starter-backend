@@ -14,6 +14,7 @@ function transformAdminBooking(booking: any) {
         status: getBookingLifecycleStatus(booking.status, booking.notes),
         start_at: booking.start_at,
         end_at: booking.end_at,
+        created_at: booking.created_at,
         customer: booking.customer ? {
             id: booking.customer.id,
             full_name: booking.customer.user?.first_name && booking.customer.user?.last_name
