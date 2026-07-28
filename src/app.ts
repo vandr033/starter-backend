@@ -62,6 +62,8 @@ const bookingAvailabilityPaths = new Set([
   "/api/booking/available-dates",
   "/api/booking/slots",
 ]);
+const restaurantAvailabilityPathPattern = /^\/api\/restaurant\/public\/[^/]+\/availability$/;
+const restaurantPublicWritePattern = /^\/api\/restaurant\/public\/(?:[^/]+\/reservations|reservations\/[^/]+\/cancel)$/;
 
 const bookingWritePathPattern = /^\/api\/booking(?:\/public|\/customer|\/\d+(?:\/cancel)?)?$/;
 
@@ -116,7 +118,7 @@ app.use(
   cors({
     origin: buildCorsOrigins(),
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
@@ -126,7 +128,7 @@ app.use(helmet({
 }));
 
 app.use((req, res, next) => {
-  if (req.method === "GET" && bookingAvailabilityPaths.has(req.path)) {
+  if (req.method === "GET" && (bookingAvailabilityPaths.has(req.path) || restaurantAvailabilityPathPattern.test(req.path))) {
     return bookingAvailabilityLimiter(req, res, next);
   }
 
@@ -136,7 +138,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (
     (req.method === "POST" || req.method === "PUT" || req.method === "DELETE")
-    && bookingWritePathPattern.test(req.path)
+    && (bookingWritePathPattern.test(req.path) || restaurantPublicWritePattern.test(req.path))
   ) {
     return bookingWriteLimiter(req, res, next);
   }

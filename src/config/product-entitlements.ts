@@ -113,6 +113,16 @@ export const PRODUCT_CATALOG_SEED: ProductCatalogSeedDefinition[] = [
         sortOrder: 35,
     },
     {
+        code: PrismaProductCode.RESTAURANTE,
+        name: 'Restaurante',
+        description: 'Table reservations, dining areas, service periods, and digital menus.',
+        category: 'CORE_PRODUCT',
+        isCoreProduct: true,
+        isAddon: false,
+        isActive: true,
+        sortOrder: 37,
+    },
+    {
         code: PrismaProductCode.PERSONALIZACION,
         name: 'Personalizacion',
         description: 'Storefront branding and layout controls.',
@@ -260,6 +270,17 @@ export const PRODUCT_TIER_SEED: ProductTierSeedDefinition[] = [
         isPro: true,
         isActive: true,
         sortOrder: 68,
+    },
+    {
+        productCode: PrismaProductCode.RESTAURANTE,
+        code: PrismaProductTierCode.RESTAURANTE_PRO,
+        name: 'Restaurante Pro',
+        description: 'Table reservations, dining areas, service periods, daily operations, and digital menus.',
+        tierLevel: 2,
+        isBase: false,
+        isPro: true,
+        isActive: true,
+        sortOrder: 69,
     },
     {
         productCode: PrismaProductCode.PERSONALIZACION,
@@ -428,6 +449,10 @@ const PRODUCT_TIER_RUNTIME_DEFINITIONS: ProductTierRuntimeDefinition[] = [
         ],
     },
     {
+        ...PRODUCT_TIER_SEED.find((tier) => tier.code === PrismaProductTierCode.RESTAURANTE_PRO)!,
+        includedCapabilities: [PrismaProductCapabilityCode.RESTAURANT_MODULE],
+    },
+    {
         ...PRODUCT_TIER_SEED.find((tier) => tier.code === PrismaProductTierCode.PERSONALIZACION_BASE)!,
         includedCapabilities: [PrismaProductCapabilityCode.PERSONALIZACION_BASE],
     },
@@ -555,6 +580,9 @@ export const LEGACY_PLAN_EXTRA_CAPABILITIES: Record<ShopPlan, ProductCapability[
 };
 
 export const LEGACY_FEATURE_REQUIREMENTS: Record<PlanFeatureKey, CapabilityRequirement> = {
+    RESTAURANT_MODULE: {
+        allOf: [PrismaProductCapabilityCode.RESTAURANT_MODULE],
+    },
     ROLES_PERMISSIONS: {
         anyOf: [
             PrismaProductCapabilityCode.RESERVAS_BASE,

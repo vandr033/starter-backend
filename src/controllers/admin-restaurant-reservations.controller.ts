@@ -1,0 +1,19 @@
+import { Response } from 'express';
+import { AuthenticatedRequest } from '../middlewares/requireAuth';
+import * as Reservations from '../services/restaurant-reservation.service';
+import * as Operations from '../services/restaurant-operations.service';
+import * as Notifications from '../services/restaurant-notification.service';
+import * as Metrics from '../services/restaurant-metrics.service';
+function companyId(req: AuthenticatedRequest, res: Response) { const id = (req as any).companyID as number | undefined; if (!id) { res.status(400).json({ code: 400, error: true, message: 'No encontramos el contexto de la empresa.' }); return null; } return id; }
+function id(value: string | string[] | undefined) { const parsed = Number(Array.isArray(value) ? value[0] : value); return Number.isInteger(parsed) && parsed > 0 ? parsed : null; }
+async function respond(res: Response, work: Promise<any>) { const result = await work; return res.status(result.code).json(result); }
+export async function list(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res); if (cid) return respond(res, Reservations.listReservations(cid, (req as any).validatedQuery)); }
+export async function create(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res); if (cid) return respond(res, Reservations.createReservation(cid, req.authUser.id, (req as any).validated)); }
+export async function get(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res), recordId = id(req.params.id); if (!cid) return; if (!recordId) return res.status(400).json({ code: 400, error: true, message: 'ID inválido.' }); return respond(res, Reservations.getReservation(cid, recordId)); }
+export async function update(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res), recordId = id(req.params.id); if (!cid) return; if (!recordId) return res.status(400).json({ code: 400, error: true, message: 'ID inválido.' }); return respond(res, Reservations.updateReservation(cid, recordId, (req as any).validated)); }
+export async function status(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res), recordId = id(req.params.id); if (!cid) return; if (!recordId) return res.status(400).json({ code: 400, error: true, message: 'ID inválido.' }); const input = (req as any).validated; return respond(res, Reservations.changeStatus(cid, recordId, input.status, input.reason)); }
+export async function assignTable(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res), recordId = id(req.params.id); if (!cid) return; if (!recordId) return res.status(400).json({ code: 400, error: true, message: 'ID inválido.' }); return respond(res, Reservations.assignTable(cid, recordId, (req as any).validated)); }
+export async function dashboard(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res); if (cid) return respond(res, Operations.dashboard(cid)); }
+export async function resendConfirmation(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res), recordId = id(req.params.id); if (!cid) return; if (!recordId) return res.status(400).json({ code: 400, error: true, message: 'ID inválido.' }); return respond(res, Notifications.resendRestaurantReservationConfirmation(cid, recordId)); }
+export async function notificationHistory(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res), recordId = id(req.params.id); if (!cid) return; if (!recordId) return res.status(400).json({ code: 400, error: true, message: 'ID inválido.' }); return respond(res, Notifications.listRestaurantNotificationHistory(cid, recordId)); }
+export async function metrics(req: AuthenticatedRequest, res: Response) { const cid = companyId(req, res); if (cid) return respond(res, Metrics.restaurantMetrics(cid, (req as any).validatedQuery)); }

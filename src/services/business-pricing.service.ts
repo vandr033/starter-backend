@@ -276,9 +276,35 @@ function buildFallbackPublicPricingResponse(): PublicBusinessPricingResponse {
     };
 }
 
+/**
+ * Older long-running servers could seed the new Restaurant record before their
+ * Prisma client had the RESTAURANTE enum value. MySQL then stored an empty enum
+ * value, which Prisma rightfully refuses to deserialize. Repair it before any
+ * typed read so pricing can recover even before the data migration is applied.
+ */
+async function repairInvalidRestaurantPricingProduct(
+    db: BusinessPricingDbClient,
+): Promise<void> {
+    await db.$executeRaw`
+        DELETE invalid_product
+        FROM business_pricing_product AS invalid_product
+        INNER JOIN business_pricing_product AS restaurant_product
+          ON restaurant_product.product_key = 'RESTAURANTE'
+        WHERE invalid_product.product_key = ''
+    `;
+
+    await db.$executeRaw`
+        UPDATE business_pricing_product
+        SET product_key = 'RESTAURANTE'
+        WHERE product_key = ''
+    `;
+}
+
 export async function ensureBusinessPricingDefaults(
     db: BusinessPricingDbClient = prisma,
 ): Promise<void> {
+    await repairInvalidRestaurantPricingProduct(db);
+
     const existingProducts = await db.businessPricingProduct.findMany({
         select: {
             productKey: true,

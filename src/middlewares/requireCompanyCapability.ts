@@ -11,6 +11,7 @@ const DEFAULT_PUBLIC_MESSAGES: Record<ProductCapability, string> = {
   EVENTOS_PRO: 'Requiere Eventos Pro.',
   CLASES_BASE: 'Este negocio no tiene Clases activas.',
   CLASES_PRO: 'Requiere Clases Pro.',
+  RESTAURANT_MODULE: 'Este negocio no tiene Restaurante activo.',
   COMMERCE_ACCESS: 'Este negocio no tiene Tienda activa.',
   COMMERCE_PRODUCTS: 'Este negocio no tiene Tienda activa.',
   COMMERCE_CATEGORIES: 'Este negocio no tiene Tienda activa.',

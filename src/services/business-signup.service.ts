@@ -355,6 +355,9 @@ export async function signUpBusiness(
         ...mapCoreSelectionsToCommercialProducts(selectableCoreSelections, trialEndsAt),
         ...mapAddOnsToCommercialProducts(supportedAddOns, trialEndsAt),
     ];
+    const restaurantSelected = selectableCoreSelections.some(
+        (selection) => selection.productKey === 'RESTAURANTE',
+    );
     const normalizedCommercialConfig = normalizeCommercialConfiguration({
         activeProducts,
         requestedProducts: [],
@@ -403,6 +406,18 @@ export async function signUpBusiness(
                 note: 'Negocio creado desde /negocios/crear-cuenta',
                 subscriptionStatus: CompanyProductSubscriptionStatus.TRIALING,
             });
+
+            if (restaurantSelected) {
+                await tx.company.update({
+                    where: { id: company.id },
+                    data: { restaurant_enabled: true },
+                });
+                await tx.restaurantSettings.upsert({
+                    where: { company_id: company.id },
+                    create: { company_id: company.id },
+                    update: {},
+                });
+            }
 
             if (syncedCommercialConfig.legacyPlan !== company.plan) {
                 await tx.company.update({

@@ -1,0 +1,43 @@
+CREATE TABLE `restaurant_menu_category` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `company_id` INTEGER NOT NULL,
+  `name` VARCHAR(120) NOT NULL,
+  `description` VARCHAR(500) NULL,
+  `image_url` VARCHAR(512) NULL,
+  `sort_order` INTEGER NOT NULL DEFAULT 0,
+  `is_active` BOOLEAN NOT NULL DEFAULT true,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL,
+  UNIQUE INDEX `restaurant_menu_category_company_name_key`(`company_id`, `name`),
+  INDEX `restaurant_menu_category_company_id_idx`(`company_id`),
+  INDEX `restaurant_menu_category_company_sort_idx`(`company_id`, `sort_order`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `restaurant_menu_category_company_id_fkey` FOREIGN KEY (`company_id`) REFERENCES `company`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+CREATE TABLE `restaurant_menu_item` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `company_id` INTEGER NOT NULL,
+  `category_id` INTEGER NOT NULL,
+  `name` VARCHAR(160) NOT NULL,
+  `description` VARCHAR(2000) NULL,
+  `price` DECIMAL(10, 2) NOT NULL,
+  `image_url` VARCHAR(512) NULL,
+  `is_active` BOOLEAN NOT NULL DEFAULT true,
+  `is_available` BOOLEAN NOT NULL DEFAULT true,
+  `is_featured` BOOLEAN NOT NULL DEFAULT false,
+  `sort_order` INTEGER NOT NULL DEFAULT 0,
+  `preparation_minutes` INTEGER NULL,
+  `allergens` JSON NULL,
+  `dietary_labels` JSON NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL,
+  INDEX `restaurant_menu_item_company_id_idx`(`company_id`),
+  INDEX `restaurant_menu_item_category_id_idx`(`category_id`),
+  INDEX `restaurant_menu_item_public_idx`(`company_id`, `is_active`, `is_available`),
+  INDEX `restaurant_menu_item_featured_idx`(`company_id`, `is_featured`),
+  INDEX `restaurant_menu_item_category_sort_idx`(`category_id`, `sort_order`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `restaurant_menu_item_company_id_fkey` FOREIGN KEY (`company_id`) REFERENCES `company`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `restaurant_menu_item_category_id_fkey` FOREIGN KEY (`category_id`) REFERENCES `restaurant_menu_category`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+);

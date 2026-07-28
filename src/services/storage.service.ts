@@ -59,6 +59,14 @@ export class StorageService {
     return path.join(this.getCompanyPath(companyId), 'group-classes');
   }
 
+  static getCompanyRestaurantMenuPath(companyId: number, kind: 'items' | 'categories'): string {
+    return path.join(this.getCompanyPath(companyId), 'restaurant-menu', kind);
+  }
+
+  static getCompanyRestaurantDepositProofsPath(companyId: number): string {
+    return path.join(this.getCompanyPath(companyId), 'restaurant-deposit-proofs');
+  }
+
   static async ensureCompanyDirectories(companyId: number): Promise<void> {
     const companyPath = this.getCompanyPath(companyId);
     
@@ -75,6 +83,9 @@ export class StorageService {
     await fs.mkdir(this.getCompanyCommercePaymentProofsPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGroupEventsPath(companyId), { recursive: true });
     await fs.mkdir(this.getCompanyGroupClassesPath(companyId), { recursive: true });
+    await fs.mkdir(this.getCompanyRestaurantMenuPath(companyId, 'items'), { recursive: true });
+    await fs.mkdir(this.getCompanyRestaurantMenuPath(companyId, 'categories'), { recursive: true });
+    await fs.mkdir(this.getCompanyRestaurantDepositProofsPath(companyId), { recursive: true });
   }
 
   static async saveFile(
@@ -91,7 +102,10 @@ export class StorageService {
       | 'commerce-products'
       | 'commerce-payment-proofs'
       | 'group-events'
-      | 'group-classes',
+      | 'group-classes'
+      | 'restaurant-menu-items'
+      | 'restaurant-menu-categories'
+      | 'restaurant-deposit-proofs',
     filename: string,
     buffer: Buffer
   ): Promise<string> {
@@ -146,6 +160,15 @@ export class StorageService {
         break;
       case 'group-classes':
         directory = this.getCompanyGroupClassesPath(companyId);
+        break;
+      case 'restaurant-menu-items':
+        directory = this.getCompanyRestaurantMenuPath(companyId, 'items');
+        break;
+      case 'restaurant-menu-categories':
+        directory = this.getCompanyRestaurantMenuPath(companyId, 'categories');
+        break;
+      case 'restaurant-deposit-proofs':
+        directory = this.getCompanyRestaurantDepositProofsPath(companyId);
         break;
       default:
         throw new Error(`Invalid storage type: ${type}`);

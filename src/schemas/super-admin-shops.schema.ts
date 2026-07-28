@@ -54,6 +54,7 @@ function tierBelongsToProduct(
   if (productCode === 'EVENTOS') return tierCode === 'EVENTOS_BASE' || tierCode === 'EVENTOS_PRO';
   if (productCode === 'CLASES') return tierCode === 'CLASES_BASE' || tierCode === 'CLASES_PRO';
   if (productCode === 'STORES') return tierCode === 'STORES_BASE' || tierCode === 'STORES_PRO';
+  if (productCode === 'RESTAURANTE') return tierCode === 'RESTAURANTE_PRO';
   if (productCode === 'PERSONALIZACION') {
     return tierCode === 'PERSONALIZACION_BASE' || tierCode === 'PERSONALIZACION_PLUS';
   }
@@ -71,7 +72,8 @@ function isCoreProduct(productCode: z.infer<typeof productCodeSchema>): boolean 
     productCode === 'RESERVAS' ||
     productCode === 'EVENTOS' ||
     productCode === 'CLASES' ||
-    productCode === 'STORES'
+    productCode === 'STORES' ||
+    productCode === 'RESTAURANTE'
   );
 }
 
@@ -79,6 +81,7 @@ function validateProductConfiguration(
   data: {
     activeProducts?: Array<z.infer<typeof activeProductSchema>>;
     requestedProducts?: Array<z.infer<typeof requestedProductSchema>>;
+    restaurantEnabled?: boolean;
   },
   ctx: z.RefinementCtx,
 ) {
@@ -142,6 +145,20 @@ function validateProductConfiguration(
         message: 'at least one core product is required',
       });
     }
+  }
+
+  if (
+    data.restaurantEnabled &&
+    data.activeProducts !== undefined &&
+    !activeProducts.some(
+      (product) => product.productCode === 'RESTAURANTE' && product.tierCode === 'RESTAURANTE_PRO',
+    )
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['restaurantEnabled'],
+      message: 'Restaurant Lite requires an active Restaurante product',
+    });
   }
 }
 
@@ -210,6 +227,7 @@ export const createSuperAdminShopSchema = z
     isMarketplaceVisible: z.boolean(),
     activeProducts: z.array(activeProductSchema).optional(),
     requestedProducts: z.array(requestedProductSchema).optional(),
+    restaurantEnabled: z.boolean().optional(),
     note: z.string().trim().max(500).optional(),
     owner: ownerSchema,
   })
@@ -240,6 +258,7 @@ export const updateSuperAdminShopSchema = z
     isMarketplaceVisible: z.boolean().optional(),
     activeProducts: z.array(activeProductSchema).optional(),
     requestedProducts: z.array(requestedProductSchema).optional(),
+    restaurantEnabled: z.boolean().optional(),
     note: z.string().trim().max(500).optional(),
   })
   .superRefine((data, ctx) => validateProductConfiguration(data, ctx))

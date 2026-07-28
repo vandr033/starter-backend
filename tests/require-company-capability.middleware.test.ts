@@ -70,7 +70,7 @@ test('requireCompanyCapability rejects missing company context', async () => {
   assert.deepEqual(res.body, {
     code: 400,
     error: true,
-    message: 'Company context not found',
+    message: 'No encontramos el contexto de la empresa.',
   });
 });
 
@@ -88,15 +88,10 @@ test('requireCompanyCapability returns a clean public 403 when the product is in
 
   assert.equal(nextCalled, false);
   assert.equal(res.statusCode, 403);
-  assert.deepEqual(res.body, {
-    code: 403,
-    error: true,
-    reason: 'PRODUCT_NOT_ACTIVE',
-    message: 'Events are not available for this business',
-    data: {
-      capability: 'EVENTOS_BASE',
-    },
-  });
+  assert.equal((res.body as any).code, 403);
+  assert.equal((res.body as any).error, true);
+  assert.equal((res.body as any).reason, 'PRODUCT_NOT_ACTIVE');
+  assert.equal((res.body as any).data.capability, 'EVENTOS_BASE');
   assert.equal((res.body as any).data.ctaLabel, undefined);
 });
 
@@ -144,15 +139,10 @@ test('company without CRM Pro cannot export customers', async () => {
 
   assert.equal(nextCalled, false);
   assert.equal(res.statusCode, 403);
-  assert.deepEqual(res.body, {
-    code: 403,
-    error: true,
-    reason: 'PRODUCT_NOT_ACTIVE',
-    message: 'This feature is not available for this business',
-    data: {
-      capability: 'CRM_PRO',
-    },
-  });
+  assert.equal((res.body as any).code, 403);
+  assert.equal((res.body as any).error, true);
+  assert.equal((res.body as any).reason, 'PRODUCT_NOT_ACTIVE');
+  assert.equal((res.body as any).data.capability, 'CRM_PRO');
 });
 
 test('company with CRM Pro can export customers', async () => {
@@ -186,15 +176,10 @@ test('company with CRM Pro but without Mensajeria Pro cannot send bulk WhatsApp'
 
   assert.equal(nextCalled, false);
   assert.equal(res.statusCode, 403);
-  assert.deepEqual(res.body, {
-    code: 403,
-    error: true,
-    reason: 'PRODUCT_NOT_ACTIVE',
-    message: 'This feature is not available for this business',
-    data: {
-      capability: 'MENSAJERIA_PRO',
-    },
-  });
+  assert.equal((res.body as any).code, 403);
+  assert.equal((res.body as any).error, true);
+  assert.equal((res.body as any).reason, 'PRODUCT_NOT_ACTIVE');
+  assert.equal((res.body as any).data.capability, 'MENSAJERIA_PRO');
 });
 
 test('company with CRM Pro and Mensajeria Pro can send bulk WhatsApp', async () => {

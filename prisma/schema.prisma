@@ -8,90 +8,99 @@ datasource db {
 }
 
 model Company {
-  id                                    Int                                @id @default(autoincrement())
-  slug                                  String                             @unique @db.VarChar(64)
-  name                                  String
-  address                               String?                            @db.VarChar(255)
-  phone_prefix                          String                             @default("591") @db.VarChar(8)
-  phone                                 String                             @db.VarChar(32)
-  email                                 String?
-  google_maps_url                       String?                            @db.VarChar(512)
-  timezone                              String                             @db.VarChar(64)
-  currency                              String                             @default("Bs.") @db.VarChar(3)
-  logo_url                              String?                            @db.VarChar(512)
-  home_hero_image_url                   String?                            @db.VarChar(512)
-  about_hero_image_url                  String?                            @db.VarChar(512)
-  about_image_1_url                     String?                            @db.VarChar(512)
-  about_image_2_url                     String?                            @db.VarChar(512)
-  about_image_3_url                     String?                            @db.VarChar(512)
-  is_active                             Boolean                            @default(true)
-  created_at                            DateTime                           @default(now())
-  updated_at                            DateTime                           @updatedAt
-  deleted_at                            DateTime?
-  company_type_id                       Int
-  city                                  String?                            @db.VarChar(128)
-  country_code                          String?                            @db.VarChar(2)
-  state                                 String?                            @db.VarChar(128)
-  latitude                              Float?
-  longitude                             Float?
-  about_us_hero_text                    String?                            @db.Text
-  about_us_text                         String?                            @db.Text
-  our_story_text                        String?                            @db.Text
-  plan                                  ShopPlan                           @default(BUSINESS)
-  billingCycle                          BillingCycle                       @default(MONTHLY) @map("billing_cycle")
-  pricePaid                             Decimal?                           @map("price_paid") @db.Decimal(10, 2)
-  availableUntil                        DateTime                           @default(dbgenerated("'2027-03-12 23:59:59.000'")) @map("available_until")
-  isMarketplaceVisible                  Boolean                            @default(true) @map("is_marketplace_visible")
-  bookings                              Booking[]
-  booking_audit_logs                    BookingAuditLog[]
-  booking_notification_attempts         BookingNotificationAttempt[]
-  booking_discounts                     BookingDiscount[]
-  booking_services                      BookingService[]
-  categories                            Category[]
-  company_type                          CompanyType                        @relation(fields: [company_type_id], references: [id])
-  capability_overrides                  CompanyCapabilityOverride[]
-  company_settings                      CompanySettings?
-  company_users                         CompanyUser[]
-  product_history                       CompanyProductHistory[]
-  product_access_requests               ProductAccessRequest[]
-  product_subscriptions                 CompanyProductSubscription[]
-  config_messages                       ConfigMessage[]
-  customer_profiles                     CustomerProfile[]
-  discount_codes                        DiscountCode[]
-  hours                                 Hours[]
-  reviews                               Review[]
-  services                              Service[]
-  staff_profiles                        StaffProfile[]
-  subscription_history                  CompanySubscriptionHistory[]
-  staff_availability                    StaffAvailability[]
-  staff_time_off                        StaffTimeOff[]
-  staff_services                        StaffService[]
-  theme_config                          ThemeConfig?
-  group_events                          GroupEvent[]
-  group_classes                         GroupClass[]
-  group_class_sessions                  GroupClassSession[]
-  group_staff_assignments               GroupStaffAssignment[]
-  group_event_bookings                  GroupEventBooking[]
-  group_class_enrollments               GroupClassEnrollment[]
-  group_session_attendances             GroupSessionAttendance[]
-  group_tickets                         GroupTicket[]
-  group_event_interests                 GroupEventInterest[]
-  group_class_interests                 GroupClassInterest[]
-  free_event_registrations              FreeEventRegistration[]
-  paid_event_guest_checkout_sessions    PaidEventGuestCheckoutSession[]
-  group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
+  id                                       Int                                   @id @default(autoincrement())
+  slug                                     String                                @unique @db.VarChar(64)
+  name                                     String
+  address                                  String?                               @db.VarChar(255)
+  phone_prefix                             String                                @default("591") @db.VarChar(8)
+  phone                                    String                                @db.VarChar(32)
+  email                                    String?
+  google_maps_url                          String?                               @db.VarChar(512)
+  timezone                                 String                                @db.VarChar(64)
+  currency                                 String                                @default("Bs.") @db.VarChar(3)
+  logo_url                                 String?                               @db.VarChar(512)
+  home_hero_image_url                      String?                               @db.VarChar(512)
+  about_hero_image_url                     String?                               @db.VarChar(512)
+  about_image_1_url                        String?                               @db.VarChar(512)
+  about_image_2_url                        String?                               @db.VarChar(512)
+  about_image_3_url                        String?                               @db.VarChar(512)
+  is_active                                Boolean                               @default(true)
+  created_at                               DateTime                              @default(now())
+  updated_at                               DateTime                              @updatedAt
+  deleted_at                               DateTime?
+  company_type_id                          Int
+  city                                     String?                               @db.VarChar(128)
+  country_code                             String?                               @db.VarChar(2)
+  state                                    String?                               @db.VarChar(128)
+  latitude                                 Float?
+  longitude                                Float?
+  about_us_hero_text                       String?                               @db.Text
+  about_us_text                            String?                               @db.Text
+  our_story_text                           String?                               @db.Text
+  plan                                     ShopPlan                              @default(BUSINESS)
+  billingCycle                             BillingCycle                          @default(MONTHLY) @map("billing_cycle")
+  pricePaid                                Decimal?                              @map("price_paid") @db.Decimal(10, 2)
+  availableUntil                           DateTime                              @default(dbgenerated("'2027-03-12 23:59:59.000'")) @map("available_until")
+  isMarketplaceVisible                     Boolean                               @default(true) @map("is_marketplace_visible")
+  bookings                                 Booking[]
+  booking_audit_logs                       BookingAuditLog[]
+  booking_notification_attempts            BookingNotificationAttempt[]
+  booking_discounts                        BookingDiscount[]
+  booking_services                         BookingService[]
+  categories                               Category[]
+  company_type                             CompanyType                           @relation(fields: [company_type_id], references: [id])
+  capability_overrides                     CompanyCapabilityOverride[]
+  company_settings                         CompanySettings?
+  company_users                            CompanyUser[]
+  product_history                          CompanyProductHistory[]
+  product_access_requests                  ProductAccessRequest[]
+  product_subscriptions                    CompanyProductSubscription[]
+  config_messages                          ConfigMessage[]
+  customer_profiles                        CustomerProfile[]
+  discount_codes                           DiscountCode[]
+  hours                                    Hours[]
+  reviews                                  Review[]
+  services                                 Service[]
+  staff_profiles                           StaffProfile[]
+  subscription_history                     CompanySubscriptionHistory[]
+  staff_availability                       StaffAvailability[]
+  staff_time_off                           StaffTimeOff[]
+  staff_services                           StaffService[]
+  theme_config                             ThemeConfig?
+  group_events                             GroupEvent[]
+  group_classes                            GroupClass[]
+  group_class_sessions                     GroupClassSession[]
+  group_staff_assignments                  GroupStaffAssignment[]
+  group_event_bookings                     GroupEventBooking[]
+  group_class_enrollments                  GroupClassEnrollment[]
+  group_session_attendances                GroupSessionAttendance[]
+  group_tickets                            GroupTicket[]
+  group_event_interests                    GroupEventInterest[]
+  group_class_interests                    GroupClassInterest[]
+  free_event_registrations                 FreeEventRegistration[]
+  paid_event_guest_checkout_sessions       PaidEventGuestCheckoutSession[]
+  group_class_guest_enrollment_sessions    GroupClassGuestEnrollmentSession[]
   group_session_public_attendance_attempts GroupSessionPublicAttendanceAttempt[]
-  service_required_resources            ServiceRequiredResource[]
-  installment_reminder_logs             InstallmentReminderLog[]
-  booking_groups                        BookingGroup[]
-  commerce_store                        CommerceStore?
-  commerce_categories                   CommerceCategory[]
-  commerce_products                     CommerceProduct[]
-  commerce_pickup_points                CommercePickupPoint[]
-  commerce_points_of_sale               CommercePointOfSale[]
-  commerce_order_schedule_slots         CommerceOrderScheduleSlot[]
-  commerce_orders                       CommerceOrder[]
-  commerce_guest_checkout_sessions      CommerceGuestCheckoutSession[]
+  service_required_resources               ServiceRequiredResource[]
+  installment_reminder_logs                InstallmentReminderLog[]
+  booking_groups                           BookingGroup[]
+  commerce_store                           CommerceStore?
+  commerce_categories                      CommerceCategory[]
+  commerce_products                        CommerceProduct[]
+  commerce_pickup_points                   CommercePickupPoint[]
+  commerce_points_of_sale                  CommercePointOfSale[]
+  commerce_order_schedule_slots            CommerceOrderScheduleSlot[]
+  commerce_orders                          CommerceOrder[]
+  commerce_guest_checkout_sessions         CommerceGuestCheckoutSession[]
+  restaurant_enabled                       Boolean                               @default(false)
+  restaurant_settings                      RestaurantSettings?
+  restaurant_dining_areas                  RestaurantDiningArea[]
+  restaurant_tables                        RestaurantTable[]
+  restaurant_service_periods               RestaurantServicePeriod[]
+  restaurant_reservations                  RestaurantReservation[]
+  restaurant_notification_logs             RestaurantNotificationLog[]
+  restaurant_menu_categories               RestaurantMenuCategory[]
+  restaurant_menu_items                    RestaurantMenuItem[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -100,6 +109,219 @@ model Company {
   @@index([is_active, city, state], map: "company_active_city_state_idx")
   @@index([company_type_id], map: "company_company_type_id_fkey")
   @@map("company")
+}
+
+model RestaurantSettings {
+  id                          Int      @id @default(autoincrement())
+  company_id                  Int      @unique
+  average_dining_minutes      Int      @default(90)
+  slot_interval_minutes       Int      @default(30)
+  minimum_advance_minutes     Int      @default(60)
+  maximum_advance_days        Int      @default(30)
+  auto_confirm_reservations   Boolean  @default(true)
+  allow_customer_cancellation Boolean  @default(true)
+  cancellation_limit_minutes  Int      @default(120)
+  minimum_party_size          Int      @default(1)
+  maximum_party_size          Int      @default(12)
+  require_phone               Boolean  @default(true)
+  require_email               Boolean  @default(false)
+  allow_walk_ins              Boolean  @default(true)
+  deposit_enabled             Boolean  @default(false)
+  deposit_amount_cents        Int      @default(0)
+  deposit_mode                RestaurantDepositMode @default(PER_TABLE)
+  deposit_qr_image_url        String?  @db.VarChar(512)
+  created_at                  DateTime @default(now())
+  updated_at                  DateTime @updatedAt
+  company                     Company  @relation(fields: [company_id], references: [id])
+
+  @@map("restaurant_settings")
+}
+
+model RestaurantDiningArea {
+  id          Int               @id @default(autoincrement())
+  company_id  Int
+  name        String            @db.VarChar(120)
+  description String?           @db.VarChar(500)
+  sort_order  Int               @default(0)
+  is_active   Boolean           @default(true)
+  created_at  DateTime          @default(now())
+  updated_at  DateTime          @updatedAt
+  company     Company           @relation(fields: [company_id], references: [id])
+  tables      RestaurantTable[]
+
+  @@unique([company_id, name], map: "restaurant_dining_area_company_name_key")
+  @@index([company_id], map: "restaurant_dining_area_company_id_idx")
+  @@map("restaurant_dining_area")
+}
+
+model RestaurantTable {
+  id             Int                     @id @default(autoincrement())
+  company_id     Int
+  dining_area_id Int
+  name           String                  @db.VarChar(120)
+  minimum_seats  Int                     @default(1)
+  maximum_seats  Int
+  sort_order     Int                     @default(0)
+  is_active      Boolean                 @default(true)
+  created_at     DateTime                @default(now())
+  updated_at     DateTime                @updatedAt
+  company        Company                 @relation(fields: [company_id], references: [id])
+  dining_area    RestaurantDiningArea    @relation(fields: [dining_area_id], references: [id])
+  reservations   RestaurantReservation[]
+
+  @@unique([dining_area_id, name], map: "restaurant_table_area_name_key")
+  @@index([company_id], map: "restaurant_table_company_id_idx")
+  @@index([dining_area_id], map: "restaurant_table_dining_area_id_idx")
+  @@map("restaurant_table")
+}
+
+model RestaurantServicePeriod {
+  id          Int      @id @default(autoincrement())
+  company_id  Int
+  day_of_week Int
+  name        String?  @db.VarChar(120)
+  start_time  String   @db.VarChar(5)
+  end_time    String   @db.VarChar(5)
+  sort_order  Int      @default(0)
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  company     Company  @relation(fields: [company_id], references: [id])
+
+  @@index([company_id, day_of_week], map: "restaurant_service_period_company_day_idx")
+  @@map("restaurant_service_period")
+}
+
+model RestaurantReservation {
+  id                  Int                         @id @default(autoincrement())
+  company_id          Int
+  customer_profile_id Int?
+  table_id            Int?
+  reservation_code    String                      @unique @db.VarChar(48)
+  reservation_date    DateTime
+  start_time          DateTime
+  end_time            DateTime
+  party_size          Int
+  customer_name       String                      @db.VarChar(160)
+  customer_phone      String?                     @db.VarChar(32)
+  customer_email      String?                     @db.VarChar(255)
+  deposit_amount_cents Int                       @default(0)
+  deposit_mode         RestaurantDepositMode?
+  deposit_proof_image_url String?                @db.VarChar(512)
+  notes               String?                     @db.Text
+  internal_notes      String?                     @db.Text
+  status              RestaurantReservationStatus @default(PENDING)
+  source              RestaurantReservationSource @default(ADMIN)
+  seated_at           DateTime?
+  completed_at        DateTime?
+  cancelled_at        DateTime?
+  cancellation_reason String?                     @db.VarChar(500)
+  created_by_user_id  String?
+  created_at          DateTime                    @default(now())
+  updated_at          DateTime                    @updatedAt
+  company             Company                     @relation(fields: [company_id], references: [id])
+  customer_profile    CustomerProfile?            @relation(fields: [customer_profile_id], references: [id])
+  table               RestaurantTable?            @relation(fields: [table_id], references: [id])
+  created_by_user     User?                       @relation("RestaurantReservationCreatedBy", fields: [created_by_user_id], references: [id])
+  guests              RestaurantReservationGuest[]
+  notification_logs   RestaurantNotificationLog[]
+
+  @@index([company_id, reservation_date], map: "restaurant_reservation_company_date_idx")
+  @@index([company_id, status], map: "restaurant_reservation_company_status_idx")
+  @@index([company_id, source], map: "restaurant_reservation_company_source_idx")
+  @@index([company_id, start_time], map: "restaurant_reservation_company_start_time_idx")
+  @@index([company_id, status, start_time], map: "restaurant_reservation_company_status_start_time_idx")
+  @@index([company_id, source, start_time], map: "restaurant_reservation_company_source_start_time_idx")
+  @@index([table_id, start_time, end_time], map: "restaurant_reservation_table_time_idx")
+  @@map("restaurant_reservation")
+}
+
+model RestaurantReservationGuest {
+  id               Int                   @id @default(autoincrement())
+  reservation_id   Int
+  name             String                @db.VarChar(160)
+  whatsapp_phone   String                @db.VarChar(32)
+  invited_at       DateTime?
+  created_at       DateTime              @default(now())
+  updated_at       DateTime              @updatedAt
+  reservation      RestaurantReservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+
+  @@unique([reservation_id, whatsapp_phone], map: "restaurant_reservation_guest_phone_key")
+  @@index([reservation_id], map: "restaurant_reservation_guest_reservation_id_idx")
+  @@map("restaurant_reservation_guest")
+}
+
+model RestaurantNotificationLog {
+  id             Int                           @id @default(autoincrement())
+  company_id     Int
+  reservation_id Int
+  event          RestaurantNotificationEvent
+  channel        RestaurantNotificationChannel
+  status         RestaurantNotificationStatus
+  trigger        RestaurantNotificationTrigger @default(AUTOMATIC)
+  recipient      String?                       @db.VarChar(255)
+  provider_id    String?                       @db.VarChar(255)
+  error_code     String?                       @db.VarChar(100)
+  error_message  String?                       @db.VarChar(500)
+  dedup_key      String?                       @db.VarChar(255)
+  sent_at        DateTime?
+  created_at     DateTime                      @default(now())
+  updated_at     DateTime                      @updatedAt
+  company        Company                       @relation(fields: [company_id], references: [id])
+  reservation    RestaurantReservation         @relation(fields: [reservation_id], references: [id])
+
+  @@index([company_id, reservation_id], map: "restaurant_notification_log_company_reservation_idx")
+  @@index([company_id, status], map: "restaurant_notification_log_company_status_idx")
+  @@index([reservation_id, event], map: "restaurant_notification_log_reservation_event_idx")
+  @@index([reservation_id, event, channel, dedup_key], map: "restaurant_notification_log_dedup_idx")
+  @@map("restaurant_notification_log")
+}
+
+model RestaurantMenuCategory {
+  id          Int                  @id @default(autoincrement())
+  company_id  Int
+  name        String               @db.VarChar(120)
+  description String?              @db.VarChar(500)
+  image_url   String?              @db.VarChar(512)
+  sort_order  Int                  @default(0)
+  is_active   Boolean              @default(true)
+  created_at  DateTime             @default(now())
+  updated_at  DateTime             @updatedAt
+  company     Company              @relation(fields: [company_id], references: [id])
+  items       RestaurantMenuItem[]
+
+  @@unique([company_id, name], map: "restaurant_menu_category_company_name_key")
+  @@index([company_id], map: "restaurant_menu_category_company_id_idx")
+  @@index([company_id, sort_order], map: "restaurant_menu_category_company_sort_idx")
+  @@map("restaurant_menu_category")
+}
+
+model RestaurantMenuItem {
+  id                  Int                    @id @default(autoincrement())
+  company_id          Int
+  category_id         Int
+  name                String                 @db.VarChar(160)
+  description         String?                @db.VarChar(2000)
+  price               Decimal?               @db.Decimal(10, 2)
+  image_url           String?                @db.VarChar(512)
+  is_active           Boolean                @default(true)
+  is_available        Boolean                @default(true)
+  is_featured         Boolean                @default(false)
+  sort_order          Int                    @default(0)
+  preparation_minutes Int?
+  allergens           Json?
+  dietary_labels      Json?
+  created_at          DateTime               @default(now())
+  updated_at          DateTime               @updatedAt
+  company             Company                @relation(fields: [company_id], references: [id])
+  category            RestaurantMenuCategory @relation(fields: [category_id], references: [id])
+
+  @@index([company_id], map: "restaurant_menu_item_company_id_idx")
+  @@index([category_id], map: "restaurant_menu_item_category_id_idx")
+  @@index([company_id, is_active, is_available], map: "restaurant_menu_item_public_idx")
+  @@index([company_id, is_featured], map: "restaurant_menu_item_featured_idx")
+  @@index([category_id, sort_order], map: "restaurant_menu_item_category_sort_idx")
+  @@map("restaurant_menu_item")
 }
 
 model ThemeConfig {
@@ -154,56 +376,57 @@ model CompanySettings {
 }
 
 model User {
-  id                                    String                             @id @default(cuid())
-  email                                 String                             @unique
-  first_name                            String?                            @db.VarChar(100)
-  last_name                             String?                            @db.VarChar(100)
-  is_super_admin                        Boolean                            @default(false)
-  is_active                             Boolean                            @default(true)
-  must_change_password                  Boolean                            @default(false)
-  deleted_at                            DateTime?
-  country_code                          String?                            @db.VarChar(2)
-  phone_prefix                          String?                            @db.VarChar(8)
-  createdAt                             DateTime                           @default(now())
-  emailVerified                         Boolean                            @default(false)
-  image                                 String?                            @db.VarChar(512)
-  name                                  String
-  updatedAt                             DateTime                           @updatedAt
-  phoneNumber                           String?                            @unique @db.VarChar(32)
-  phoneNumberVerified                   Boolean?                           @default(false)
-  gender                                String?                            @db.VarChar(30)
-  age                                   Int?
-  accounts                              Account[]
-  created_bookings                      Booking[]                          @relation("BookingCreatedBy")
-  updated_bookings                      Booking[]                          @relation("BookingUpdatedBy")
-  company_users                         CompanyUser[]
-  capability_override_changes           CompanyCapabilityOverride[]        @relation("CompanyCapabilityOverrideCreatedBy")
-  customer_profiles                     CustomerProfile[]
-  requested_time_off                    StaffTimeOff[]                     @relation("StaffTimeOffRequestedBy")
-  reviewed_time_off                     StaffTimeOff[]                     @relation("StaffTimeOffReviewedBy")
-  subscription_history_changes          CompanySubscriptionHistory[]       @relation("CompanySubscriptionHistoryChangedBy")
-  product_history_actions               CompanyProductHistory[]            @relation("CompanyProductHistoryActor")
-  product_access_requests               ProductAccessRequest[]             @relation("ProductAccessRequestRequestedBy")
-  resolved_product_access_requests      ProductAccessRequest[]             @relation("ProductAccessRequestResolvedBy")
-  user_reviews                          Review[]
-  sessions                              Session[]
-  staff_profiles                        StaffProfile[]
-  changed_commerce_order_history        CommerceOrderStatusHistory[]
-  created_group_events                  GroupEvent[]                       @relation("GroupEventCreatedBy")
-  created_group_classes                 GroupClass[]                       @relation("GroupClassCreatedBy")
-  group_event_bookings                  GroupEventBooking[]
-  group_class_enrollments               GroupClassEnrollment[]
-  group_session_attendances             GroupSessionAttendance[]
-  group_event_interests                 GroupEventInterest[]
-  group_class_interests                 GroupClassInterest[]
-  free_event_registrations              FreeEventRegistration[]
-  paid_event_guest_checkout_sessions    PaidEventGuestCheckoutSession[]
-  group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[]
-  sponsored_group_class_enrollments     GroupClassEnrollment[]            @relation("ClassEnrollmentSponsoredByAdmin")
+  id                                       String                                @id @default(cuid())
+  email                                    String                                @unique
+  first_name                               String?                               @db.VarChar(100)
+  last_name                                String?                               @db.VarChar(100)
+  is_super_admin                           Boolean                               @default(false)
+  is_active                                Boolean                               @default(true)
+  must_change_password                     Boolean                               @default(false)
+  deleted_at                               DateTime?
+  country_code                             String?                               @db.VarChar(2)
+  phone_prefix                             String?                               @db.VarChar(8)
+  createdAt                                DateTime                              @default(now())
+  emailVerified                            Boolean                               @default(false)
+  image                                    String?                               @db.VarChar(512)
+  name                                     String
+  updatedAt                                DateTime                              @updatedAt
+  phoneNumber                              String?                               @unique @db.VarChar(32)
+  phoneNumberVerified                      Boolean?                              @default(false)
+  gender                                   String?                               @db.VarChar(30)
+  age                                      Int?
+  accounts                                 Account[]
+  created_bookings                         Booking[]                             @relation("BookingCreatedBy")
+  updated_bookings                         Booking[]                             @relation("BookingUpdatedBy")
+  company_users                            CompanyUser[]
+  capability_override_changes              CompanyCapabilityOverride[]           @relation("CompanyCapabilityOverrideCreatedBy")
+  customer_profiles                        CustomerProfile[]
+  requested_time_off                       StaffTimeOff[]                        @relation("StaffTimeOffRequestedBy")
+  reviewed_time_off                        StaffTimeOff[]                        @relation("StaffTimeOffReviewedBy")
+  subscription_history_changes             CompanySubscriptionHistory[]          @relation("CompanySubscriptionHistoryChangedBy")
+  product_history_actions                  CompanyProductHistory[]               @relation("CompanyProductHistoryActor")
+  product_access_requests                  ProductAccessRequest[]                @relation("ProductAccessRequestRequestedBy")
+  resolved_product_access_requests         ProductAccessRequest[]                @relation("ProductAccessRequestResolvedBy")
+  user_reviews                             Review[]
+  sessions                                 Session[]
+  staff_profiles                           StaffProfile[]
+  changed_commerce_order_history           CommerceOrderStatusHistory[]
+  created_group_events                     GroupEvent[]                          @relation("GroupEventCreatedBy")
+  created_group_classes                    GroupClass[]                          @relation("GroupClassCreatedBy")
+  group_event_bookings                     GroupEventBooking[]
+  group_class_enrollments                  GroupClassEnrollment[]
+  group_session_attendances                GroupSessionAttendance[]
+  group_event_interests                    GroupEventInterest[]
+  group_class_interests                    GroupClassInterest[]
+  free_event_registrations                 FreeEventRegistration[]
+  paid_event_guest_checkout_sessions       PaidEventGuestCheckoutSession[]
+  group_class_guest_enrollment_sessions    GroupClassGuestEnrollmentSession[]
+  sponsored_group_class_enrollments        GroupClassEnrollment[]                @relation("ClassEnrollmentSponsoredByAdmin")
   group_session_public_attendance_attempts GroupSessionPublicAttendanceAttempt[]
-  marked_paid_installments              EnrollmentInstallment[]            @relation("InstallmentMarkedPaidBy")
-  sent_installment_reminders            InstallmentReminderLog[]           @relation("InstallmentReminderSentBy")
-  commerce_guest_checkout_sessions      CommerceGuestCheckoutSession[]
+  marked_paid_installments                 EnrollmentInstallment[]               @relation("InstallmentMarkedPaidBy")
+  sent_installment_reminders               InstallmentReminderLog[]              @relation("InstallmentReminderSentBy")
+  commerce_guest_checkout_sessions         CommerceGuestCheckoutSession[]
+  created_restaurant_reservations          RestaurantReservation[]               @relation("RestaurantReservationCreatedBy")
 
   @@map("user")
 }
@@ -352,8 +575,8 @@ model ProductAccessRequest {
   id                Int                        @id @default(autoincrement())
   companyId         Int                        @map("company_id")
   requestedByUserId String                     @map("requested_by_user_id")
-  productCode       ProductCode               @map("product_code")
-  tierCode          ProductTierCode           @map("tier_code")
+  productCode       ProductCode                @map("product_code")
+  tierCode          ProductTierCode            @map("tier_code")
   capability        ProductCapabilityCode
   status            ProductAccessRequestStatus @default(PENDING)
   message           String?                    @db.VarChar(500)
@@ -376,18 +599,18 @@ model ProductAccessRequest {
 }
 
 model BusinessPricingProduct {
-  id             Int                       @id @default(autoincrement())
-  productKey     BusinessPricingProductKey @unique @map("product_key")
+  id             Int                        @id @default(autoincrement())
+  productKey     BusinessPricingProductKey  @unique @map("product_key")
   type           BusinessPricingProductType
-  displayName    String                    @map("display_name") @db.VarChar(120)
-  description    String?                   @db.Text
-  monthlyPriceBs Decimal                   @map("monthly_price_bs") @db.Decimal(10, 2)
-  isActive       Boolean                   @default(true) @map("is_active")
-  isComingSoon   Boolean                   @default(false) @map("is_coming_soon")
-  sortOrder      Int                       @default(0) @map("sort_order")
+  displayName    String                     @map("display_name") @db.VarChar(120)
+  description    String?                    @db.Text
+  monthlyPriceBs Decimal                    @map("monthly_price_bs") @db.Decimal(10, 2)
+  isActive       Boolean                    @default(true) @map("is_active")
+  isComingSoon   Boolean                    @default(false) @map("is_coming_soon")
+  sortOrder      Int                        @default(0) @map("sort_order")
   metadata       Json?
-  createdAt      DateTime                  @default(now()) @map("created_at")
-  updatedAt      DateTime                  @updatedAt @map("updated_at")
+  createdAt      DateTime                   @default(now()) @map("created_at")
+  updatedAt      DateTime                   @updatedAt @map("updated_at")
 
   @@index([type, sortOrder], map: "business_pricing_product_type_sort_order_idx")
   @@index([isActive, isComingSoon], map: "business_pricing_product_active_coming_soon_idx")
@@ -439,33 +662,33 @@ model CompanyUser {
 }
 
 model StaffProfile {
-  id                      Int                       @id @default(autoincrement())
-  company_id              Int
-  user_id                 String
-  display_name            String
-  bio                     String?                   @db.Text
-  image_url               String?                   @db.VarChar(512)
-  is_bookable             Boolean                   @default(true)
-  status                  StaffProfileStatus        @default(ACTIVE)
-  resource_type           ResourceType              @default(PERSON)
-  invite_token            String?                   @unique @db.VarChar(255)
-  start_date              DateTime?
-  end_date                DateTime?
-  created_at              DateTime                  @default(now())
-  updated_at              DateTime                  @updatedAt
-  deleted_at              DateTime?
-  availability_slots      StaffAvailability[]
-  bookings                Booking[]                 @relation("BookingPrimaryStaff")
-  secondary_bookings      Booking[]                 @relation("BookingSecondaryStaff")
-  preferred_customers     CustomerProfile[]
-  reviews                 Review[]
-  company                 Company                   @relation(fields: [company_id], references: [id])
-  user                    User                      @relation(fields: [user_id], references: [id])
-  time_off_requests       StaffTimeOff[]
-  staff_services          StaffService[]
-  group_staff_assignments GroupStaffAssignment[]
-  required_for_services   ServiceRequiredResource[]
-  assigned_commerce_orders CommerceOrder[]         @relation("CommerceOrderAssignedStaff")
+  id                       Int                       @id @default(autoincrement())
+  company_id               Int
+  user_id                  String
+  display_name             String
+  bio                      String?                   @db.Text
+  image_url                String?                   @db.VarChar(512)
+  is_bookable              Boolean                   @default(true)
+  status                   StaffProfileStatus        @default(ACTIVE)
+  resource_type            ResourceType              @default(PERSON)
+  invite_token             String?                   @unique @db.VarChar(255)
+  start_date               DateTime?
+  end_date                 DateTime?
+  created_at               DateTime                  @default(now())
+  updated_at               DateTime                  @updatedAt
+  deleted_at               DateTime?
+  availability_slots       StaffAvailability[]
+  bookings                 Booking[]                 @relation("BookingPrimaryStaff")
+  secondary_bookings       Booking[]                 @relation("BookingSecondaryStaff")
+  preferred_customers      CustomerProfile[]
+  reviews                  Review[]
+  company                  Company                   @relation(fields: [company_id], references: [id])
+  user                     User                      @relation(fields: [user_id], references: [id])
+  time_off_requests        StaffTimeOff[]
+  staff_services           StaffService[]
+  group_staff_assignments  GroupStaffAssignment[]
+  required_for_services    ServiceRequiredResource[]
+  assigned_commerce_orders CommerceOrder[]           @relation("CommerceOrderAssignedStaff")
 
   @@unique([company_id, user_id])
   @@index([company_id, is_bookable])
@@ -493,6 +716,7 @@ model CustomerProfile {
   group_class_interests     GroupClassInterest[]
   booking_groups            BookingGroup[]
   commerce_orders           CommerceOrder[]
+  restaurant_reservations   RestaurantReservation[]
 
   @@unique([company_id, user_id])
   @@index([preferred_staff_id])
@@ -523,35 +747,35 @@ model Category {
 }
 
 model Service {
-  id                 Int                       @id @default(autoincrement())
-  company_id         Int
-  name               String
-  description        String?                   @db.Text
-  price_cents        Int
-  promo_price_cents  Int?
-  promo_starts_at    DateTime?
-  promo_ends_at      DateTime?
-  promo_label        String?                   @db.VarChar(120)
-  duration_minutes   Int
-  is_multi_session   Boolean                   @default(false)
-  session_count      Int?
+  id                       Int                       @id @default(autoincrement())
+  company_id               Int
+  name                     String
+  description              String?                   @db.Text
+  price_cents              Int
+  promo_price_cents        Int?
+  promo_starts_at          DateTime?
+  promo_ends_at            DateTime?
+  promo_label              String?                   @db.VarChar(120)
+  duration_minutes         Int
+  is_multi_session         Boolean                   @default(false)
+  session_count            Int?
   session_duration_minutes Int?
-  position           Int                       @default(0)
-  is_active          Boolean                   @default(true)
-  is_invite_only     Boolean                   @default(false)
-  invite_token       String?                   @unique @db.VarChar(255)
-  created_at         DateTime                  @default(now())
-  updated_at         DateTime                  @updatedAt
-  deleted_at         DateTime?
-  global_type_id     Int?
-  category_id        Int
-  booking_services   BookingService[]
-  service_reviews    Review[]
-  category           Category                  @relation(fields: [category_id], references: [id])
-  company            Company                   @relation(fields: [company_id], references: [id])
-  global_type        GlobalServiceType?        @relation(fields: [global_type_id], references: [id])
-  staff_services     StaffService[]
-  required_resources ServiceRequiredResource[]
+  position                 Int                       @default(0)
+  is_active                Boolean                   @default(true)
+  is_invite_only           Boolean                   @default(false)
+  invite_token             String?                   @unique @db.VarChar(255)
+  created_at               DateTime                  @default(now())
+  updated_at               DateTime                  @updatedAt
+  deleted_at               DateTime?
+  global_type_id           Int?
+  category_id              Int
+  booking_services         BookingService[]
+  service_reviews          Review[]
+  category                 Category                  @relation(fields: [category_id], references: [id])
+  company                  Company                   @relation(fields: [company_id], references: [id])
+  global_type              GlobalServiceType?        @relation(fields: [global_type_id], references: [id])
+  staff_services           StaffService[]
+  required_resources       ServiceRequiredResource[]
 
   @@index([company_id, is_active])
   @@index([company_id, is_invite_only, is_active], map: "service_company_invite_active_idx")
@@ -577,46 +801,46 @@ model Hours {
 }
 
 model Booking {
-  id                  Int               @id @default(autoincrement())
-  company_id          Int
-  booking_group_id    String?           @db.VarChar(191)
-  staff_id            Int
-  secondary_staff_id  Int?
-  customer_id         Int?
-  client_name         String?
-  client_email        String?
-  client_phone_prefix String?           @db.VarChar(8)
-  client_phone_number String?           @db.VarChar(32)
-  booking_type        BookingType       @default(CUSTOMER)
-  booking_source      BookingSource     @default(SALON_SITE)
-  start_at            DateTime
-  end_at              DateTime
-  status              BookingStatus     @default(CONFIRMED)
-  payment_method      PaymentMethod     @default(NONE)
-  payment_status      PaymentStatus     @default(UNPAID)
-  qr_proof_image_url  String?           @db.VarChar(512)
-  rejection_reason    String?           @db.VarChar(500)
-  total_price_cents   Int               @default(0)
-  session_index       Int?
-  session_count       Int?
-  notes               String?           @db.Text
-  created_by_user_id  String?
-  updated_by_user_id  String?
-  created_at          DateTime          @default(now())
-  updated_at          DateTime          @updatedAt
-  deleted_at          DateTime?
-  company             Company           @relation(fields: [company_id], references: [id])
-  booking_group       BookingGroup?     @relation(fields: [booking_group_id], references: [id])
-  created_by          User?             @relation("BookingCreatedBy", fields: [created_by_user_id], references: [id])
-  customer            CustomerProfile?  @relation(fields: [customer_id], references: [id])
-  staff               StaffProfile      @relation("BookingPrimaryStaff", fields: [staff_id], references: [id])
-  secondary_staff     StaffProfile?     @relation("BookingSecondaryStaff", fields: [secondary_staff_id], references: [id])
-  updated_by          User?             @relation("BookingUpdatedBy", fields: [updated_by_user_id], references: [id])
-  booking_discounts   BookingDiscount[]
-  audit_logs          BookingAuditLog[]
+  id                    Int                          @id @default(autoincrement())
+  company_id            Int
+  booking_group_id      String?                      @db.VarChar(191)
+  staff_id              Int
+  secondary_staff_id    Int?
+  customer_id           Int?
+  client_name           String?
+  client_email          String?
+  client_phone_prefix   String?                      @db.VarChar(8)
+  client_phone_number   String?                      @db.VarChar(32)
+  booking_type          BookingType                  @default(CUSTOMER)
+  booking_source        BookingSource                @default(SALON_SITE)
+  start_at              DateTime
+  end_at                DateTime
+  status                BookingStatus                @default(CONFIRMED)
+  payment_method        PaymentMethod                @default(NONE)
+  payment_status        PaymentStatus                @default(UNPAID)
+  qr_proof_image_url    String?                      @db.VarChar(512)
+  rejection_reason      String?                      @db.VarChar(500)
+  total_price_cents     Int                          @default(0)
+  session_index         Int?
+  session_count         Int?
+  notes                 String?                      @db.Text
+  created_by_user_id    String?
+  updated_by_user_id    String?
+  created_at            DateTime                     @default(now())
+  updated_at            DateTime                     @updatedAt
+  deleted_at            DateTime?
+  company               Company                      @relation(fields: [company_id], references: [id])
+  booking_group         BookingGroup?                @relation(fields: [booking_group_id], references: [id])
+  created_by            User?                        @relation("BookingCreatedBy", fields: [created_by_user_id], references: [id])
+  customer              CustomerProfile?             @relation(fields: [customer_id], references: [id])
+  staff                 StaffProfile                 @relation("BookingPrimaryStaff", fields: [staff_id], references: [id])
+  secondary_staff       StaffProfile?                @relation("BookingSecondaryStaff", fields: [secondary_staff_id], references: [id])
+  updated_by            User?                        @relation("BookingUpdatedBy", fields: [updated_by_user_id], references: [id])
+  booking_discounts     BookingDiscount[]
+  audit_logs            BookingAuditLog[]
   notification_attempts BookingNotificationAttempt[]
-  booking_services    BookingService[]
-  booking_review      Review?
+  booking_services      BookingService[]
+  booking_review        Review?
 
   @@index([company_id, staff_id, start_at, status])
   @@index([company_id, customer_id, start_at])
@@ -652,27 +876,27 @@ model BookingAuditLog {
 }
 
 model BookingNotificationAttempt {
-  id                 Int              @id @default(autoincrement())
-  company_id         Int
-  booking_id         Int
-  audit_log_id       Int?
-  event              String           @db.VarChar(64)
-  recipient_type     String           @db.VarChar(32)
-  recipient_user_id  String?          @db.VarChar(191)
-  channel            String           @db.VarChar(16)
-  target             String?          @db.VarChar(255)
-  status             String           @default("PENDING") @db.VarChar(32)
-  reason             String?          @db.VarChar(255)
-  attempt_count      Int              @default(0)
-  next_retry_at      DateTime?
-  last_attempted_at  DateTime?
-  sent_at            DateTime?
-  payload            Json?
-  created_at         DateTime         @default(now())
-  updated_at         DateTime         @updatedAt
-  audit_log          BookingAuditLog? @relation(fields: [audit_log_id], references: [id])
-  booking            Booking          @relation(fields: [booking_id], references: [id])
-  company            Company          @relation(fields: [company_id], references: [id])
+  id                Int              @id @default(autoincrement())
+  company_id        Int
+  booking_id        Int
+  audit_log_id      Int?
+  event             String           @db.VarChar(64)
+  recipient_type    String           @db.VarChar(32)
+  recipient_user_id String?          @db.VarChar(191)
+  channel           String           @db.VarChar(16)
+  target            String?          @db.VarChar(255)
+  status            String           @default("PENDING") @db.VarChar(32)
+  reason            String?          @db.VarChar(255)
+  attempt_count     Int              @default(0)
+  next_retry_at     DateTime?
+  last_attempted_at DateTime?
+  sent_at           DateTime?
+  payload           Json?
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @updatedAt
+  audit_log         BookingAuditLog? @relation(fields: [audit_log_id], references: [id])
+  booking           Booking          @relation(fields: [booking_id], references: [id])
+  company           Company          @relation(fields: [company_id], references: [id])
 
   @@index([company_id, booking_id, created_at], map: "booking_notification_company_booking_idx")
   @@index([status, next_retry_at], map: "booking_notification_status_retry_idx")
@@ -681,17 +905,17 @@ model BookingNotificationAttempt {
 }
 
 model BookingGroup {
-  id          String            @id @default(cuid())
+  id          String           @id @default(cuid())
   company_id  Int
   customer_id Int?
-  group_type  String            @db.VarChar(64)
-  status      String            @default("ACTIVE") @db.VarChar(32)
+  group_type  String           @db.VarChar(64)
+  status      String           @default("ACTIVE") @db.VarChar(32)
   metadata    Json?
-  created_at  DateTime          @default(now())
-  updated_at  DateTime          @updatedAt
+  created_at  DateTime         @default(now())
+  updated_at  DateTime         @updatedAt
   bookings    Booking[]
-  company     Company           @relation(fields: [company_id], references: [id])
-  customer    CustomerProfile?  @relation(fields: [customer_id], references: [id])
+  company     Company          @relation(fields: [company_id], references: [id])
+  customer    CustomerProfile? @relation(fields: [customer_id], references: [id])
 
   @@index([company_id, group_type], map: "booking_group_company_type_idx")
   @@index([customer_id], map: "booking_group_customer_id_idx")
@@ -709,22 +933,22 @@ model MarketplaceEvent {
 }
 
 model BookingService {
-  id                        Int      @id @default(autoincrement())
-  booking_id                Int
-  company_id                Int
-  service_id                Int
-  service_name_snapshot     String
-  price_cents_snapshot      Int
+  id                           Int      @id @default(autoincrement())
+  booking_id                   Int
+  company_id                   Int
+  service_id                   Int
+  service_name_snapshot        String
+  price_cents_snapshot         Int
   regular_price_cents_snapshot Int?
-  promo_applied_snapshot    Boolean  @default(false)
-  promo_label_snapshot      String?  @db.VarChar(120)
-  duration_minutes_snapshot Int
-  position                  Int      @default(0)
-  created_at                DateTime @default(now())
-  updated_at                DateTime @updatedAt
-  booking                   Booking  @relation(fields: [booking_id], references: [id])
-  company                   Company  @relation(fields: [company_id], references: [id])
-  service                   Service  @relation(fields: [service_id], references: [id])
+  promo_applied_snapshot       Boolean  @default(false)
+  promo_label_snapshot         String?  @db.VarChar(120)
+  duration_minutes_snapshot    Int
+  position                     Int      @default(0)
+  created_at                   DateTime @default(now())
+  updated_at                   DateTime @updatedAt
+  booking                      Booking  @relation(fields: [booking_id], references: [id])
+  company                      Company  @relation(fields: [company_id], references: [id])
+  service                      Service  @relation(fields: [service_id], references: [id])
 
   @@index([booking_id])
   @@index([company_id, service_id])
@@ -774,28 +998,28 @@ model BookingDiscount {
 }
 
 model CommerceStore {
-  id                       String                   @id @default(cuid())
-  company_id               Int                      @unique
-  is_active                Boolean                  @default(true)
-  fulfillment_mode         CommerceFulfillmentMode  @default(PICKUP_AND_DELIVERY)
-  scheduled_orders_enabled Boolean                  @default(false)
+  id                       String                         @id @default(cuid())
+  company_id               Int                            @unique
+  is_active                Boolean                        @default(true)
+  fulfillment_mode         CommerceFulfillmentMode        @default(PICKUP_AND_DELIVERY)
+  scheduled_orders_enabled Boolean                        @default(false)
   min_preparation_minutes  Int?
   max_schedule_days_ahead  Int?
-  order_slots_enabled      Boolean                  @default(false)
-  allow_cash_payment       Boolean                  @default(true)
-  allow_qr_payment         Boolean                  @default(false)
-  allow_manual_payment     Boolean                  @default(false)
-  qr_image_url             String?                  @db.VarChar(512)
-  payment_instructions     String?                  @db.Text
-  payment_proof_required   Boolean                  @default(true)
-  payment_review_required  Boolean                  @default(true)
-  delivery_cost_mode       CommerceDeliveryCostMode @default(MANUAL)
-  fixed_delivery_cost      Decimal?                 @db.Decimal(10, 2)
-  delivery_instructions    String?                  @db.Text
-  created_at               DateTime                 @default(now())
-  updated_at               DateTime                 @updatedAt
+  order_slots_enabled      Boolean                        @default(false)
+  allow_cash_payment       Boolean                        @default(true)
+  allow_qr_payment         Boolean                        @default(false)
+  allow_manual_payment     Boolean                        @default(false)
+  qr_image_url             String?                        @db.VarChar(512)
+  payment_instructions     String?                        @db.Text
+  payment_proof_required   Boolean                        @default(true)
+  payment_review_required  Boolean                        @default(true)
+  delivery_cost_mode       CommerceDeliveryCostMode       @default(MANUAL)
+  fixed_delivery_cost      Decimal?                       @db.Decimal(10, 2)
+  delivery_instructions    String?                        @db.Text
+  created_at               DateTime                       @default(now())
+  updated_at               DateTime                       @updatedAt
   categories               CommerceCategory[]
-  company                  Company                  @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  company                  Company                        @relation(fields: [company_id], references: [id], onDelete: Cascade)
   orders                   CommerceOrder[]
   guest_checkout_sessions  CommerceGuestCheckoutSession[]
   order_schedule_slots     CommerceOrderScheduleSlot[]
@@ -831,37 +1055,37 @@ model CommerceCategory {
 }
 
 model CommerceProduct {
-  id                        String                 @id @default(cuid())
+  id                        String                               @id @default(cuid())
   company_id                Int
   store_id                  String?
   category_id               String?
-  name                      String                 @db.VarChar(160)
-  slug                      String                 @db.VarChar(180)
-  description               String?                @db.Text
-  product_type              CommerceProductType    @default(SIMPLE)
-  price                     Decimal                @db.Decimal(10, 2)
-  regular_price             Decimal?               @db.Decimal(10, 2)
-  promo_price               Decimal?               @db.Decimal(10, 2)
+  name                      String                               @db.VarChar(160)
+  slug                      String                               @db.VarChar(180)
+  description               String?                              @db.Text
+  product_type              CommerceProductType                  @default(SIMPLE)
+  price                     Decimal                              @db.Decimal(10, 2)
+  regular_price             Decimal?                             @db.Decimal(10, 2)
+  promo_price               Decimal?                             @db.Decimal(10, 2)
   promo_starts_at           DateTime?
   promo_ends_at             DateTime?
-  promo_label               String?                @db.VarChar(120)
-  is_active                 Boolean                @default(true)
-  is_featured               Boolean                @default(false)
-  track_stock               Boolean                @default(true)
-  stock_quantity            Int                    @default(0)
+  promo_label               String?                              @db.VarChar(120)
+  is_active                 Boolean                              @default(true)
+  is_featured               Boolean                              @default(false)
+  track_stock               Boolean                              @default(true)
+  stock_quantity            Int                                  @default(0)
   low_stock_threshold       Int?
-  allow_out_of_stock_orders Boolean                @default(false)
-  available_for_pickup      Boolean                @default(true)
-  available_for_delivery    Boolean                @default(true)
-  sort_order                Int                    @default(0)
-  created_at                DateTime               @default(now())
-  updated_at                DateTime               @updatedAt
-  category                  CommerceCategory?      @relation(fields: [category_id], references: [id], onDelete: SetNull)
-  company                   Company                @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  store                     CommerceStore?         @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  allow_out_of_stock_orders Boolean                              @default(false)
+  available_for_pickup      Boolean                              @default(true)
+  available_for_delivery    Boolean                              @default(true)
+  sort_order                Int                                  @default(0)
+  created_at                DateTime                             @default(now())
+  updated_at                DateTime                             @updatedAt
+  category                  CommerceCategory?                    @relation(fields: [category_id], references: [id], onDelete: SetNull)
+  company                   Company                              @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  store                     CommerceStore?                       @relation(fields: [store_id], references: [id], onDelete: Cascade)
   images                    CommerceProductImage[]
-  combo_items               CommerceComboItem[]    @relation("ComboProduct")
-  used_in_combos            CommerceComboItem[]    @relation("ComponentProduct")
+  combo_items               CommerceComboItem[]                  @relation("ComboProduct")
+  used_in_combos            CommerceComboItem[]                  @relation("ComponentProduct")
   order_items               CommerceOrderItem[]
   component_snapshots       CommerceOrderItemComponentSnapshot[]
 
@@ -906,19 +1130,19 @@ model CommerceComboItem {
 }
 
 model CommercePickupPoint {
-  id           String         @id @default(cuid())
+  id           String          @id @default(cuid())
   company_id   Int
   store_id     String?
-  name         String         @db.VarChar(120)
-  address      String?        @db.VarChar(255)
-  map_url      String?        @db.VarChar(512)
-  instructions String?        @db.Text
-  is_active    Boolean        @default(true)
-  sort_order   Int            @default(0)
-  created_at   DateTime       @default(now())
-  updated_at   DateTime       @updatedAt
-  company      Company        @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  store        CommerceStore? @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  name         String          @db.VarChar(120)
+  address      String?         @db.VarChar(255)
+  map_url      String?         @db.VarChar(512)
+  instructions String?         @db.Text
+  is_active    Boolean         @default(true)
+  sort_order   Int             @default(0)
+  created_at   DateTime        @default(now())
+  updated_at   DateTime        @updatedAt
+  company      Company         @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  store        CommerceStore?  @relation(fields: [store_id], references: [id], onDelete: Cascade)
   orders       CommerceOrder[]
 
   @@index([company_id], map: "commerce_pickup_point_company_idx")
@@ -928,23 +1152,23 @@ model CommercePickupPoint {
 }
 
 model CommercePointOfSale {
-  id               String         @id @default(cuid())
-  company_id        Int
-  store_id          String?
-  name              String         @db.VarChar(120)
-  address           String         @db.VarChar(255)
-  opening_time      String         @db.VarChar(5)
-  closing_time      String         @db.VarChar(5)
-  latitude          Float
-  longitude         Float
-  google_maps_url   String         @db.VarChar(512)
-  notes             String?        @db.Text
-  is_active         Boolean        @default(true)
-  sort_order        Int            @default(0)
-  created_at        DateTime       @default(now())
-  updated_at        DateTime       @updatedAt
-  company           Company        @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  store             CommerceStore? @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  id              String         @id @default(cuid())
+  company_id      Int
+  store_id        String?
+  name            String         @db.VarChar(120)
+  address         String         @db.VarChar(255)
+  opening_time    String         @db.VarChar(5)
+  closing_time    String         @db.VarChar(5)
+  latitude        Float
+  longitude       Float
+  google_maps_url String         @db.VarChar(512)
+  notes           String?        @db.Text
+  is_active       Boolean        @default(true)
+  sort_order      Int            @default(0)
+  created_at      DateTime       @default(now())
+  updated_at      DateTime       @updatedAt
+  company         Company        @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  store           CommerceStore? @relation(fields: [store_id], references: [id], onDelete: Cascade)
 
   @@index([company_id], map: "commerce_pos_company_idx")
   @@index([company_id, is_active], map: "commerce_pos_company_active_idx")
@@ -953,18 +1177,18 @@ model CommercePointOfSale {
 }
 
 model CommerceOrderScheduleSlot {
-  id          String         @id @default(cuid())
-  company_id   Int
-  store_id     String
-  day_of_week  Int
-  start_time   String         @db.VarChar(8)
-  end_time     String         @db.VarChar(8)
-  is_active    Boolean        @default(true)
-  sort_order   Int            @default(0)
-  created_at   DateTime       @default(now())
-  updated_at   DateTime       @updatedAt
-  company      Company        @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  store        CommerceStore  @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  id          String        @id @default(cuid())
+  company_id  Int
+  store_id    String
+  day_of_week Int
+  start_time  String        @db.VarChar(8)
+  end_time    String        @db.VarChar(8)
+  is_active   Boolean       @default(true)
+  sort_order  Int           @default(0)
+  created_at  DateTime      @default(now())
+  updated_at  DateTime      @updatedAt
+  company     Company       @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  store       CommerceStore @relation(fields: [store_id], references: [id], onDelete: Cascade)
 
   @@index([company_id], map: "commerce_order_slot_company_idx")
   @@index([company_id, is_active], map: "commerce_order_slot_company_active_idx")
@@ -974,50 +1198,50 @@ model CommerceOrderScheduleSlot {
 }
 
 model CommerceOrder {
-  id                   String                    @id @default(cuid())
-  company_id           Int
-  store_id             String?
-  customer_profile_id  Int?
-  order_number         String                    @db.VarChar(64)
-  public_access_token  String                    @unique(map: "commerce_order_public_access_token_key") @db.VarChar(128)
-  customer_name        String                    @db.VarChar(160)
-  customer_phone_prefix String?                  @db.VarChar(8)
-  customer_phone       String                    @db.VarChar(32)
-  customer_email       String?                   @db.VarChar(191)
-  fulfillment_type     CommerceFulfillmentType
-  pickup_point_id      String?
-  delivery_address     String?                   @db.VarChar(255)
-  delivery_notes       String?                   @db.Text
-  delivery_latitude    Float?
-  delivery_longitude   Float?
-  delivery_place_id    String?                   @db.VarChar(191)
+  id                     String                       @id @default(cuid())
+  company_id             Int
+  store_id               String?
+  customer_profile_id    Int?
+  order_number           String                       @db.VarChar(64)
+  public_access_token    String                       @unique(map: "commerce_order_public_access_token_key") @db.VarChar(128)
+  customer_name          String                       @db.VarChar(160)
+  customer_phone_prefix  String?                      @db.VarChar(8)
+  customer_phone         String                       @db.VarChar(32)
+  customer_email         String?                      @db.VarChar(191)
+  fulfillment_type       CommerceFulfillmentType
+  pickup_point_id        String?
+  delivery_address       String?                      @db.VarChar(255)
+  delivery_notes         String?                      @db.Text
+  delivery_latitude      Float?
+  delivery_longitude     Float?
+  delivery_place_id      String?                      @db.VarChar(191)
   delivery_location_meta Json?
-  scheduled_for        DateTime?
-  subtotal             Decimal                   @db.Decimal(10, 2)
-  delivery_cost        Decimal?                  @db.Decimal(10, 2)
-  total                Decimal?                  @db.Decimal(10, 2)
-  payment_method       CommercePaymentMethod
-  payment_status       CommercePaymentStatus     @default(PENDING_REVIEW)
-  fulfillment_status   CommerceFulfillmentStatus @default(NEW)
-  payment_proof_url    String?                   @db.VarChar(512)
-  assigned_staff_id    Int?
-  internal_notes       String?                   @db.Text
-  customer_notes       String?                   @db.Text
-  accepted_at          DateTime?
-  payment_confirmed_at DateTime?
-  stock_deducted_at    DateTime?
-  stock_restored_at    DateTime?
-  completed_at         DateTime?
-  cancelled_at         DateTime?
-  created_at           DateTime                  @default(now())
-  updated_at           DateTime                  @updatedAt
-  assigned_staff       StaffProfile?             @relation("CommerceOrderAssignedStaff", fields: [assigned_staff_id], references: [id], onDelete: SetNull)
-  company              Company                   @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  customer_profile     CustomerProfile?          @relation(fields: [customer_profile_id], references: [id], onDelete: SetNull)
-  pickup_point         CommercePickupPoint?      @relation(fields: [pickup_point_id], references: [id], onDelete: SetNull)
-  store                CommerceStore?            @relation(fields: [store_id], references: [id], onDelete: SetNull)
-  items                CommerceOrderItem[]
-  status_history       CommerceOrderStatusHistory[]
+  scheduled_for          DateTime?
+  subtotal               Decimal                      @db.Decimal(10, 2)
+  delivery_cost          Decimal?                     @db.Decimal(10, 2)
+  total                  Decimal?                     @db.Decimal(10, 2)
+  payment_method         CommercePaymentMethod
+  payment_status         CommercePaymentStatus        @default(PENDING_REVIEW)
+  fulfillment_status     CommerceFulfillmentStatus    @default(NEW)
+  payment_proof_url      String?                      @db.VarChar(512)
+  assigned_staff_id      Int?
+  internal_notes         String?                      @db.Text
+  customer_notes         String?                      @db.Text
+  accepted_at            DateTime?
+  payment_confirmed_at   DateTime?
+  stock_deducted_at      DateTime?
+  stock_restored_at      DateTime?
+  completed_at           DateTime?
+  cancelled_at           DateTime?
+  created_at             DateTime                     @default(now())
+  updated_at             DateTime                     @updatedAt
+  assigned_staff         StaffProfile?                @relation("CommerceOrderAssignedStaff", fields: [assigned_staff_id], references: [id], onDelete: SetNull)
+  company                Company                      @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  customer_profile       CustomerProfile?             @relation(fields: [customer_profile_id], references: [id], onDelete: SetNull)
+  pickup_point           CommercePickupPoint?         @relation(fields: [pickup_point_id], references: [id], onDelete: SetNull)
+  store                  CommerceStore?               @relation(fields: [store_id], references: [id], onDelete: SetNull)
+  items                  CommerceOrderItem[]
+  status_history         CommerceOrderStatusHistory[]
 
   @@unique([company_id, order_number], map: "commerce_order_company_order_number_key")
   @@index([company_id], map: "commerce_order_company_idx")
@@ -1070,17 +1294,17 @@ model CommerceOrderItemComponentSnapshot {
 }
 
 model CommerceOrderStatusHistory {
-  id                          String                    @id @default(cuid())
+  id                          String                     @id @default(cuid())
   order_id                    String
   previous_payment_status     CommercePaymentStatus?
   new_payment_status          CommercePaymentStatus?
   previous_fulfillment_status CommerceFulfillmentStatus?
   new_fulfillment_status      CommerceFulfillmentStatus?
   changed_by_user_id          String?
-  note                        String?                   @db.Text
-  created_at                  DateTime                  @default(now())
-  changed_by_user             User?                     @relation(fields: [changed_by_user_id], references: [id], onDelete: SetNull)
-  order                       CommerceOrder             @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  note                        String?                    @db.Text
+  created_at                  DateTime                   @default(now())
+  changed_by_user             User?                      @relation(fields: [changed_by_user_id], references: [id], onDelete: SetNull)
+  order                       CommerceOrder              @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
   @@index([order_id], map: "commerce_order_status_history_order_idx")
   @@index([created_at], map: "commerce_order_status_history_created_idx")
@@ -1369,6 +1593,54 @@ enum BookingStatus {
   NO_SHOW
 }
 
+enum RestaurantReservationStatus {
+  PENDING
+  CONFIRMED
+  ARRIVED
+  SEATED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum RestaurantReservationSource {
+  ONLINE
+  ADMIN
+  PHONE
+  WHATSAPP
+  WALK_IN
+}
+
+enum RestaurantNotificationEvent {
+  RESTAURANT_RESERVATION_CREATED
+  RESTAURANT_RESERVATION_CONFIRMED
+  RESTAURANT_RESERVATION_UPDATED
+  RESTAURANT_RESERVATION_CANCELLED
+  RESTAURANT_RESERVATION_REMINDER
+}
+
+enum RestaurantDepositMode {
+  PER_PERSON
+  PER_TABLE
+}
+
+enum RestaurantNotificationChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum RestaurantNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum RestaurantNotificationTrigger {
+  AUTOMATIC
+  MANUAL
+}
+
 enum PaymentMethod {
   NONE
   CASH
@@ -1434,6 +1706,7 @@ enum BusinessPricingProductKey {
   EVENTOS
   CLASES
   TIENDA
+  RESTAURANTE
   PERSONALIZACION_PRO
   METRICAS
   MENSAJERIA_PRO
@@ -1450,6 +1723,7 @@ enum ProductCode {
   EVENTOS
   CLASES
   STORES
+  RESTAURANTE
   PERSONALIZACION
   CRM
   MENSAJERIA
@@ -1466,6 +1740,7 @@ enum ProductTierCode {
   CLASES_PRO
   STORES_BASE
   STORES_PRO
+  RESTAURANTE_PRO
   PERSONALIZACION_BASE
   PERSONALIZACION_PLUS
   CRM_BASE
@@ -1485,6 +1760,7 @@ enum ProductCapabilityCode {
   EVENTOS_PRO
   CLASES_BASE
   CLASES_PRO
+  RESTAURANT_MODULE
   COMMERCE_ACCESS
   COMMERCE_PRODUCTS
   COMMERCE_CATEGORIES
@@ -1763,32 +2039,32 @@ model GroupClass {
 // ─── Group Class Session (one instance of a recurring class) ────────────────
 
 model GroupClassSession {
-  id                    Int             @id @default(autoincrement())
-  company_id            Int
-  group_class_id        Int
-  start_at              DateTime
-  end_at                DateTime
-  status                GroupItemStatus @default(PUBLISHED)
-  max_capacity_override Int?
-  public_attendance_enabled         Boolean   @default(false)
-  attendance_public_token           String?   @unique @db.VarChar(191)
+  id                                 Int             @id @default(autoincrement())
+  company_id                         Int
+  group_class_id                     Int
+  start_at                           DateTime
+  end_at                             DateTime
+  status                             GroupItemStatus @default(PUBLISHED)
+  max_capacity_override              Int?
+  public_attendance_enabled          Boolean         @default(false)
+  attendance_public_token            String?         @unique @db.VarChar(191)
   attendance_public_token_created_at DateTime?
   attendance_public_token_rotated_at DateTime?
-  attendance_access_code_enabled    Boolean   @default(false)
-  attendance_access_code_hash       String?   @db.VarChar(255)
-  attendance_access_code_updated_at DateTime?
-  cancelled_at          DateTime?
-  cancel_reason         String?         @db.VarChar(500)
-  created_at            DateTime        @default(now())
-  updated_at            DateTime        @updatedAt
+  attendance_access_code_enabled     Boolean         @default(false)
+  attendance_access_code_hash        String?         @db.VarChar(255)
+  attendance_access_code_updated_at  DateTime?
+  cancelled_at                       DateTime?
+  cancel_reason                      String?         @db.VarChar(500)
+  created_at                         DateTime        @default(now())
+  updated_at                         DateTime        @updatedAt
 
-  company                           Company                              @relation(fields: [company_id], references: [id])
-  group_class                       GroupClass                           @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
-  attendances                       GroupSessionAttendance[]
-  tickets                           GroupTicket[]
-  sponsored_enrollments             GroupClassEnrollment[]               @relation("SponsoredBySession")
-  guest_enrollment_sessions         GroupClassGuestEnrollmentSession[]
-  public_attendance_attempts        GroupSessionPublicAttendanceAttempt[]
+  company                    Company                               @relation(fields: [company_id], references: [id])
+  group_class                GroupClass                            @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
+  attendances                GroupSessionAttendance[]
+  tickets                    GroupTicket[]
+  sponsored_enrollments      GroupClassEnrollment[]                @relation("SponsoredBySession")
+  guest_enrollment_sessions  GroupClassGuestEnrollmentSession[]
+  public_attendance_attempts GroupSessionPublicAttendanceAttempt[]
 
   @@unique([group_class_id, start_at])
   @@index([company_id, group_class_id, start_at])
@@ -1859,38 +2135,38 @@ model GroupEventBooking {
 // ─── Class Enrollment (pass/subscription for a class) ───────────────────────
 
 model GroupClassEnrollment {
-  id                   Int                @id @default(autoincrement())
-  company_id           Int
-  group_class_id       Int
-  customer_profile_id  Int?
-  user_id              String
-  pricing_mode         ClassPricingMode
-  price_cents_snapshot Int
-  status               GroupBookingStatus @default(PENDING)
-  payment_method       PaymentMethod      @default(NONE)
-  payment_status       PaymentStatus      @default(UNPAID)
-  qr_proof_image_url   String?            @db.VarChar(512)
-  source               ClassEnrollmentSource @default(PUBLIC_CHECKOUT)
-  is_admin_sponsored   Boolean            @default(false)
-  sponsorship_reason   String?            @db.VarChar(255)
+  id                                  Int                   @id @default(autoincrement())
+  company_id                          Int
+  group_class_id                      Int
+  customer_profile_id                 Int?
+  user_id                             String
+  pricing_mode                        ClassPricingMode
+  price_cents_snapshot                Int
+  status                              GroupBookingStatus    @default(PENDING)
+  payment_method                      PaymentMethod         @default(NONE)
+  payment_status                      PaymentStatus         @default(UNPAID)
+  qr_proof_image_url                  String?               @db.VarChar(512)
+  source                              ClassEnrollmentSource @default(PUBLIC_CHECKOUT)
+  is_admin_sponsored                  Boolean               @default(false)
+  sponsorship_reason                  String?               @db.VarChar(255)
   sponsored_by_group_class_session_id Int?
-  sponsored_by_admin_user_id String?
-  valid_from           DateTime
-  valid_until          DateTime
-  created_at           DateTime           @default(now())
-  updated_at           DateTime           @updatedAt
-  cancelled_at         DateTime?
+  sponsored_by_admin_user_id          String?
+  valid_from                          DateTime
+  valid_until                         DateTime
+  created_at                          DateTime              @default(now())
+  updated_at                          DateTime              @updatedAt
+  cancelled_at                        DateTime?
 
-  company                           Company                  @relation(fields: [company_id], references: [id])
-  group_class                       GroupClass               @relation(fields: [group_class_id], references: [id])
-  customer_profile                  CustomerProfile?         @relation(fields: [customer_profile_id], references: [id])
-  user                              User                     @relation(fields: [user_id], references: [id])
-  attendances                       GroupSessionAttendance[]
-  tickets                           GroupTicket[]
-  installments                      EnrollmentInstallment[]
-  installment_reminder_logs         InstallmentReminderLog[]
-  sponsored_by_group_class_session  GroupClassSession?       @relation("SponsoredBySession", fields: [sponsored_by_group_class_session_id], references: [id], onDelete: SetNull)
-  sponsored_by_admin                User?                    @relation("ClassEnrollmentSponsoredByAdmin", fields: [sponsored_by_admin_user_id], references: [id], onDelete: SetNull)
+  company                          Company                  @relation(fields: [company_id], references: [id])
+  group_class                      GroupClass               @relation(fields: [group_class_id], references: [id])
+  customer_profile                 CustomerProfile?         @relation(fields: [customer_profile_id], references: [id])
+  user                             User                     @relation(fields: [user_id], references: [id])
+  attendances                      GroupSessionAttendance[]
+  tickets                          GroupTicket[]
+  installments                     EnrollmentInstallment[]
+  installment_reminder_logs        InstallmentReminderLog[]
+  sponsored_by_group_class_session GroupClassSession?       @relation("SponsoredBySession", fields: [sponsored_by_group_class_session_id], references: [id], onDelete: SetNull)
+  sponsored_by_admin               User?                    @relation("ClassEnrollmentSponsoredByAdmin", fields: [sponsored_by_admin_user_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, group_class_id, status])
   @@index([company_id, group_class_id, user_id, status, valid_until], map: "gce_cmp_cls_usr_sts_vu_idx")
@@ -2178,16 +2454,16 @@ model GroupClassGuestEnrollmentSession {
 }
 
 model GroupSessionPublicAttendanceAttempt {
-  id                Int                         @id @default(autoincrement())
-  company_id        Int
+  id                     Int                         @id @default(autoincrement())
+  company_id             Int
   group_class_session_id Int
-  resolved_user_id  String?
-  attempt_type      PublicAttendanceAttemptType
-  token_fingerprint String                      @db.VarChar(128)
-  ip_fingerprint    String                      @db.VarChar(128)
-  success           Boolean                     @default(false)
-  detail_code       String?                     @db.VarChar(64)
-  created_at        DateTime                    @default(now())
+  resolved_user_id       String?
+  attempt_type           PublicAttendanceAttemptType
+  token_fingerprint      String                      @db.VarChar(128)
+  ip_fingerprint         String                      @db.VarChar(128)
+  success                Boolean                     @default(false)
+  detail_code            String?                     @db.VarChar(64)
+  created_at             DateTime                    @default(now())
 
   company       Company           @relation(fields: [company_id], references: [id], onDelete: Cascade)
   group_session GroupClassSession @relation(fields: [group_class_session_id], references: [id], onDelete: Cascade)

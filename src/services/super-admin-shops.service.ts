@@ -5,6 +5,7 @@ import {
     CompanyProductSubscriptionStatus,
     CompanyUserRole,
     Prisma,
+    ProductTierCode,
     ShopPlan,
 } from '@prisma/client';
 import { getAuth } from '../config/auth';
@@ -50,6 +51,10 @@ function generateSlug(text: string): string {
         .replace(/-+$/, '');         // Trim - from end of text
 }
 
+function hasRestaurantModuleEntitlement(products: Array<{ tierCode: ProductTierCode }>): boolean {
+    return products.some((product) => product.tierCode === ProductTierCode.RESTAURANTE_PRO);
+}
+
 interface GetAllShopsOptions {
     search?: string;
     page: number;
@@ -78,6 +83,7 @@ interface CreateShopData {
     isMarketplaceVisible: boolean;
     activeProducts?: CommercialProductInput[];
     requestedProducts?: RequestedProductInput[];
+    restaurantEnabled?: boolean;
     note?: string;
     owner: {
         existingUserId?: string | null;
@@ -115,6 +121,7 @@ interface UpdateShopData {
     isMarketplaceVisible?: boolean;
     activeProducts?: CommercialProductInput[];
     requestedProducts?: RequestedProductInput[];
+    restaurantEnabled?: boolean;
     note?: string;
 }
 
@@ -586,6 +593,7 @@ export async function getShopById(id: number): Promise<MensajeApi> {
                 pricePaid: shop.pricePaid,
                 availableUntil: shop.availableUntil,
                 isMarketplaceVisible: shop.isMarketplaceVisible,
+                restaurant_enabled: shop.restaurant_enabled,
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
@@ -687,6 +695,17 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 code: 400,
                 error: true,
                 message: error instanceof Error ? error.message : 'Invalid product configuration',
+            };
+        }
+
+        if (
+            data.restaurantEnabled &&
+            !hasRestaurantModuleEntitlement(normalizedCommercialConfig.activeProducts)
+        ) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Restaurant Lite requires an active Restaurante product',
             };
         }
 
@@ -807,6 +826,18 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 source: 'SUPER_ADMIN_CREATE_SHOP',
                 note: data.note?.trim() || 'Shop created via super-admin',
             });
+
+            if (data.restaurantEnabled) {
+                await tx.company.update({
+                    where: { id: shop.id },
+                    data: { restaurant_enabled: true },
+                });
+                await tx.restaurantSettings.upsert({
+                    where: { company_id: shop.id },
+                    create: { company_id: shop.id },
+                    update: {},
+                });
+            }
 
             await tx.companySubscriptionHistory.create({
                 data: {
@@ -1100,6 +1131,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 pricePaid: shop.pricePaid,
                 availableUntil: shop.availableUntil,
                 isMarketplaceVisible: shop.isMarketplaceVisible,
+                restaurant_enabled: Boolean(data.restaurantEnabled),
                 company_type_id: shop.company_type_id,
                 created_at: shop.created_at,
                 updated_at: shop.updated_at,
@@ -1226,6 +1258,18 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
             }
         }
 
+        const nextRestaurantEnabled = data.restaurantEnabled ?? existingShop.restaurant_enabled;
+        const restaurantEntitled = normalizedCommercialConfig
+            ? hasRestaurantModuleEntitlement(normalizedCommercialConfig.activeProducts)
+            : await isFeatureEnabledForCompany(id, 'RESTAURANT_MODULE');
+        if (nextRestaurantEnabled && !restaurantEntitled) {
+            return {
+                code: 400,
+                error: true,
+                message: 'Restaurant Lite requires an active Restaurante product',
+            };
+        }
+
         // Generate slug if name is being updated and no slug provided
         const updateData: Prisma.CompanyUncheckedUpdateInput = {};
         if (data.name !== undefined) {
@@ -1262,6 +1306,7 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
         }
         if (data.pricePaid !== undefined) updateData.pricePaid = normalizedPricePaid;
         if (data.isMarketplaceVisible !== undefined) updateData.isMarketplaceVisible = data.isMarketplaceVisible;
+        if (data.restaurantEnabled !== undefined) updateData.restaurant_enabled = data.restaurantEnabled;
 
         const nextPlan = normalizedCommercialConfig?.legacyPlan ?? data.plan ?? existingShop.plan;
 
@@ -1322,6 +1367,14 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
                 });
             }
 
+            if (data.restaurantEnabled) {
+                await tx.restaurantSettings.upsert({
+                    where: { company_id: updatedShop.id },
+                    create: { company_id: updatedShop.id },
+                    update: {},
+                });
+            }
+
             if (subscriptionFieldsChanged) {
                 await tx.companySubscriptionHistory.create({
                     data: {
@@ -1373,6 +1426,7 @@ export async function updateShop(id: number, data: UpdateShopData, changedByUser
                 pricePaid: shop.shop.pricePaid,
                 availableUntil: shop.shop.availableUntil,
                 isMarketplaceVisible: shop.shop.isMarketplaceVisible,
+                restaurant_enabled: shop.shop.restaurant_enabled,
                 company_type_id: shop.shop.company_type_id,
                 created_at: shop.shop.created_at,
                 updated_at: shop.shop.updated_at,

@@ -1,0 +1,31 @@
+import { Router } from 'express';
+import { CompanyUserRole } from '@prisma/client';
+import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
+import { requirePlanFeature } from '../middlewares/requirePlanFeature';
+import { requireRestaurantAccess } from '../middlewares/requireRestaurantAccess';
+import { validate } from '../middlewares/validate';
+import * as Controller from '../controllers/admin-restaurant.controller';
+import { createRestaurantDiningAreaSchema, createRestaurantServicePeriodSchema, createRestaurantTableSchema, restaurantAccessSchema, updateRestaurantDiningAreaSchema, updateRestaurantServicePeriodSchema, updateRestaurantSettingsSchema, updateRestaurantTableSchema } from '../schemas/restaurant.schema';
+
+const router = Router();
+const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
+router.use(requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('RESTAURANT_MODULE'));
+
+router.get('/access', Controller.getAccess);
+router.patch('/access', validate(restaurantAccessSchema), Controller.updateAccess);
+router.use(requireRestaurantAccess);
+router.get('/settings', Controller.getSettings);
+router.patch('/settings', validate(updateRestaurantSettingsSchema), Controller.updateSettings);
+router.get('/dining-areas', Controller.listAreas);
+router.post('/dining-areas', validate(createRestaurantDiningAreaSchema), Controller.createArea);
+router.patch('/dining-areas/:id', validate(updateRestaurantDiningAreaSchema), Controller.updateArea);
+router.delete('/dining-areas/:id', Controller.deleteArea);
+router.get('/tables', Controller.listTables);
+router.post('/tables', validate(createRestaurantTableSchema), Controller.createTable);
+router.patch('/tables/:id', validate(updateRestaurantTableSchema), Controller.updateTable);
+router.delete('/tables/:id', Controller.deleteTable);
+router.get('/service-periods', Controller.listPeriods);
+router.post('/service-periods', validate(createRestaurantServicePeriodSchema), Controller.createPeriod);
+router.patch('/service-periods/:id', validate(updateRestaurantServicePeriodSchema), Controller.updatePeriod);
+router.delete('/service-periods/:id', Controller.deletePeriod);
+export default router;

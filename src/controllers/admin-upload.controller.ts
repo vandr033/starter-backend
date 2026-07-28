@@ -98,6 +98,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       'about_2',
       'about_3',
       'commerce_store_qr',
+      'restaurant_deposit_qr',
       'commerce_category',
       'commerce_product',
       'staff',
@@ -186,6 +187,12 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         select: { qr_image_url: true },
       });
       previousImageUrl = currentRecord?.qr_image_url ?? null;
+    } else if (type === 'restaurant_deposit_qr') {
+      const currentRecord = await prisma.restaurantSettings.findUnique({
+        where: { company_id: companyId },
+        select: { deposit_qr_image_url: true },
+      });
+      previousImageUrl = currentRecord?.deposit_qr_image_url ?? null;
     } else if (type === 'commerce_category') {
       const currentRecord = await prisma.commerceCategory.findFirst({
         where: { id: entityId!, company_id: companyId },
@@ -208,6 +215,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       | 'about'
       | 'staff'
       | 'gallery'
+      | 'qr'
       | 'commerce-store'
       | 'commerce-categories'
       | 'commerce-products'
@@ -244,6 +252,11 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         storageType = 'commerce-store';
         filename = buildVersionedCommerceFilename('qr', fileExtension);
         imageUrlField = 'qr_image_url';
+        break;
+      case 'restaurant_deposit_qr':
+        storageType = 'qr';
+        filename = buildVersionedCommerceFilename('restaurant-deposit', fileExtension);
+        imageUrlField = 'deposit_qr_image_url';
         break;
       case 'commerce_category':
         storageType = 'commerce-categories';
@@ -324,6 +337,12 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         update: {
           qr_image_url: url,
         },
+      });
+    } else if (type === 'restaurant_deposit_qr') {
+      await prisma.restaurantSettings.upsert({
+        where: { company_id: companyId },
+        create: { company_id: companyId, deposit_qr_image_url: url },
+        update: { deposit_qr_image_url: url },
       });
     } else if (type === 'commerce_category') {
       const updated = await prisma.commerceCategory.updateMany({

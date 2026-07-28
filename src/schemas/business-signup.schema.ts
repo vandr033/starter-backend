@@ -91,6 +91,7 @@ export const businessSignupSchema = z
             });
         }
 
+
         if (uniqueAddOns.size !== data.addOns.length) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,

@@ -106,6 +106,7 @@ const DEFAULT_INCLUDED_ADDON_TIERS: Record<ProductCode, ProductTierCode> = {
     [ProductCode.EVENTOS]: ProductTierCode.EVENTOS_BASE,
     [ProductCode.CLASES]: ProductTierCode.CLASES_BASE,
     [ProductCode.STORES]: ProductTierCode.STORES_BASE,
+    [ProductCode.RESTAURANTE]: ProductTierCode.RESTAURANTE_PRO,
     [ProductCode.METRICAS]: ProductTierCode.METRICAS_BASE,
     [ProductCode.MARKETPLACE]: ProductTierCode.MARKETPLACE_PLUS,
 };
@@ -257,6 +258,7 @@ export function mapLegacyPlanCompatibility(
 
     if (
         selectedTiers.has(ProductTierCode.RESERVAS_PRO) ||
+        selectedTiers.has(ProductTierCode.RESTAURANTE_PRO) ||
         selectedTiers.has(ProductTierCode.EVENTOS_BASE) ||
         proAddonCount >= 1
     ) {

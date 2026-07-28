@@ -33,6 +33,7 @@ const PRODUCT_REQUEST_LABELS: Record<ProductTierCode, string> = {
     CLASES_PRO: 'Clases Pro',
     STORES_BASE: 'Tienda',
     STORES_PRO: 'Tienda Pro',
+    RESTAURANTE_PRO: 'Restaurante',
     PERSONALIZACION_BASE: 'Personalización Base',
     PERSONALIZACION_PLUS: 'Personalización Pro',
     CRM_BASE: 'CRM',
@@ -79,6 +80,11 @@ const CAPABILITY_PRODUCT_ACCESS: Record<ProductCapability, ProductAccessDefiniti
         productCode: 'CLASES',
         tierCode: 'CLASES_PRO',
         capability: 'CLASES_PRO',
+    },
+    RESTAURANT_MODULE: {
+        productCode: 'RESTAURANTE',
+        tierCode: 'RESTAURANTE_PRO',
+        capability: 'RESTAURANT_MODULE',
     },
     COMMERCE_ACCESS: {
         productCode: 'STORES',
@@ -285,6 +291,7 @@ const FEATURE_PRODUCT_ACCESS: Record<PlanFeatureKey, ProductAccessDefinition> = 
     GROUP_EVENTS: CAPABILITY_PRODUCT_ACCESS.EVENTOS_BASE,
     GROUP_CLASSES: CAPABILITY_PRODUCT_ACCESS.CLASES_BASE,
     GROUP_ADVANCED: CAPABILITY_PRODUCT_ACCESS.EVENTOS_PRO,
+    RESTAURANT_MODULE: CAPABILITY_PRODUCT_ACCESS.RESTAURANT_MODULE,
 };
 
 function hasTier(
