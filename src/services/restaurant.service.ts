@@ -37,7 +37,9 @@ export async function getSettings(companyId: number): Promise<Result> {
 export async function updateSettings(companyId: number, input: Record<string, unknown>): Promise<Result> {
   const settings = await restaurantRepo.getSettings(companyId);
   if (!settings) return fail(404, 'La configuración de restaurante no existe todavía.');
-  return ok(await prisma.restaurantSettings.update({ where: { id: settings.id }, data: input }), 'Configuración actualizada.');
+  const changed = await prisma.restaurantSettings.updateMany({ where: { id: settings.id, company_id: companyId }, data: input });
+  if (!changed.count) return fail(409, 'La configuración cambió de empresa o ya no está disponible.');
+  return ok(await restaurantRepo.getSettings(companyId), 'Configuración actualizada.');
 }
 
 export async function listAreas(companyId: number) { return ok(await restaurantRepo.listAreas(companyId)); }
@@ -48,14 +50,19 @@ export async function createArea(companyId: number, input: any): Promise<Result>
 export async function updateArea(companyId: number, id: number, input: any): Promise<Result> {
   const area = await restaurantRepo.findArea(companyId, id);
   if (!area) return fail(404, 'No encontramos el área.');
-  try { return ok(await prisma.restaurantDiningArea.update({ where: { id: area.id }, data: input }), 'Área actualizada.'); }
+  try {
+    const changed = await prisma.restaurantDiningArea.updateMany({ where: { id: area.id, company_id: companyId }, data: input });
+    if (!changed.count) return fail(409, 'El área cambió de empresa o ya no está disponible.');
+    return ok(await restaurantRepo.findArea(companyId, area.id), 'Área actualizada.');
+  }
   catch (error) { return prismaError(error) ?? fail(500, 'No pudimos actualizar el área.'); }
 }
 export async function deleteArea(companyId: number, id: number): Promise<Result> {
   const area = await prisma.restaurantDiningArea.findFirst({ where: { id, company_id: companyId }, include: { tables: { select: { id: true } } } });
   if (!area) return fail(404, 'No encontramos el área.');
   if (area.tables.length) return fail(409, 'No podés eliminar un área que todavía tiene mesas. Mové, eliminá o desactivá sus mesas primero.');
-  await prisma.restaurantDiningArea.delete({ where: { id: area.id } });
+  const deleted = await prisma.restaurantDiningArea.deleteMany({ where: { id: area.id, company_id: companyId } });
+  if (!deleted.count) return fail(409, 'El área cambió de empresa o ya no está disponible.');
   return ok(null, 'Área eliminada.');
 }
 
@@ -73,13 +80,18 @@ export async function updateTable(companyId: number, id: number, input: any): Pr
   const minimumSeats = input.minimum_seats ?? table.minimum_seats;
   const maximumSeats = input.maximum_seats ?? table.maximum_seats;
   if (maximumSeats < minimumSeats) return fail(400, 'La capacidad máxima debe ser mayor o igual a la mínima.');
-  try { return ok(await prisma.restaurantTable.update({ where: { id: table.id }, data: input }), 'Mesa actualizada.'); }
+  try {
+    const changed = await prisma.restaurantTable.updateMany({ where: { id: table.id, company_id: companyId }, data: input });
+    if (!changed.count) return fail(409, 'La mesa cambió de empresa o ya no está disponible.');
+    return ok(await restaurantRepo.findTable(companyId, table.id), 'Mesa actualizada.');
+  }
   catch (error) { return prismaError(error) ?? fail(500, 'No pudimos actualizar la mesa.'); }
 }
 export async function deleteTable(companyId: number, id: number): Promise<Result> {
   const table = await restaurantRepo.findTable(companyId, id);
   if (!table) return fail(404, 'No encontramos la mesa.');
-  await prisma.restaurantTable.delete({ where: { id: table.id } });
+  const deleted = await prisma.restaurantTable.deleteMany({ where: { id: table.id, company_id: companyId } });
+  if (!deleted.count) return fail(409, 'La mesa cambió de empresa o ya no está disponible.');
   return ok(null, 'Mesa eliminada.');
 }
 
@@ -102,11 +114,14 @@ export async function updatePeriod(companyId: number, id: number, input: any): P
   if (!period) return fail(404, 'No encontramos el período.');
   const next = { ...period, ...input };
   const validation = await validatePeriod(companyId, next, id); if (validation) return validation;
-  return ok(await prisma.restaurantServicePeriod.update({ where: { id: period.id }, data: input }), 'Período actualizado.');
+  const changed = await prisma.restaurantServicePeriod.updateMany({ where: { id: period.id, company_id: companyId }, data: input });
+  if (!changed.count) return fail(409, 'El período cambió de empresa o ya no está disponible.');
+  return ok(await restaurantRepo.findPeriod(companyId, period.id), 'Período actualizado.');
 }
 export async function deletePeriod(companyId: number, id: number): Promise<Result> {
   const period = await restaurantRepo.findPeriod(companyId, id);
   if (!period) return fail(404, 'No encontramos el período.');
-  await prisma.restaurantServicePeriod.delete({ where: { id: period.id } });
+  const deleted = await prisma.restaurantServicePeriod.deleteMany({ where: { id: period.id, company_id: companyId } });
+  if (!deleted.count) return fail(409, 'El período cambió de empresa o ya no está disponible.');
   return ok(null, 'Período eliminado.');
 }

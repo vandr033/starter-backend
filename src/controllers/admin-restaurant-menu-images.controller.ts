@@ -33,8 +33,10 @@ async function imageAction(req: AuthenticatedRequest, res: Response, kind: 'cate
     : await prisma.restaurantMenuCategory.findFirst({ where: { id: recordId, company_id: cid }, select: { id: true, image_url: true } });
   if (!row) return res.status(404).json({ code: 404, error: true, message: kind === 'item' ? 'No encontramos el producto.' : 'No encontramos la categoría.' });
   if (remove) {
-    if (kind === 'item') await prisma.restaurantMenuItem.update({ where: { id: recordId }, data: { image_url: null } });
-    else await prisma.restaurantMenuCategory.update({ where: { id: recordId }, data: { image_url: null } });
+    const changed = kind === 'item'
+      ? await prisma.restaurantMenuItem.updateMany({ where: { id: recordId, company_id: cid }, data: { image_url: null } })
+      : await prisma.restaurantMenuCategory.updateMany({ where: { id: recordId, company_id: cid }, data: { image_url: null } });
+    if (!changed.count) return res.status(409).json({ code: 409, error: true, message: 'El registro cambió de empresa o ya no está disponible.' });
     const previous = trustedRestaurantMenuPath(row.image_url, cid);
     if (previous) await StorageService.deleteFile(previous).catch(() => undefined);
     return res.json({ code: 200, error: false, message: 'Imagen eliminada.', data: { imageUrl: null } });
@@ -43,8 +45,13 @@ async function imageAction(req: AuthenticatedRequest, res: Response, kind: 'cate
   const extension = ext(req.file.originalname); if (!extension || !allowedMimeByExtension[extension] || req.file.mimetype !== allowedMimeByExtension[extension] || !hasValidImageSignature(req.file.buffer, extension)) return res.status(400).json({ code: 400, error: true, message: 'El archivo no contiene una imagen JPEG, PNG o WebP válida.' });
   const relativePath = await StorageService.saveFile(cid, kind === 'item' ? 'restaurant-menu-items' : 'restaurant-menu-categories', safeFile(recordId, extension), req.file.buffer);
   const imageUrl = StorageService.getFileUrl(relativePath);
-  if (kind === 'item') await prisma.restaurantMenuItem.update({ where: { id: recordId }, data: { image_url: imageUrl } });
-  else await prisma.restaurantMenuCategory.update({ where: { id: recordId }, data: { image_url: imageUrl } });
+  const changed = kind === 'item'
+    ? await prisma.restaurantMenuItem.updateMany({ where: { id: recordId, company_id: cid }, data: { image_url: imageUrl } })
+    : await prisma.restaurantMenuCategory.updateMany({ where: { id: recordId, company_id: cid }, data: { image_url: imageUrl } });
+  if (!changed.count) {
+    await StorageService.deleteFile(relativePath).catch(() => undefined);
+    return res.status(409).json({ code: 409, error: true, message: 'El registro cambió de empresa o ya no está disponible.' });
+  }
   const previous = trustedRestaurantMenuPath(row.image_url, cid);
   if (previous && previous !== relativePath) await StorageService.deleteFile(previous).catch(() => undefined);
   return res.json({ code: 200, error: false, message: 'Imagen actualizada.', data: { imageUrl } });

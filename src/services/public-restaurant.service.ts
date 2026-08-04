@@ -3,10 +3,10 @@ import { prisma } from '../prisma/client';
 import { isCompanyAvailableNow } from '../utils/company-availability';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
-import { StorageService } from './storage.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { generateRestaurantReservationCode, resolveRestaurantCustomer, selectRestaurantTable } from './restaurant-reservation.service';
 import { notifyRestaurantReservation, notifyRestaurantReservationGuests } from './restaurant-notification.service';
+import { ensureReservationDeposit, publicDepositStatus, uploadPublicReservationProof } from './restaurant-deposit.service';
 
 type Result = { code: number; error: boolean; message: string; data?: unknown };
 const ok = (data: unknown, message = 'Operación realizada correctamente.', code = 200): Result => ({ code, error: false, message, data });
@@ -26,19 +26,6 @@ function localDay(date: string) { return new Date(`${date}T12:00:00Z`).getUTCDay
 function addLocalDays(date: string, days: number) { const value = new Date(`${date}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }
 function validDate(date: string) { return /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(new Date(`${date}T12:00:00Z`).getTime()) && new Date(`${date}T12:00:00Z`).toISOString().slice(0, 10) === date; }
 function normalizeText(value?: string | null) { const result = value?.trim(); return result || null; }
-const depositProofMimeByExtension: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', pdf: 'application/pdf' };
-function validDepositProof(buffer: Buffer, extension: string) {
-  if (extension === 'jpg' || extension === 'jpeg') return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-  if (extension === 'png') return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  if (extension === 'webp') return buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
-  return buffer.length >= 5 && buffer.subarray(0, 5).toString('ascii') === '%PDF-';
-}
-function trustedDepositProofUrl(value: string | null | undefined, companyId: number) {
-  if (!value) return null;
-  const relative = StorageService.toRelativeStoragePath(value);
-  if (!relative) return null;
-  return new RegExp(`^uploads/${companyId}/restaurant-deposit-proofs/[A-Za-z0-9._-]+$`).test(relative) ? relative : null;
-}
 function normalizeGuests(guests: Array<{ name: string; phone: string; phonePrefix?: string | null }>, defaultPrefix: string, hostPhone: string | null) {
   const normalized = guests.map((guest) => {
     const phone = canonicalizePhoneParts({ phoneNumber: guest.phone, phonePrefix: guest.phonePrefix, defaultPrefix });
@@ -94,12 +81,12 @@ async function validSlot(context: NonNullable<PublicContext>, date: string, time
   return { start, end: new Date(start.getTime() + context.restaurant_settings.average_dining_minutes * 60_000) };
 }
 
-function publicReservation(reservation: any, context: { name: string; slug: string; logo_url: string | null; timezone: string; restaurant_settings: { allow_customer_cancellation: boolean; cancellation_limit_minutes: number } }) {
+function publicReservation(reservation: any, context: { name: string; slug: string; logo_url: string | null; timezone: string; restaurant_settings: { allow_customer_cancellation: boolean; cancellation_limit_minutes: number } }, deposit?: any) {
   const deadline = new Date(reservation.start_time.getTime() - context.restaurant_settings.cancellation_limit_minutes * 60_000);
   const canCancel = context.restaurant_settings.allow_customer_cancellation && ['PENDING', 'CONFIRMED'].includes(reservation.status) && new Date() < deadline;
   return {
     code: reservation.reservation_code, status: reservation.status, date: localDate(reservation.start_time, context.timezone), time: localTime(reservation.start_time, context.timezone), partySize: reservation.party_size,
-    customerName: reservation.customer_name, notes: reservation.notes, depositAmountCents: reservation.deposit_amount_cents ?? 0, depositMode: reservation.deposit_mode ?? null, canCancel,
+    customerName: reservation.customer_name, notes: reservation.notes, depositAmountCents: reservation.deposit_amount_cents ?? 0, depositMode: reservation.deposit_mode ?? null, deposit: deposit ?? null, canCancel,
     cancellationDeadline: new Intl.DateTimeFormat('sv-SE', { timeZone: context.timezone, dateStyle: 'short', timeStyle: 'short', hour12: false }).format(deadline),
     restaurant: { name: context.name, slug: context.slug, logoUrl: context.logo_url },
   };
@@ -137,17 +124,8 @@ export async function getAvailability(slug: string, input: { date: string; party
   } catch (error: any) { return fail(error.status || 500, error.message || 'No pudimos consultar horarios disponibles.'); }
 }
 
-export async function uploadDepositProof(slug: string, file: { buffer: Buffer; mimetype: string; originalname: string }): Promise<Result> {
-  try {
-    const context = await loadPublicContext(slug); if (!context) return fail(404, NOT_FOUND);
-    const extension = file.originalname.split('.').pop()?.toLowerCase() || '';
-    if (!depositProofMimeByExtension[extension] || depositProofMimeByExtension[extension] !== file.mimetype || !validDepositProof(file.buffer, extension)) {
-      return fail(400, 'El comprobante debe ser una imagen JPEG, PNG, WebP o un PDF válido.');
-    }
-    const filename = `deposit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
-    const relative = await StorageService.saveFile(context.id, 'restaurant-deposit-proofs', filename, file.buffer);
-    return ok({ url: StorageService.getFileUrl(relative) }, 'Comprobante cargado.', 201);
-  } catch (error: any) { return fail(500, error.message || 'No pudimos cargar el comprobante.'); }
+export async function uploadReservationDepositProof(slug: string, reservationCode: string, file: { buffer: Buffer; mimetype: string; originalname: string }): Promise<Result> {
+  return uploadPublicReservationProof(slug, reservationCode, file);
 }
 
 export async function createPublicReservation(slug: string, input: any): Promise<Result> {
@@ -163,33 +141,38 @@ export async function createPublicReservation(slug: string, input: any): Promise
       const guests = normalizeGuests(input.guests ?? [], context.phone_prefix, phone.fullPhone);
       if (guests.length > input.partySize - 1) throw Object.assign(new Error('La cantidad de acompañantes supera el tamaño del grupo.'), { status: 400 });
       const customerProfileId = await resolveRestaurantCustomer(tx, context.id, context.phone_prefix, { customer_name: input.customer.name, customer_phone: phone.phoneNumber, customer_phone_prefix: phone.phonePrefix, customer_email: input.customer.email });
-      const status: RestaurantReservationStatus = context.restaurant_settings.auto_confirm_reservations ? 'CONFIRMED' : 'PENDING';
+      const status: RestaurantReservationStatus = context.restaurant_settings.deposit_enabled && context.restaurant_settings.deposit_amount_cents > 0
+        ? 'PENDING'
+        : (context.restaurant_settings.auto_confirm_reservations ? 'CONFIRMED' : 'PENDING');
       const depositAmount = context.restaurant_settings.deposit_enabled
         ? context.restaurant_settings.deposit_amount_cents * (context.restaurant_settings.deposit_mode === RestaurantDepositMode.PER_PERSON ? input.partySize : 1)
         : 0;
-      const depositProofImageUrl = normalizeText(input.depositProofImageUrl);
-      if (depositAmount > 0 && !depositProofImageUrl) throw Object.assign(new Error('Debés subir el comprobante del depósito para confirmar la reserva.'), { status: 400 });
-      if (depositProofImageUrl && !trustedDepositProofUrl(depositProofImageUrl, context.id)) throw Object.assign(new Error('El comprobante no corresponde a este restaurante.'), { status: 400 });
+      if (input.depositProofImageUrl) throw Object.assign(new Error('El comprobante se carga después de crear la reserva, usando su código.'), { status: 400 });
       for (let attempts = 0; attempts < 3; attempts += 1) {
-        try { return await tx.restaurantReservation.create({ data: { company_id: context.id, customer_profile_id: customerProfileId, table_id: table.id, reservation_code: generateRestaurantReservationCode(), reservation_date: parseDateTimeInTimeZone(`${input.date}T00:00:00`, context.timezone), start_time: start, end_time: end, party_size: input.partySize, customer_name: input.customer.name.trim(), customer_phone: phone.fullPhone, customer_email: normalizeText(input.customer.email)?.toLowerCase(), deposit_amount_cents: depositAmount, deposit_mode: depositAmount > 0 ? context.restaurant_settings.deposit_mode : null, deposit_proof_image_url: depositProofImageUrl, notes: normalizeText(input.notes), status, source: 'ONLINE', guests: { create: guests } } }); }
+        try {
+          const reservation = await tx.restaurantReservation.create({ data: { company_id: context.id, customer_profile_id: customerProfileId, table_id: table.id, reservation_code: generateRestaurantReservationCode(), reservation_date: parseDateTimeInTimeZone(`${input.date}T00:00:00`, context.timezone), start_time: start, end_time: end, party_size: input.partySize, customer_name: input.customer.name.trim(), customer_phone: phone.fullPhone, customer_email: normalizeText(input.customer.email)?.toLowerCase(), deposit_amount_cents: depositAmount, deposit_mode: depositAmount > 0 ? context.restaurant_settings.deposit_mode : null, deposit_proof_image_url: null, notes: normalizeText(input.notes), status, source: 'ONLINE', guests: { create: guests } } });
+          await ensureReservationDeposit(tx, context.id, reservation.id, reservation.party_size, reservation.start_time);
+          return reservation;
+        }
         catch (error: any) { if (error?.code !== 'P2002' || attempts === 2) throw error; }
       }
       throw new Error('No pudimos generar el código de reserva.');
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     const context = await loadPublicContext(slug); if (!context) return fail(404, NOT_FOUND);
     if (result.status === 'PENDING' || result.status === 'CONFIRMED') {
-      try { await notifyRestaurantReservation(result.id, { event: result.status === 'PENDING' ? RestaurantNotificationEvent.RESTAURANT_RESERVATION_CREATED : RestaurantNotificationEvent.RESTAURANT_RESERVATION_CONFIRMED }); } catch { /* The committed public reservation remains valid. */ }
-      try { await notifyRestaurantReservationGuests(result.id); } catch { /* Guest invitations never invalidate a reservation. */ }
+      try { await notifyRestaurantReservation({ companyId: result.company_id, reservationId: result.id, event: result.status === 'PENDING' ? RestaurantNotificationEvent.RESTAURANT_RESERVATION_CREATED : RestaurantNotificationEvent.RESTAURANT_RESERVATION_CONFIRMED }); } catch { /* The committed public reservation remains valid. */ }
+      try { await notifyRestaurantReservationGuests({ companyId: result.company_id, reservationId: result.id }); } catch { /* Guest invitations never invalidate a reservation. */ }
     }
-    return ok({ reservation: { ...publicReservation(result, context), publicUrl: `/shop/${context.slug}/reservation/${result.reservation_code}` }, message: result.status === 'CONFIRMED' ? 'Tu reserva está confirmada.' : 'Tu solicitud de reserva fue recibida y está pendiente de confirmación.' }, 'Reserva creada.', 201);
+    const deposit = await publicDepositStatus(result.company_id, result.id);
+    return ok({ reservation: { ...publicReservation(result, context, deposit), publicUrl: `/shop/${context.slug}/reservation/${result.reservation_code}` }, message: result.status === 'CONFIRMED' ? 'Tu reserva está confirmada.' : 'Tu solicitud de reserva fue recibida y está pendiente de confirmación.' }, 'Reserva creada.', 201);
   } catch (error: any) { const conflict = error?.status === 409 || error?.code === 'P2034'; return fail(conflict ? 409 : (error?.status || 500), conflict ? 'Ese horario acaba de dejar de estar disponible. Selecciona otro horario.' : (error?.message || 'No pudimos crear la reserva.')); }
 }
 
 export async function getPublicReservation(code: string): Promise<Result> {
-  const reservation = await prisma.restaurantReservation.findUnique({ where: { reservation_code: code }, select: { reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true, company: { select: { slug: true } } } });
+  const reservation = await prisma.restaurantReservation.findUnique({ where: { reservation_code: code }, select: { id: true, company_id: true, reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true, company: { select: { slug: true } } } });
   if (!reservation) return fail(404, NOT_FOUND);
   const context = await loadPublicContext(reservation.company.slug); if (!context) return fail(404, NOT_FOUND);
-  return ok({ reservation: publicReservation(reservation, context) });
+  return ok({ reservation: publicReservation(reservation, context, await publicDepositStatus(reservation.company_id, reservation.id)) });
 }
 
 export async function getMyPublicReservations(slug: string, userId: string): Promise<Result> {
@@ -197,11 +180,11 @@ export async function getMyPublicReservations(slug: string, userId: string): Pro
   if (!context) return fail(404, NOT_FOUND);
   const reservations = await prisma.restaurantReservation.findMany({
     where: { company_id: context.id, customer_profile: { user_id: userId } },
-    select: { reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true },
+    select: { id: true, company_id: true, reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true },
     orderBy: { start_time: 'desc' },
     take: 100,
   });
-  return ok({ reservations: reservations.map((reservation) => publicReservation(reservation, context)) });
+  return ok({ reservations: await Promise.all(reservations.map(async (reservation) => publicReservation(reservation, context, await publicDepositStatus(reservation.company_id, reservation.id)))) });
 }
 
 export async function cancelPublicReservation(code: string, reason?: string): Promise<Result> {
@@ -216,7 +199,7 @@ export async function cancelPublicReservation(code: string, reason?: string): Pr
       const updated = await tx.restaurantReservation.update({ where: { id: reservation.id }, data: { status: 'CANCELLED', cancelled_at: new Date(), cancellation_reason: normalizeText(reason) }, select: { reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true } });
       return { reservation: updated, context, didCancel: true, notificationReservationId: reservation.id };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    if (result.didCancel) { try { await notifyRestaurantReservation(result.notificationReservationId, { event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CANCELLED, cancellationActor: 'CUSTOMER' }); } catch { /* cancellation remains committed */ } }
+    if (result.didCancel) { try { await notifyRestaurantReservation({ companyId: result.context.id, reservationId: result.notificationReservationId, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CANCELLED, cancellationActor: 'CUSTOMER' }); } catch { /* cancellation remains committed */ } }
     return ok({ reservation: publicReservation(result.reservation, result.context) }, result.didCancel ? 'Tu reserva fue cancelada correctamente.' : 'La reserva ya estaba cancelada.');
   } catch (error: any) { return fail(error.status || 500, error.message || 'No pudimos cancelar la reserva.'); }
 }

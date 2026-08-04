@@ -24,6 +24,9 @@ export const updateRestaurantSettingsSchema = z.object({
   deposit_amount_cents: z.number().int().min(0).max(100000000),
   deposit_mode: z.enum(['PER_PERSON', 'PER_TABLE']),
   deposit_qr_image_url: z.string().trim().max(512).nullable(),
+  turnover_buffer_minutes: z.number().int().min(0).max(240),
+  cleanup_buffer_minutes: z.number().int().min(0).max(240),
+  at_risk_warning_window_minutes: z.number().int().min(5).max(240),
 }).superRefine((input, ctx) => {
   if (input.maximum_party_size < input.minimum_party_size) {
     ctx.addIssue({ code: 'custom', path: ['maximum_party_size'], message: 'Debe ser mayor o igual al tamaño mínimo.' });

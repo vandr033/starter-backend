@@ -2,6 +2,12 @@ import type { Request, Response } from 'express';
 
 export const ACTIVE_COMPANY_COOKIE_NAME = 'active_company_id';
 
+export type ActiveCompanyCookieState = {
+  present: boolean;
+  companyId: number | null;
+  invalid: boolean;
+};
+
 function parseCookieHeader(cookieHeader?: string): Record<string, string> {
   if (!cookieHeader) return {};
   return cookieHeader.split(';').reduce<Record<string, string>>((acc, part) => {
@@ -10,18 +16,32 @@ function parseCookieHeader(cookieHeader?: string): Record<string, string> {
     const key = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
     if (!key) return acc;
-    acc[key] = decodeURIComponent(value);
+    try {
+      acc[key] = decodeURIComponent(value);
+    } catch {
+      acc[key] = value;
+    }
     return acc;
   }, {});
 }
 
 export function getActiveCompanyIdFromRequest(req: Request): number | null {
+  return getActiveCompanyCookieState(req).companyId;
+}
+
+/**
+ * Restaurant routes must distinguish an omitted context from a malformed one.
+ * The legacy helper intentionally collapses both cases to null for modules that
+ * still support their historical fallback behavior.
+ */
+export function getActiveCompanyCookieState(req: Request): ActiveCompanyCookieState {
   const cookieHeader = typeof req.headers.cookie === 'string' ? req.headers.cookie : undefined;
   const cookies = parseCookieHeader(cookieHeader);
   const raw = cookies[ACTIVE_COMPANY_COOKIE_NAME];
-  if (!raw) return null;
+  if (!raw) return { present: false, companyId: null, invalid: false };
+  if (!/^\d+$/.test(raw)) return { present: true, companyId: null, invalid: true };
   const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  return { present: true, companyId: Number.isInteger(parsed) && parsed > 0 ? parsed : null, invalid: !(Number.isInteger(parsed) && parsed > 0) };
 }
 
 function getCookieSettings() {

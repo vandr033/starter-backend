@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { CompanyUserRole } from '@prisma/client';
-import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
+import { requireAuth } from '../middlewares/requireAuth';
+import { requireRestaurantCompanyContext } from '../middlewares/requireRestaurantCompanyContext';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
 import { requireRestaurantAccess } from '../middlewares/requireRestaurantAccess';
 import { validate } from '../middlewares/validate';
@@ -9,7 +10,7 @@ import { createRestaurantDiningAreaSchema, createRestaurantServicePeriodSchema, 
 
 const router = Router();
 const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
-router.use(requireAuth, requireCompanyRole(adminRoles), requirePlanFeature('RESTAURANT_MODULE'));
+router.use(requireAuth, requireRestaurantCompanyContext(adminRoles), requirePlanFeature('RESTAURANT_MODULE'));
 
 router.get('/access', Controller.getAccess);
 router.patch('/access', validate(restaurantAccessSchema), Controller.updateAccess);

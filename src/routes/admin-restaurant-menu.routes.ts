@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { CompanyUserRole } from '@prisma/client';
-import { requireAuth, requireCompanyRole } from '../middlewares/requireAuth';
+import { requireAuth } from '../middlewares/requireAuth';
+import { requireRestaurantCompanyContext } from '../middlewares/requireRestaurantCompanyContext';
 import { requirePlanFeature } from '../middlewares/requirePlanFeature';
 import { requireRestaurantAccess } from '../middlewares/requireRestaurantAccess';
 import { validate } from '../middlewares/validate';
@@ -8,7 +9,7 @@ import * as Menu from '../controllers/admin-restaurant-menu.controller';
 import * as Images from '../controllers/admin-restaurant-menu-images.controller';
 import { createRestaurantMenuCategorySchema, createRestaurantMenuItemSchema, restaurantMenuReorderSchema, updateRestaurantMenuCategorySchema, updateRestaurantMenuItemSchema } from '../schemas/restaurant-menu.schema';
 const router = Router(); const roles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
-router.use(requireAuth, requireCompanyRole(roles), requirePlanFeature('RESTAURANT_MODULE'), requireRestaurantAccess);
+router.use(requireAuth, requireRestaurantCompanyContext(roles), requirePlanFeature('RESTAURANT_MODULE'), requireRestaurantAccess);
 router.get('/menu/categories', Menu.listCategories); router.post('/menu/categories', validate(createRestaurantMenuCategorySchema), Menu.createCategory); router.patch('/menu/categories/reorder', validate(restaurantMenuReorderSchema), Menu.reorderCategories); router.get('/menu/categories/:id', Menu.getCategory); router.patch('/menu/categories/:id', validate(updateRestaurantMenuCategorySchema), Menu.updateCategory); router.delete('/menu/categories/:id', Menu.deleteCategory);
 router.post('/menu/categories/:id/image', Images.restaurantMenuUpload, Images.uploadCategoryImage); router.delete('/menu/categories/:id/image', Images.deleteCategoryImage);
 router.get('/menu/items', Menu.listItems); router.post('/menu/items', validate(createRestaurantMenuItemSchema), Menu.createItem); router.patch('/menu/items/reorder', validate(restaurantMenuReorderSchema), Menu.reorderItems); router.get('/menu/items/:id', Menu.getItem); router.patch('/menu/items/:id', validate(updateRestaurantMenuItemSchema), Menu.updateItem); router.delete('/menu/items/:id', Menu.deleteItem);

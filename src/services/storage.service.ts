@@ -3,12 +3,31 @@ import path from 'path';
 import { env } from '../config/env';
 
 export class StorageService {
+  private static safeCompanyId(companyId: number): string {
+    if (!Number.isInteger(companyId) || companyId <= 0) throw new Error('Invalid company id');
+    return String(companyId);
+  }
+
+  private static safeFilename(filename: string): string {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,190}$/.test(filename) || filename === '.' || filename === '..') throw new Error('Invalid filename');
+    return filename;
+  }
+
+  private static safeRelativePath(relativePath: string): { normalized: string; fullPath: string } {
+    const normalized = relativePath.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!normalized || !normalized.startsWith('uploads/') || normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) throw new Error('Invalid storage path');
+    const storageRoot = path.resolve(env.storagePath);
+    const fullPath = path.resolve(storageRoot, normalized);
+    if (fullPath !== storageRoot && !fullPath.startsWith(`${storageRoot}${path.sep}`)) throw new Error('Invalid storage path');
+    return { normalized, fullPath };
+  }
+
   private static getUploadsPath(): string {
     return path.join(env.storagePath, 'uploads');
   }
 
   private static getCompanyPath(companyId: number): string {
-    return path.join(this.getUploadsPath(), companyId.toString());
+    return path.join(this.getUploadsPath(), this.safeCompanyId(companyId));
   }
 
   static getCompanyLogoPath(companyId: number): string {
@@ -174,7 +193,10 @@ export class StorageService {
         throw new Error(`Invalid storage type: ${type}`);
     }
 
-    const filePath = path.join(directory, filename);
+    const filePath = path.join(directory, this.safeFilename(filename));
+    const resolvedDirectory = path.resolve(directory);
+    const resolvedFilePath = path.resolve(filePath);
+    if (!resolvedFilePath.startsWith(`${resolvedDirectory}${path.sep}`)) throw new Error('Invalid storage filename');
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, buffer);
     
@@ -183,7 +205,7 @@ export class StorageService {
   }
 
   static async deleteFile(relativePath: string): Promise<void> {
-    const fullPath = path.join(env.storagePath, relativePath);
+    const { fullPath } = this.safeRelativePath(relativePath);
     try {
       await fs.unlink(fullPath);
     } catch (error) {
@@ -193,7 +215,8 @@ export class StorageService {
   }
 
   static async fileExists(relativePath: string): Promise<boolean> {
-    const fullPath = path.join(env.storagePath, relativePath);
+    let fullPath: string;
+    try { fullPath = this.safeRelativePath(relativePath).fullPath; } catch { return false; }
     try {
       await fs.access(fullPath);
       return true;
@@ -203,7 +226,11 @@ export class StorageService {
   }
 
   static getFileUrl(relativePath: string): string {
-    return `/api/storage/${relativePath}`;
+    const { normalized } = this.safeRelativePath(relativePath);
+    if (this.isPrivateRelativePath(normalized)) {
+      throw new Error('Private storage files require an authorized retrieval path');
+    }
+    return `/api/storage/${normalized}`;
   }
 
   static toRelativeStoragePath(rawPathOrUrl: string): string | null {
@@ -222,23 +249,23 @@ export class StorageService {
     if (!pathWithoutQuery) return null;
 
     if (pathWithoutQuery.startsWith('/api/storage/')) {
-      return pathWithoutQuery.slice('/api/storage/'.length);
+      try { return this.safeRelativePath(pathWithoutQuery.slice('/api/storage/'.length)).normalized; } catch { return null; }
     }
 
     const uploadsIndex = pathWithoutQuery.indexOf('/uploads/');
     if (uploadsIndex >= 0) {
-      return pathWithoutQuery.slice(uploadsIndex + 1);
+      try { return this.safeRelativePath(pathWithoutQuery.slice(uploadsIndex + 1)).normalized; } catch { return null; }
     }
 
     if (pathWithoutQuery.startsWith('uploads/')) {
-      return pathWithoutQuery;
+      try { return this.safeRelativePath(pathWithoutQuery).normalized; } catch { return null; }
     }
 
     return null;
   }
 
   static async getFilePath(relativePath: string): Promise<string> {
-    const fullPath = path.join(env.storagePath, relativePath);
+    const { fullPath } = this.safeRelativePath(relativePath);
     
     // Check if file exists
     const exists = await this.fileExists(relativePath);
@@ -247,6 +274,15 @@ export class StorageService {
     }
     
     return fullPath;
+  }
+
+  static isPrivateRelativePath(relativePath: string): boolean {
+    try {
+      const { normalized } = this.safeRelativePath(relativePath);
+      return /^uploads\/\d+\/restaurant-deposit-proofs\//.test(normalized);
+    } catch {
+      return false;
+    }
   }
 
   static getLogoFilename(companyId: number): string {

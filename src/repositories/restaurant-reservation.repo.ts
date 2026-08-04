@@ -4,6 +4,7 @@ import { prisma } from '../prisma/client';
 export const blockingReservationStatuses: RestaurantReservationStatus[] = ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'];
 export const reservationInclude = {
   table: { include: { dining_area: true } },
+  combination: { include: { tables: { include: { table: { include: { dining_area: true } } } } } },
   customer_profile: { include: { user: { select: { id: true, name: true, email: true, phoneNumber: true } } } },
   created_by_user: { select: { id: true, name: true, email: true } },
   guests: { orderBy: { id: 'asc' } },
@@ -26,13 +27,14 @@ export const restaurantReservationRepo = {
     return (async () => {
       await tx.$queryRaw(Prisma.sql`SELECT id FROM restaurant_table WHERE id = ${tableId} FOR UPDATE`);
       const rows = await tx.$queryRaw<Array<{ id: number; reservation_code: string }>>(Prisma.sql`
-        SELECT id, reservation_code
-        FROM restaurant_reservation
-        WHERE table_id = ${tableId}
-          AND status IN (${Prisma.join(blockingReservationStatuses)})
-          AND start_time < ${end}
-          AND end_time > ${start}
-          ${excludeId ? Prisma.sql`AND id <> ${excludeId}` : Prisma.empty}
+        SELECT DISTINCT rr.id, rr.reservation_code
+        FROM restaurant_reservation rr
+        WHERE rr.company_id = (SELECT company_id FROM restaurant_table WHERE id = ${tableId})
+          AND rr.status IN (${Prisma.join(blockingReservationStatuses)})
+          AND rr.start_time < ${end}
+          AND rr.end_time > ${start}
+          AND (rr.table_id = ${tableId} OR EXISTS (SELECT 1 FROM restaurant_table_combination_table ct WHERE ct.combination_id = rr.combination_id AND ct.table_id = ${tableId}))
+          ${excludeId ? Prisma.sql`AND rr.id <> ${excludeId}` : Prisma.empty}
         FOR UPDATE
       `);
       return rows[0] ?? null;

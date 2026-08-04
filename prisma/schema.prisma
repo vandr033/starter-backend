@@ -101,6 +101,25 @@ model Company {
   restaurant_notification_logs             RestaurantNotificationLog[]
   restaurant_menu_categories               RestaurantMenuCategory[]
   restaurant_menu_items                    RestaurantMenuItem[]
+  restaurant_shifts                        RestaurantShift[]
+  restaurant_shift_members                 RestaurantShiftMember[]
+  restaurant_shift_dining_areas            RestaurantShiftDiningArea[]
+  restaurant_shift_table_assignments       RestaurantShiftTableAssignment[]
+  restaurant_shift_templates               RestaurantShiftTemplate[]
+  restaurant_table_states                  RestaurantTableOperationalState[]
+  restaurant_table_combinations            RestaurantTableCombination[]
+  restaurant_table_combination_tables      RestaurantTableCombinationTable[]
+  restaurant_table_combination_sessions    RestaurantTableCombinationSession[]
+  restaurant_reservation_assignments       RestaurantReservationAssignment[]
+  restaurant_audit_logs                    RestaurantAuditLog[]
+  restaurant_internal_notes                RestaurantInternalNote[]
+  restaurant_visits                        RestaurantVisit[]
+  restaurant_waitlist_entries              RestaurantWaitlist[]
+  restaurant_waitlist_events               RestaurantWaitlistEvent[]
+  restaurant_reservation_deposits          RestaurantReservationDeposit[]
+  restaurant_customer_profiles             RestaurantCustomerProfile[]
+  restaurant_shift_closeouts               RestaurantShiftCloseout[]
+  restaurant_shift_closeout_adjustments    RestaurantShiftCloseoutAdjustment[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -112,42 +131,51 @@ model Company {
 }
 
 model RestaurantSettings {
-  id                          Int      @id @default(autoincrement())
-  company_id                  Int      @unique
-  average_dining_minutes      Int      @default(90)
-  slot_interval_minutes       Int      @default(30)
-  minimum_advance_minutes     Int      @default(60)
-  maximum_advance_days        Int      @default(30)
-  auto_confirm_reservations   Boolean  @default(true)
-  allow_customer_cancellation Boolean  @default(true)
-  cancellation_limit_minutes  Int      @default(120)
-  minimum_party_size          Int      @default(1)
-  maximum_party_size          Int      @default(12)
-  require_phone               Boolean  @default(true)
-  require_email               Boolean  @default(false)
-  allow_walk_ins              Boolean  @default(true)
-  deposit_enabled             Boolean  @default(false)
-  deposit_amount_cents        Int      @default(0)
-  deposit_mode                RestaurantDepositMode @default(PER_TABLE)
-  deposit_qr_image_url        String?  @db.VarChar(512)
-  created_at                  DateTime @default(now())
-  updated_at                  DateTime @updatedAt
-  company                     Company  @relation(fields: [company_id], references: [id])
+  id                             Int                   @id @default(autoincrement())
+  company_id                     Int                   @unique
+  average_dining_minutes         Int                   @default(90)
+  slot_interval_minutes          Int                   @default(30)
+  minimum_advance_minutes        Int                   @default(60)
+  maximum_advance_days           Int                   @default(30)
+  auto_confirm_reservations      Boolean               @default(true)
+  allow_customer_cancellation    Boolean               @default(true)
+  cancellation_limit_minutes     Int                   @default(120)
+  minimum_party_size             Int                   @default(1)
+  maximum_party_size             Int                   @default(12)
+  require_phone                  Boolean               @default(true)
+  require_email                  Boolean               @default(false)
+  allow_walk_ins                 Boolean               @default(true)
+  deposit_enabled                Boolean               @default(false)
+  deposit_amount_cents           Int                   @default(0)
+  deposit_mode                   RestaurantDepositMode @default(PER_TABLE)
+  deposit_qr_image_url           String?               @db.VarChar(512)
+  turnover_buffer_minutes        Int                   @default(15)
+  cleanup_buffer_minutes         Int                   @default(10)
+  at_risk_warning_window_minutes Int                   @default(30)
+  created_at                     DateTime              @default(now())
+  updated_at                     DateTime              @updatedAt
+  company                        Company               @relation(fields: [company_id], references: [id])
 
   @@map("restaurant_settings")
 }
 
 model RestaurantDiningArea {
-  id          Int               @id @default(autoincrement())
-  company_id  Int
-  name        String            @db.VarChar(120)
-  description String?           @db.VarChar(500)
-  sort_order  Int               @default(0)
-  is_active   Boolean           @default(true)
-  created_at  DateTime          @default(now())
-  updated_at  DateTime          @updatedAt
-  company     Company           @relation(fields: [company_id], references: [id])
-  tables      RestaurantTable[]
+  id                                 Int                                 @id @default(autoincrement())
+  company_id                         Int
+  name                               String                              @db.VarChar(120)
+  description                        String?                             @db.VarChar(500)
+  sort_order                         Int                                 @default(0)
+  is_active                          Boolean                             @default(true)
+  created_at                         DateTime                            @default(now())
+  updated_at                         DateTime                            @updatedAt
+  company                            Company                             @relation(fields: [company_id], references: [id])
+  tables                             RestaurantTable[]
+  reservations_as_preferred_area     RestaurantReservation[]             @relation("RestaurantReservationPreferredArea")
+  shift_dining_areas                 RestaurantShiftDiningArea[]
+  combinations                       RestaurantTableCombination[]        @relation("RestaurantCombinationArea")
+  restaurantShiftTemplateDiningAreas RestaurantShiftTemplateDiningArea[]
+  waitlist_preferred_entries         RestaurantWaitlist[]                @relation("RestaurantWaitlistPreferredArea")
+  restaurant_customer_profiles       RestaurantCustomerProfile[]         @relation("RestaurantCustomerPreferredArea")
 
   @@unique([company_id, name], map: "restaurant_dining_area_company_name_key")
   @@index([company_id], map: "restaurant_dining_area_company_id_idx")
@@ -155,19 +183,29 @@ model RestaurantDiningArea {
 }
 
 model RestaurantTable {
-  id             Int                     @id @default(autoincrement())
-  company_id     Int
-  dining_area_id Int
-  name           String                  @db.VarChar(120)
-  minimum_seats  Int                     @default(1)
-  maximum_seats  Int
-  sort_order     Int                     @default(0)
-  is_active      Boolean                 @default(true)
-  created_at     DateTime                @default(now())
-  updated_at     DateTime                @updatedAt
-  company        Company                 @relation(fields: [company_id], references: [id])
-  dining_area    RestaurantDiningArea    @relation(fields: [dining_area_id], references: [id])
-  reservations   RestaurantReservation[]
+  id                          Int                                      @id @default(autoincrement())
+  company_id                  Int
+  dining_area_id              Int
+  name                        String                                   @db.VarChar(120)
+  minimum_seats               Int                                      @default(1)
+  maximum_seats               Int
+  sort_order                  Int                                      @default(0)
+  is_active                   Boolean                                  @default(true)
+  created_at                  DateTime                                 @default(now())
+  updated_at                  DateTime                                 @updatedAt
+  company                     Company                                  @relation(fields: [company_id], references: [id])
+  dining_area                 RestaurantDiningArea                     @relation(fields: [dining_area_id], references: [id])
+  reservations                RestaurantReservation[]
+  table_state                 RestaurantTableOperationalState?
+  shift_assignments           RestaurantShiftTableAssignment[]
+  combination_members         RestaurantTableCombinationTable[]
+  reservation_assignments     RestaurantReservationAssignment[]
+  template_assignments        RestaurantShiftTemplateTableAssignment[]
+  audit_logs                  RestaurantAuditLog[]
+  internal_notes              RestaurantInternalNote[]
+  visits                      RestaurantVisit[]
+  waitlist_entries            RestaurantWaitlist[]                     @relation("RestaurantWaitlistAssignedTable")
+  preferred_customer_profiles RestaurantCustomerProfile[]
 
   @@unique([dining_area_id, name], map: "restaurant_table_area_name_key")
   @@index([company_id], map: "restaurant_table_company_id_idx")
@@ -176,55 +214,67 @@ model RestaurantTable {
 }
 
 model RestaurantServicePeriod {
-  id          Int      @id @default(autoincrement())
+  id          Int               @id @default(autoincrement())
   company_id  Int
   day_of_week Int
-  name        String?  @db.VarChar(120)
-  start_time  String   @db.VarChar(5)
-  end_time    String   @db.VarChar(5)
-  sort_order  Int      @default(0)
-  is_active   Boolean  @default(true)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
-  company     Company  @relation(fields: [company_id], references: [id])
+  name        String?           @db.VarChar(120)
+  start_time  String            @db.VarChar(5)
+  end_time    String            @db.VarChar(5)
+  sort_order  Int               @default(0)
+  is_active   Boolean           @default(true)
+  created_at  DateTime          @default(now())
+  updated_at  DateTime          @updatedAt
+  company     Company           @relation(fields: [company_id], references: [id])
+  shifts      RestaurantShift[]
 
   @@index([company_id, day_of_week], map: "restaurant_service_period_company_day_idx")
   @@map("restaurant_service_period")
 }
 
 model RestaurantReservation {
-  id                  Int                         @id @default(autoincrement())
-  company_id          Int
-  customer_profile_id Int?
-  table_id            Int?
-  reservation_code    String                      @unique @db.VarChar(48)
-  reservation_date    DateTime
-  start_time          DateTime
-  end_time            DateTime
-  party_size          Int
-  customer_name       String                      @db.VarChar(160)
-  customer_phone      String?                     @db.VarChar(32)
-  customer_email      String?                     @db.VarChar(255)
-  deposit_amount_cents Int                       @default(0)
-  deposit_mode         RestaurantDepositMode?
-  deposit_proof_image_url String?                @db.VarChar(512)
-  notes               String?                     @db.Text
-  internal_notes      String?                     @db.Text
-  status              RestaurantReservationStatus @default(PENDING)
-  source              RestaurantReservationSource @default(ADMIN)
-  seated_at           DateTime?
-  completed_at        DateTime?
-  cancelled_at        DateTime?
-  cancellation_reason String?                     @db.VarChar(500)
-  created_by_user_id  String?
-  created_at          DateTime                    @default(now())
-  updated_at          DateTime                    @updatedAt
-  company             Company                     @relation(fields: [company_id], references: [id])
-  customer_profile    CustomerProfile?            @relation(fields: [customer_profile_id], references: [id])
-  table               RestaurantTable?            @relation(fields: [table_id], references: [id])
-  created_by_user     User?                       @relation("RestaurantReservationCreatedBy", fields: [created_by_user_id], references: [id])
-  guests              RestaurantReservationGuest[]
-  notification_logs   RestaurantNotificationLog[]
+  id                               Int                                 @id @default(autoincrement())
+  company_id                       Int
+  customer_profile_id              Int?
+  table_id                         Int?
+  preferred_dining_area_id         Int?
+  combination_id                   Int?
+  reservation_code                 String                              @unique @db.VarChar(48)
+  reservation_date                 DateTime
+  start_time                       DateTime
+  end_time                         DateTime
+  party_size                       Int
+  customer_name                    String                              @db.VarChar(160)
+  customer_phone                   String?                             @db.VarChar(32)
+  customer_email                   String?                             @db.VarChar(255)
+  deposit_amount_cents             Int                                 @default(0)
+  deposit_mode                     RestaurantDepositMode?
+  deposit_proof_image_url          String?                             @db.VarChar(512)
+  notes                            String?                             @db.Text
+  internal_notes                   String?                             @db.Text
+  status                           RestaurantReservationStatus         @default(PENDING)
+  source                           RestaurantReservationSource         @default(ADMIN)
+  seated_at                        DateTime?
+  completed_at                     DateTime?
+  cancelled_at                     DateTime?
+  cancellation_reason              String?                             @db.VarChar(500)
+  created_by_user_id               String?
+  created_at                       DateTime                            @default(now())
+  updated_at                       DateTime                            @updatedAt
+  company                          Company                             @relation(fields: [company_id], references: [id])
+  customer_profile                 CustomerProfile?                    @relation(fields: [customer_profile_id], references: [id])
+  table                            RestaurantTable?                    @relation(fields: [table_id], references: [id])
+  preferred_dining_area            RestaurantDiningArea?               @relation("RestaurantReservationPreferredArea", fields: [preferred_dining_area_id], references: [id])
+  combination                      RestaurantTableCombination?         @relation(fields: [combination_id], references: [id])
+  created_by_user                  User?                               @relation("RestaurantReservationCreatedBy", fields: [created_by_user_id], references: [id])
+  guests                           RestaurantReservationGuest[]
+  notification_logs                RestaurantNotificationLog[]
+  assignments                      RestaurantReservationAssignment[]
+  audit_logs                       RestaurantAuditLog[]
+  restaurant_internal_note_records RestaurantInternalNote[]
+  combination_sessions             RestaurantTableCombinationSession[]
+  visit                            RestaurantVisit?
+  deposit                          RestaurantReservationDeposit?
+  waitlist_entry                   RestaurantWaitlist?
 
   @@index([company_id, reservation_date], map: "restaurant_reservation_company_date_idx")
   @@index([company_id, status], map: "restaurant_reservation_company_status_idx")
@@ -233,47 +283,618 @@ model RestaurantReservation {
   @@index([company_id, status, start_time], map: "restaurant_reservation_company_status_start_time_idx")
   @@index([company_id, source, start_time], map: "restaurant_reservation_company_source_start_time_idx")
   @@index([table_id, start_time, end_time], map: "restaurant_reservation_table_time_idx")
+  @@index([combination_id, start_time, end_time], map: "restaurant_reservation_combination_time_idx")
+  @@index([company_id, preferred_dining_area_id, start_time], map: "restaurant_reservation_preferred_area_idx")
   @@map("restaurant_reservation")
 }
 
 model RestaurantReservationGuest {
-  id               Int                   @id @default(autoincrement())
-  reservation_id   Int
-  name             String                @db.VarChar(160)
-  whatsapp_phone   String                @db.VarChar(32)
-  invited_at       DateTime?
-  created_at       DateTime              @default(now())
-  updated_at       DateTime              @updatedAt
-  reservation      RestaurantReservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  id             Int                   @id @default(autoincrement())
+  reservation_id Int
+  name           String                @db.VarChar(160)
+  whatsapp_phone String                @db.VarChar(32)
+  invited_at     DateTime?
+  created_at     DateTime              @default(now())
+  updated_at     DateTime              @updatedAt
+  reservation    RestaurantReservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
 
   @@unique([reservation_id, whatsapp_phone], map: "restaurant_reservation_guest_phone_key")
   @@index([reservation_id], map: "restaurant_reservation_guest_reservation_id_idx")
   @@map("restaurant_reservation_guest")
 }
 
-model RestaurantNotificationLog {
-  id             Int                           @id @default(autoincrement())
+model RestaurantVisit {
+  id                      Int                                @id @default(autoincrement())
+  company_id              Int
+  reservation_id          Int?                               @unique
+  shift_id                Int?
+  table_id                Int?
+  combination_session_id  Int?
+  primary_waiter_user_id  String?
+  primary_waiter_name     String?                            @db.VarChar(160)
+  dining_area_snapshot    String?                            @db.VarChar(120)
+  table_name_snapshot     String?                            @db.VarChar(120)
+  shift_name_snapshot     String?                            @db.VarChar(160)
+  guest_count             Int
+  subtotal_amount_cents   Int                                @default(0)
+  discount_amount_cents   Int                                @default(0)
+  tip_amount_cents        Int                                @default(0)
+  total_paid_amount_cents Int                                @default(0)
+  currency                String                             @db.VarChar(3)
+  payment_method          RestaurantVisitPaymentMethod       @default(OTHER)
+  mixed_payment_breakdown Json?
+  pos_reference           String?                            @db.VarChar(160)
+  closing_notes           String?                            @db.Text
+  status                  RestaurantVisitStatus              @default(DRAFT)
+  closed_by_user_id       String?
+  closed_at               DateTime?
+  reopened_by_user_id     String?
+  reopened_at             DateTime?
+  created_at              DateTime                           @default(now())
+  updated_at              DateTime                           @updatedAt
+  company                 Company                            @relation(fields: [company_id], references: [id])
+  reservation             RestaurantReservation?             @relation(fields: [reservation_id], references: [id], onDelete: SetNull)
+  shift                   RestaurantShift?                   @relation(fields: [shift_id], references: [id], onDelete: SetNull)
+  table                   RestaurantTable?                   @relation(fields: [table_id], references: [id], onDelete: SetNull)
+  combination_session     RestaurantTableCombinationSession? @relation(fields: [combination_session_id], references: [id], onDelete: SetNull)
+  primary_waiter          User?                              @relation("RestaurantVisitPrimaryWaiter", fields: [primary_waiter_user_id], references: [id], onDelete: SetNull)
+  closed_by               User?                              @relation("RestaurantVisitClosedBy", fields: [closed_by_user_id], references: [id], onDelete: SetNull)
+  reopened_by             User?                              @relation("RestaurantVisitReopenedBy", fields: [reopened_by_user_id], references: [id], onDelete: SetNull)
+  waitlist_entry          RestaurantWaitlist?
+
+  @@index([company_id, closed_at], map: "restaurant_visit_company_closed_at_idx")
+  @@index([company_id, shift_id, closed_at], map: "restaurant_visit_company_shift_closed_idx")
+  @@index([company_id, primary_waiter_user_id, closed_at], map: "restaurant_visit_company_waiter_closed_idx")
+  @@index([company_id, table_id, closed_at], map: "restaurant_visit_company_table_closed_idx")
+  @@index([company_id, payment_method, closed_at], map: "restaurant_visit_company_payment_closed_idx")
+  @@map("restaurant_visit")
+}
+
+model RestaurantWaitlist {
+  id                       Int                         @id @default(autoincrement())
+  company_id               Int
+  guest_name               String                      @db.VarChar(160)
+  phone                    String?                     @db.VarChar(32)
+  email                    String?                     @db.VarChar(255)
+  customer_profile_id      Int?
+  party_size               Int
+  preferred_dining_area_id Int?
+  accessibility_notes      String?                     @db.VarChar(1000)
+  seating_notes            String?                     @db.VarChar(1000)
+  arrival_time             DateTime                    @default(now())
+  estimated_wait_minutes   Int                         @default(30)
+  quoted_ready_at          DateTime?
+  actual_ready_at          DateTime?
+  notified_at              DateTime?
+  seated_at                DateTime?
+  left_at                  DateTime?
+  cancelled_at             DateTime?
+  linked_reservation_id    Int?                        @unique
+  linked_visit_id          Int?                        @unique
+  assigned_table_id        Int?
+  assigned_combination_id  Int?
+  source                   RestaurantWaitlistSource    @default(WALK_IN)
+  status                   RestaurantWaitlistStatus    @default(WAITING)
+  priority                 Int                         @default(0)
+  manual_order             Int                         @default(0)
+  internal_notes           String?                     @db.Text
+  created_by_user_id       String?
+  updated_by_user_id       String?
+  created_at               DateTime                    @default(now())
+  updated_at               DateTime                    @updatedAt
+  company                  Company                     @relation(fields: [company_id], references: [id])
+  customer_profile         CustomerProfile?            @relation(fields: [customer_profile_id], references: [id], onDelete: SetNull)
+  preferred_dining_area    RestaurantDiningArea?       @relation("RestaurantWaitlistPreferredArea", fields: [preferred_dining_area_id], references: [id], onDelete: SetNull)
+  linked_reservation       RestaurantReservation?      @relation(fields: [linked_reservation_id], references: [id], onDelete: SetNull)
+  linked_visit             RestaurantVisit?            @relation(fields: [linked_visit_id], references: [id], onDelete: SetNull)
+  assigned_table           RestaurantTable?            @relation("RestaurantWaitlistAssignedTable", fields: [assigned_table_id], references: [id], onDelete: SetNull)
+  assigned_combination     RestaurantTableCombination? @relation(fields: [assigned_combination_id], references: [id], onDelete: SetNull)
+  created_by               User?                       @relation("RestaurantWaitlistCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  updated_by               User?                       @relation("RestaurantWaitlistUpdatedBy", fields: [updated_by_user_id], references: [id], onDelete: SetNull)
+  events                   RestaurantWaitlistEvent[]
+  notification_logs        RestaurantNotificationLog[]
+
+  @@index([company_id, status, manual_order, arrival_time], map: "restaurant_waitlist_company_queue_idx")
+  @@index([company_id, preferred_dining_area_id, status], map: "restaurant_waitlist_company_area_status_idx")
+  @@index([company_id, created_at], map: "restaurant_waitlist_company_created_idx")
+  @@map("restaurant_waitlist")
+}
+
+model RestaurantWaitlistEvent {
+  id            Int                       @id @default(autoincrement())
+  company_id    Int
+  waitlist_id   Int
+  event         String                    @db.VarChar(80)
+  from_status   RestaurantWaitlistStatus?
+  to_status     RestaurantWaitlistStatus?
+  actor_user_id String?
+  metadata      Json?
+  created_at    DateTime                  @default(now())
+  company       Company                   @relation(fields: [company_id], references: [id])
+  waitlist      RestaurantWaitlist        @relation(fields: [waitlist_id], references: [id], onDelete: Cascade)
+  actor         User?                     @relation("RestaurantWaitlistEventActor", fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, waitlist_id, created_at], map: "restaurant_waitlist_event_history_idx")
+  @@index([company_id, created_at], map: "restaurant_waitlist_event_company_created_idx")
+  @@map("restaurant_waitlist_event")
+}
+
+model RestaurantReservationDeposit {
+  id                    Int                             @id @default(autoincrement())
+  company_id            Int
+  reservation_id        Int                             @unique
+  required_amount_cents Int
+  currency              String                          @db.VarChar(3)
+  mode                  RestaurantDepositMode
+  status                RestaurantDepositStatus         @default(REQUIRED)
+  payment_method        RestaurantDepositPaymentMethod?
+  payment_deadline      DateTime?
+  proof_path            String?                         @db.VarChar(512)
+  proof_original_name   String?                         @db.VarChar(255)
+  proof_mime_type       String?                         @db.VarChar(100)
+  proof_size_bytes      Int?
+  proof_sha256          String?                         @db.VarChar(128)
+  proof_submitted_at    DateTime?
+  submitted_by_user_id  String?
+  public_submission_id  String?                         @db.VarChar(128)
+  reviewed_by_user_id   String?
+  reviewed_at           DateTime?
+  rejection_reason      String?                         @db.VarChar(500)
+  approved_at           DateTime?
+  refunded_amount_cents Int                             @default(0)
+  refunded_by_user_id   String?
+  refunded_at           DateTime?
+  refund_reason         String?                         @db.VarChar(500)
+  created_at            DateTime                        @default(now())
+  updated_at            DateTime                        @updatedAt
+  company               Company                         @relation(fields: [company_id], references: [id])
+  reservation           RestaurantReservation           @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  submitted_by          User?                           @relation("RestaurantDepositSubmittedBy", fields: [submitted_by_user_id], references: [id], onDelete: SetNull)
+  reviewed_by           User?                           @relation("RestaurantDepositReviewedBy", fields: [reviewed_by_user_id], references: [id], onDelete: SetNull)
+  refunded_by           User?                           @relation("RestaurantDepositRefundedBy", fields: [refunded_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, status, payment_deadline], map: "restaurant_deposit_company_status_deadline_idx")
+  @@index([company_id, reservation_id], map: "restaurant_deposit_company_reservation_idx")
+  @@map("restaurant_reservation_deposit")
+}
+
+model RestaurantCustomerProfile {
+  id                         Int                   @id @default(autoincrement())
+  company_id                 Int
+  customer_profile_id        Int                   @unique
+  vip                        Boolean               @default(false)
+  vip_level                  String?               @db.VarChar(40)
+  birthday                   DateTime?             @db.Date
+  anniversary                DateTime?             @db.Date
+  preferred_dining_area_id   Int?
+  preferred_table_id         Int?
+  preferred_waiter_user_id   String?
+  seating_preference         String?               @db.VarChar(500)
+  accessibility_requirements String?               @db.VarChar(1000)
+  dietary_preferences        String?               @db.VarChar(1000)
+  allergies                  String?               @db.VarChar(1000)
+  favorite_items             Json?
+  customer_facing_notes      String?               @db.VarChar(1000)
+  internal_hospitality_notes String?               @db.Text
+  tags                       Json?
+  last_visit_at              DateTime?
+  visit_count                Int                   @default(0)
+  no_show_count              Int                   @default(0)
+  cancellation_count         Int                   @default(0)
+  total_spend_cents          Int                   @default(0)
+  average_spend_cents        Int                   @default(0)
+  average_party_size         Decimal               @default(0) @db.Decimal(8, 2)
+  created_at                 DateTime              @default(now())
+  updated_at                 DateTime              @updatedAt
+  company                    Company               @relation(fields: [company_id], references: [id])
+  customer_profile           CustomerProfile       @relation(fields: [customer_profile_id], references: [id], onDelete: Cascade)
+  preferred_dining_area      RestaurantDiningArea? @relation("RestaurantCustomerPreferredArea", fields: [preferred_dining_area_id], references: [id], onDelete: SetNull)
+  preferred_table            RestaurantTable?      @relation(fields: [preferred_table_id], references: [id], onDelete: SetNull)
+  preferred_waiter           User?                 @relation("RestaurantCustomerPreferredWaiter", fields: [preferred_waiter_user_id], references: [id], onDelete: SetNull)
+
+  @@index([company_id, vip, updated_at], map: "restaurant_customer_profile_company_vip_idx")
+  @@index([company_id, last_visit_at], map: "restaurant_customer_profile_company_last_visit_idx")
+  @@map("restaurant_customer_profile")
+}
+
+model RestaurantShiftCloseout {
+  id                           Int                                 @id @default(autoincrement())
+  company_id                   Int
+  shift_id                     Int                                 @unique
+  status                       RestaurantShiftCloseoutStatus       @default(PREVIEWED)
+  closed_by_user_id            String?
+  closed_at                    DateTime?
+  reopened_by_user_id          String?
+  reopened_at                  DateTime?
+  finalized_at                 DateTime?
+  manager_notes                String?                             @db.Text
+  operational_issues           String?                             @db.Text
+  reservations_summary         Json?
+  walk_in_summary              Json?
+  waitlist_summary             Json?
+  guest_summary                Json?
+  revenue_summary              Json?
+  tip_summary                  Json?
+  discount_summary             Json?
+  table_turn_summary           Json?
+  dining_duration_summary      Json?
+  wait_time_summary            Json?
+  no_show_summary              Json?
+  cancellation_summary         Json?
+  missing_data_warnings        Json?
+  waiter_performance_snapshots Json?
+  created_at                   DateTime                            @default(now())
+  updated_at                   DateTime                            @updatedAt
+  company                      Company                             @relation(fields: [company_id], references: [id])
+  shift                        RestaurantShift                     @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  closed_by                    User?                               @relation("RestaurantCloseoutClosedBy", fields: [closed_by_user_id], references: [id], onDelete: SetNull)
+  reopened_by                  User?                               @relation("RestaurantCloseoutReopenedBy", fields: [reopened_by_user_id], references: [id], onDelete: SetNull)
+  adjustments                  RestaurantShiftCloseoutAdjustment[]
+
+  @@index([company_id, status, created_at], map: "restaurant_closeout_company_status_idx")
+  @@map("restaurant_shift_closeout")
+}
+
+model RestaurantShiftCloseoutAdjustment {
+  id                Int                     @id @default(autoincrement())
+  company_id        Int
+  closeout_id       Int
+  actor_user_id     String
+  reason            String                  @db.VarChar(500)
+  previous_snapshot Json
+  adjusted_snapshot Json
+  created_at        DateTime                @default(now())
+  company           Company                 @relation(fields: [company_id], references: [id])
+  closeout          RestaurantShiftCloseout @relation(fields: [closeout_id], references: [id], onDelete: Cascade)
+  actor             User                    @relation("RestaurantCloseoutAdjustmentActor", fields: [actor_user_id], references: [id], onDelete: Restrict)
+
+  @@index([company_id, closeout_id, created_at], map: "restaurant_closeout_adjustment_history_idx")
+  @@map("restaurant_shift_closeout_adjustment")
+}
+
+model RestaurantShift {
+  id                    Int                              @id @default(autoincrement())
+  company_id            Int
+  name                  String                           @db.VarChar(160)
+  shift_date            DateTime                         @db.Date
+  start_at              DateTime
+  end_at                DateTime
+  timezone              String                           @db.VarChar(64)
+  status                RestaurantShiftStatus            @default(DRAFT)
+  service_period_id     Int?
+  notes                 String?                          @db.Text
+  shift_manager_user_id String?
+  created_by_user_id    String
+  updated_by_user_id    String?
+  opened_by_user_id     String?
+  opened_at             DateTime?
+  closed_by_user_id     String?
+  closed_at             DateTime?
+  cancelled_by_user_id  String?
+  cancelled_at          DateTime?
+  created_at            DateTime                         @default(now())
+  updated_at            DateTime                         @updatedAt
+  company               Company                          @relation(fields: [company_id], references: [id])
+  service_period        RestaurantServicePeriod?         @relation(fields: [service_period_id], references: [id])
+  shift_manager         User?                            @relation("RestaurantShiftManager", fields: [shift_manager_user_id], references: [id])
+  created_by            User                             @relation("RestaurantShiftCreatedBy", fields: [created_by_user_id], references: [id])
+  updated_by            User?                            @relation("RestaurantShiftUpdatedBy", fields: [updated_by_user_id], references: [id])
+  opened_by             User?                            @relation("RestaurantShiftOpenedBy", fields: [opened_by_user_id], references: [id])
+  closed_by             User?                            @relation("RestaurantShiftClosedBy", fields: [closed_by_user_id], references: [id])
+  cancelled_by          User?                            @relation("RestaurantShiftCancelledBy", fields: [cancelled_by_user_id], references: [id])
+  members               RestaurantShiftMember[]
+  dining_areas          RestaurantShiftDiningArea[]
+  table_assignments     RestaurantShiftTableAssignment[]
+  audit_logs            RestaurantAuditLog[]
+  internal_notes        RestaurantInternalNote[]
+  visits                RestaurantVisit[]
+  closeout              RestaurantShiftCloseout?
+
+  @@index([company_id, shift_date, status], map: "restaurant_shift_company_date_status_idx")
+  @@index([company_id, start_at, end_at], map: "restaurant_shift_company_time_idx")
+  @@index([service_period_id], map: "restaurant_shift_service_period_idx")
+  @@map("restaurant_shift")
+}
+
+model RestaurantShiftMember {
+  id                 Int                              @id @default(autoincrement())
+  company_id         Int
+  shift_id           Int
+  user_id            String
+  role               RestaurantShiftMemberRole
+  created_by_user_id String
+  created_at         DateTime                         @default(now())
+  updated_at         DateTime                         @updatedAt
+  company            Company                          @relation(fields: [company_id], references: [id])
+  shift              RestaurantShift                  @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  user               User                             @relation("RestaurantShiftMemberUser", fields: [user_id], references: [id])
+  created_by         User                             @relation("RestaurantShiftMemberCreatedBy", fields: [created_by_user_id], references: [id])
+  table_assignments  RestaurantShiftTableAssignment[]
+
+  @@unique([shift_id, user_id], map: "restaurant_shift_member_shift_user_key")
+  @@index([company_id, user_id], map: "restaurant_shift_member_company_user_idx")
+  @@index([shift_id, role], map: "restaurant_shift_member_shift_role_idx")
+  @@map("restaurant_shift_member")
+}
+
+model RestaurantShiftDiningArea {
+  id             Int                  @id @default(autoincrement())
   company_id     Int
-  reservation_id Int
-  event          RestaurantNotificationEvent
-  channel        RestaurantNotificationChannel
-  status         RestaurantNotificationStatus
-  trigger        RestaurantNotificationTrigger @default(AUTOMATIC)
-  recipient      String?                       @db.VarChar(255)
-  provider_id    String?                       @db.VarChar(255)
-  error_code     String?                       @db.VarChar(100)
-  error_message  String?                       @db.VarChar(500)
-  dedup_key      String?                       @db.VarChar(255)
-  sent_at        DateTime?
-  created_at     DateTime                      @default(now())
-  updated_at     DateTime                      @updatedAt
-  company        Company                       @relation(fields: [company_id], references: [id])
-  reservation    RestaurantReservation         @relation(fields: [reservation_id], references: [id])
+  shift_id       Int
+  dining_area_id Int
+  created_at     DateTime             @default(now())
+  company        Company              @relation(fields: [company_id], references: [id])
+  shift          RestaurantShift      @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  dining_area    RestaurantDiningArea @relation(fields: [dining_area_id], references: [id])
+
+  @@unique([shift_id, dining_area_id], map: "restaurant_shift_area_shift_area_key")
+  @@index([company_id, dining_area_id], map: "restaurant_shift_area_company_area_idx")
+  @@map("restaurant_shift_dining_area")
+}
+
+model RestaurantShiftTableAssignment {
+  id                  Int                   @id @default(autoincrement())
+  company_id          Int
+  shift_id            Int
+  table_id            Int
+  member_id           Int
+  assigned_by_user_id String
+  created_at          DateTime              @default(now())
+  updated_at          DateTime              @updatedAt
+  company             Company               @relation(fields: [company_id], references: [id])
+  shift               RestaurantShift       @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  table               RestaurantTable       @relation(fields: [table_id], references: [id])
+  member              RestaurantShiftMember @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  assigned_by         User                  @relation("RestaurantShiftTableAssignedBy", fields: [assigned_by_user_id], references: [id])
+
+  @@unique([shift_id, table_id], map: "restaurant_shift_table_assignment_shift_table_key")
+  @@index([company_id, table_id], map: "restaurant_shift_table_assignment_company_table_idx")
+  @@index([member_id], map: "restaurant_shift_table_assignment_member_idx")
+  @@map("restaurant_shift_table_assignment")
+}
+
+model RestaurantShiftTemplate {
+  id                 Int                                      @id @default(autoincrement())
+  company_id         Int
+  name               String                                   @db.VarChar(160)
+  start_time         String                                   @db.VarChar(5)
+  end_time           String                                   @db.VarChar(5)
+  timezone           String                                   @db.VarChar(64)
+  notes              String?                                  @db.Text
+  created_by_user_id String
+  created_at         DateTime                                 @default(now())
+  updated_at         DateTime                                 @updatedAt
+  company            Company                                  @relation(fields: [company_id], references: [id])
+  created_by         User                                     @relation("RestaurantShiftTemplateCreatedBy", fields: [created_by_user_id], references: [id])
+  members            RestaurantShiftTemplateMember[]
+  dining_areas       RestaurantShiftTemplateDiningArea[]
+  table_assignments  RestaurantShiftTemplateTableAssignment[]
+
+  @@unique([company_id, name], map: "restaurant_shift_template_company_name_key")
+  @@index([company_id], map: "restaurant_shift_template_company_idx")
+  @@map("restaurant_shift_template")
+}
+
+model RestaurantShiftTemplateMember {
+  id          Int                       @id @default(autoincrement())
+  template_id Int
+  user_id     String
+  role        RestaurantShiftMemberRole
+  template    RestaurantShiftTemplate   @relation(fields: [template_id], references: [id], onDelete: Cascade)
+  user        User                      @relation("RestaurantShiftTemplateMemberUser", fields: [user_id], references: [id])
+
+  @@unique([template_id, user_id], map: "restaurant_shift_template_member_template_user_key")
+  @@map("restaurant_shift_template_member")
+}
+
+model RestaurantShiftTemplateDiningArea {
+  id             Int                     @id @default(autoincrement())
+  template_id    Int
+  dining_area_id Int
+  template       RestaurantShiftTemplate @relation(fields: [template_id], references: [id], onDelete: Cascade)
+  dining_area    RestaurantDiningArea    @relation(fields: [dining_area_id], references: [id])
+
+  @@unique([template_id, dining_area_id], map: "restaurant_shift_template_area_key")
+  @@map("restaurant_shift_template_dining_area")
+}
+
+model RestaurantShiftTemplateTableAssignment {
+  id          Int                     @id @default(autoincrement())
+  template_id Int
+  table_id    Int
+  user_id     String
+  template    RestaurantShiftTemplate @relation(fields: [template_id], references: [id], onDelete: Cascade)
+  table       RestaurantTable         @relation(fields: [table_id], references: [id])
+  user        User                    @relation("RestaurantShiftTemplateTableUser", fields: [user_id], references: [id])
+
+  @@unique([template_id, table_id], map: "restaurant_shift_template_table_key")
+  @@map("restaurant_shift_template_table_assignment")
+}
+
+model RestaurantTableOperationalState {
+  id                  Int                              @id @default(autoincrement())
+  company_id          Int
+  table_id            Int                              @unique
+  status              RestaurantTableOperationalStatus @default(AVAILABLE)
+  status_since        DateTime                         @default(now())
+  occupied_at         DateTime?
+  bill_requested_at   DateTime?
+  cleaning_started_at DateTime?
+  blocked_reason      String?                          @db.VarChar(500)
+  updated_by_user_id  String?
+  created_at          DateTime                         @default(now())
+  updated_at          DateTime                         @updatedAt
+  company             Company                          @relation(fields: [company_id], references: [id])
+  table               RestaurantTable                  @relation(fields: [table_id], references: [id], onDelete: Cascade)
+  updated_by          User?                            @relation("RestaurantTableStateUpdatedBy", fields: [updated_by_user_id], references: [id])
+
+  @@unique([company_id, table_id], map: "restaurant_table_state_company_table_key")
+  @@index([company_id, status], map: "restaurant_table_state_company_status_idx")
+  @@map("restaurant_table_operational_state")
+}
+
+model RestaurantTableCombination {
+  id                 Int                                 @id @default(autoincrement())
+  company_id         Int
+  name               String                              @db.VarChar(160)
+  dining_area_id     Int?
+  is_active          Boolean                             @default(true)
+  created_by_user_id String
+  created_at         DateTime                            @default(now())
+  updated_at         DateTime                            @updatedAt
+  company            Company                             @relation(fields: [company_id], references: [id])
+  dining_area        RestaurantDiningArea?               @relation("RestaurantCombinationArea", fields: [dining_area_id], references: [id])
+  created_by         User                                @relation("RestaurantCombinationCreatedBy", fields: [created_by_user_id], references: [id])
+  tables             RestaurantTableCombinationTable[]
+  reservations       RestaurantReservation[]
+  sessions           RestaurantTableCombinationSession[]
+  assignments        RestaurantReservationAssignment[]
+  audit_logs         RestaurantAuditLog[]
+  waitlist_entries   RestaurantWaitlist[]
+
+  @@unique([company_id, name], map: "restaurant_table_combination_company_name_key")
+  @@index([company_id, is_active], map: "restaurant_table_combination_company_active_idx")
+  @@map("restaurant_table_combination")
+}
+
+model RestaurantTableCombinationTable {
+  id             Int                        @id @default(autoincrement())
+  company_id     Int
+  combination_id Int
+  table_id       Int
+  company        Company                    @relation(fields: [company_id], references: [id])
+  combination    RestaurantTableCombination @relation(fields: [combination_id], references: [id], onDelete: Cascade)
+  table          RestaurantTable            @relation(fields: [table_id], references: [id])
+
+  @@unique([combination_id, table_id], map: "restaurant_table_combination_table_key")
+  @@index([company_id, table_id], map: "restaurant_table_combination_table_company_table_idx")
+  @@map("restaurant_table_combination_table")
+}
+
+model RestaurantTableCombinationSession {
+  id                  Int                                @id @default(autoincrement())
+  company_id          Int
+  combination_id      Int
+  reservation_id      Int?
+  start_at            DateTime
+  end_at              DateTime
+  status              RestaurantCombinationSessionStatus @default(ACTIVE)
+  created_by_user_id  String
+  released_by_user_id String?
+  created_at          DateTime                           @default(now())
+  released_at         DateTime?
+  company             Company                            @relation(fields: [company_id], references: [id])
+  combination         RestaurantTableCombination         @relation(fields: [combination_id], references: [id], onDelete: Cascade)
+  reservation         RestaurantReservation?             @relation(fields: [reservation_id], references: [id])
+  created_by          User                               @relation("RestaurantCombinationSessionCreatedBy", fields: [created_by_user_id], references: [id])
+  released_by         User?                              @relation("RestaurantCombinationReleasedBy", fields: [released_by_user_id], references: [id])
+  visits              RestaurantVisit[]
+
+  @@index([company_id, combination_id, start_at, end_at], map: "restaurant_combination_session_time_idx")
+  @@index([reservation_id], map: "restaurant_combination_session_reservation_idx")
+  @@map("restaurant_table_combination_session")
+}
+
+model RestaurantReservationAssignment {
+  id                  Int                         @id @default(autoincrement())
+  company_id          Int
+  reservation_id      Int
+  table_id            Int?
+  combination_id      Int?
+  assigned_by_user_id String?
+  reason              String?                     @db.VarChar(500)
+  assigned_at         DateTime                    @default(now())
+  released_at         DateTime?
+  company             Company                     @relation(fields: [company_id], references: [id])
+  reservation         RestaurantReservation       @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  table               RestaurantTable?            @relation(fields: [table_id], references: [id])
+  combination         RestaurantTableCombination? @relation(fields: [combination_id], references: [id])
+  assigned_by         User?                       @relation("RestaurantReservationAssignmentUser", fields: [assigned_by_user_id], references: [id])
+
+  @@index([company_id, reservation_id, assigned_at], map: "restaurant_reservation_assignment_history_idx")
+  @@index([company_id, table_id, assigned_at, released_at], map: "restaurant_reservation_assignment_table_time_idx")
+  @@index([company_id, combination_id, assigned_at, released_at], map: "restaurant_reservation_assignment_combination_time_idx")
+  @@map("restaurant_reservation_assignment")
+}
+
+model RestaurantAuditLog {
+  id              Int                         @id @default(autoincrement())
+  company_id      Int
+  event           String                      @db.VarChar(100)
+  actor_user_id   String?
+  shift_id        Int?
+  table_id        Int?
+  reservation_id  Int?
+  combination_id  Int?
+  metadata        Json?
+  created_at      DateTime                    @default(now())
+  company         Company                     @relation(fields: [company_id], references: [id])
+  actor           User?                       @relation("RestaurantAuditActor", fields: [actor_user_id], references: [id])
+  shift           RestaurantShift?            @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  table           RestaurantTable?            @relation(fields: [table_id], references: [id])
+  reservation     RestaurantReservation?      @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  combination     RestaurantTableCombination? @relation(fields: [combination_id], references: [id])
+  target_type     String?                     @db.VarChar(80)
+  target_id       String?                     @db.VarChar(191)
+  previous_values Json?
+  new_values      Json?
+
+  @@index([company_id, created_at], map: "restaurant_audit_company_created_idx")
+  @@index([company_id, event, created_at], map: "restaurant_audit_company_event_idx")
+  @@index([shift_id, created_at], map: "restaurant_audit_shift_created_idx")
+  @@index([reservation_id, created_at], map: "restaurant_audit_reservation_created_idx")
+  @@index([company_id, target_type, target_id, created_at], map: "restaurant_audit_target_idx")
+  @@map("restaurant_audit_log")
+}
+
+model RestaurantInternalNote {
+  id             Int                    @id @default(autoincrement())
+  company_id     Int
+  author_user_id String
+  shift_id       Int?
+  table_id       Int?
+  reservation_id Int?
+  note           String                 @db.Text
+  created_at     DateTime               @default(now())
+  company        Company                @relation(fields: [company_id], references: [id])
+  author         User                   @relation("RestaurantInternalNoteAuthor", fields: [author_user_id], references: [id])
+  shift          RestaurantShift?       @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  table          RestaurantTable?       @relation(fields: [table_id], references: [id])
+  reservation    RestaurantReservation? @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id, created_at], map: "restaurant_internal_note_company_created_idx")
+  @@index([reservation_id, created_at], map: "restaurant_internal_note_reservation_created_idx")
+  @@index([table_id, created_at], map: "restaurant_internal_note_table_created_idx")
+  @@map("restaurant_internal_note")
+}
+
+model RestaurantNotificationLog {
+  id              Int                           @id @default(autoincrement())
+  company_id      Int
+  reservation_id  Int?
+  waitlist_id     Int?
+  event           RestaurantNotificationEvent
+  channel         RestaurantNotificationChannel
+  status          RestaurantNotificationStatus
+  trigger         RestaurantNotificationTrigger @default(AUTOMATIC)
+  recipient       String?                       @db.VarChar(255)
+  provider_id     String?                       @db.VarChar(255)
+  error_code      String?                       @db.VarChar(100)
+  error_message   String?                       @db.VarChar(500)
+  dedup_key       String?                       @db.VarChar(255)
+  dedup_claim_key String?                       @unique @db.VarChar(512)
+  sent_at         DateTime?
+  created_at      DateTime                      @default(now())
+  updated_at      DateTime                      @updatedAt
+  company         Company                       @relation(fields: [company_id], references: [id])
+  reservation     RestaurantReservation?        @relation(fields: [reservation_id], references: [id], onDelete: SetNull)
+  waitlist        RestaurantWaitlist?           @relation(fields: [waitlist_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, reservation_id], map: "restaurant_notification_log_company_reservation_idx")
   @@index([company_id, status], map: "restaurant_notification_log_company_status_idx")
   @@index([reservation_id, event], map: "restaurant_notification_log_reservation_event_idx")
-  @@index([reservation_id, event, channel, dedup_key], map: "restaurant_notification_log_dedup_idx")
+  @@index([company_id, waitlist_id, event], map: "restaurant_notification_log_waitlist_event_idx")
+  @@index([company_id, reservation_id, event, channel, dedup_key], map: "restaurant_notification_log_dedup_idx")
   @@map("restaurant_notification_log")
 }
 
@@ -376,43 +997,43 @@ model CompanySettings {
 }
 
 model User {
-  id                                       String                                @id @default(cuid())
-  email                                    String                                @unique
-  first_name                               String?                               @db.VarChar(100)
-  last_name                                String?                               @db.VarChar(100)
-  is_super_admin                           Boolean                               @default(false)
-  is_active                                Boolean                               @default(true)
-  must_change_password                     Boolean                               @default(false)
+  id                                       String                                   @id @default(cuid())
+  email                                    String                                   @unique
+  first_name                               String?                                  @db.VarChar(100)
+  last_name                                String?                                  @db.VarChar(100)
+  is_super_admin                           Boolean                                  @default(false)
+  is_active                                Boolean                                  @default(true)
+  must_change_password                     Boolean                                  @default(false)
   deleted_at                               DateTime?
-  country_code                             String?                               @db.VarChar(2)
-  phone_prefix                             String?                               @db.VarChar(8)
-  createdAt                                DateTime                              @default(now())
-  emailVerified                            Boolean                               @default(false)
-  image                                    String?                               @db.VarChar(512)
+  country_code                             String?                                  @db.VarChar(2)
+  phone_prefix                             String?                                  @db.VarChar(8)
+  createdAt                                DateTime                                 @default(now())
+  emailVerified                            Boolean                                  @default(false)
+  image                                    String?                                  @db.VarChar(512)
   name                                     String
-  updatedAt                                DateTime                              @updatedAt
-  phoneNumber                              String?                               @unique @db.VarChar(32)
-  phoneNumberVerified                      Boolean?                              @default(false)
-  gender                                   String?                               @db.VarChar(30)
+  updatedAt                                DateTime                                 @updatedAt
+  phoneNumber                              String?                                  @unique @db.VarChar(32)
+  phoneNumberVerified                      Boolean?                                 @default(false)
+  gender                                   String?                                  @db.VarChar(30)
   age                                      Int?
   accounts                                 Account[]
-  created_bookings                         Booking[]                             @relation("BookingCreatedBy")
-  updated_bookings                         Booking[]                             @relation("BookingUpdatedBy")
+  created_bookings                         Booking[]                                @relation("BookingCreatedBy")
+  updated_bookings                         Booking[]                                @relation("BookingUpdatedBy")
   company_users                            CompanyUser[]
-  capability_override_changes              CompanyCapabilityOverride[]           @relation("CompanyCapabilityOverrideCreatedBy")
+  capability_override_changes              CompanyCapabilityOverride[]              @relation("CompanyCapabilityOverrideCreatedBy")
   customer_profiles                        CustomerProfile[]
-  requested_time_off                       StaffTimeOff[]                        @relation("StaffTimeOffRequestedBy")
-  reviewed_time_off                        StaffTimeOff[]                        @relation("StaffTimeOffReviewedBy")
-  subscription_history_changes             CompanySubscriptionHistory[]          @relation("CompanySubscriptionHistoryChangedBy")
-  product_history_actions                  CompanyProductHistory[]               @relation("CompanyProductHistoryActor")
-  product_access_requests                  ProductAccessRequest[]                @relation("ProductAccessRequestRequestedBy")
-  resolved_product_access_requests         ProductAccessRequest[]                @relation("ProductAccessRequestResolvedBy")
+  requested_time_off                       StaffTimeOff[]                           @relation("StaffTimeOffRequestedBy")
+  reviewed_time_off                        StaffTimeOff[]                           @relation("StaffTimeOffReviewedBy")
+  subscription_history_changes             CompanySubscriptionHistory[]             @relation("CompanySubscriptionHistoryChangedBy")
+  product_history_actions                  CompanyProductHistory[]                  @relation("CompanyProductHistoryActor")
+  product_access_requests                  ProductAccessRequest[]                   @relation("ProductAccessRequestRequestedBy")
+  resolved_product_access_requests         ProductAccessRequest[]                   @relation("ProductAccessRequestResolvedBy")
   user_reviews                             Review[]
   sessions                                 Session[]
   staff_profiles                           StaffProfile[]
   changed_commerce_order_history           CommerceOrderStatusHistory[]
-  created_group_events                     GroupEvent[]                          @relation("GroupEventCreatedBy")
-  created_group_classes                    GroupClass[]                          @relation("GroupClassCreatedBy")
+  created_group_events                     GroupEvent[]                             @relation("GroupEventCreatedBy")
+  created_group_classes                    GroupClass[]                             @relation("GroupClassCreatedBy")
   group_event_bookings                     GroupEventBooking[]
   group_class_enrollments                  GroupClassEnrollment[]
   group_session_attendances                GroupSessionAttendance[]
@@ -421,12 +1042,44 @@ model User {
   free_event_registrations                 FreeEventRegistration[]
   paid_event_guest_checkout_sessions       PaidEventGuestCheckoutSession[]
   group_class_guest_enrollment_sessions    GroupClassGuestEnrollmentSession[]
-  sponsored_group_class_enrollments        GroupClassEnrollment[]                @relation("ClassEnrollmentSponsoredByAdmin")
+  sponsored_group_class_enrollments        GroupClassEnrollment[]                   @relation("ClassEnrollmentSponsoredByAdmin")
   group_session_public_attendance_attempts GroupSessionPublicAttendanceAttempt[]
-  marked_paid_installments                 EnrollmentInstallment[]               @relation("InstallmentMarkedPaidBy")
-  sent_installment_reminders               InstallmentReminderLog[]              @relation("InstallmentReminderSentBy")
+  marked_paid_installments                 EnrollmentInstallment[]                  @relation("InstallmentMarkedPaidBy")
+  sent_installment_reminders               InstallmentReminderLog[]                 @relation("InstallmentReminderSentBy")
   commerce_guest_checkout_sessions         CommerceGuestCheckoutSession[]
-  created_restaurant_reservations          RestaurantReservation[]               @relation("RestaurantReservationCreatedBy")
+  created_restaurant_reservations          RestaurantReservation[]                  @relation("RestaurantReservationCreatedBy")
+  created_restaurant_shifts                RestaurantShift[]                        @relation("RestaurantShiftCreatedBy")
+  updated_restaurant_shifts                RestaurantShift[]                        @relation("RestaurantShiftUpdatedBy")
+  managed_restaurant_shifts                RestaurantShift[]                        @relation("RestaurantShiftManager")
+  opened_restaurant_shifts                 RestaurantShift[]                        @relation("RestaurantShiftOpenedBy")
+  closed_restaurant_shifts                 RestaurantShift[]                        @relation("RestaurantShiftClosedBy")
+  cancelled_restaurant_shifts              RestaurantShift[]                        @relation("RestaurantShiftCancelledBy")
+  created_restaurant_shift_templates       RestaurantShiftTemplate[]                @relation("RestaurantShiftTemplateCreatedBy")
+  restaurant_shift_memberships             RestaurantShiftMember[]                  @relation("RestaurantShiftMemberUser")
+  created_restaurant_shift_members         RestaurantShiftMember[]                  @relation("RestaurantShiftMemberCreatedBy")
+  restaurant_shift_template_memberships    RestaurantShiftTemplateMember[]          @relation("RestaurantShiftTemplateMemberUser")
+  restaurant_shift_template_table_users    RestaurantShiftTemplateTableAssignment[] @relation("RestaurantShiftTemplateTableUser")
+  assigned_restaurant_tables               RestaurantShiftTableAssignment[]         @relation("RestaurantShiftTableAssignedBy")
+  created_restaurant_table_states          RestaurantTableOperationalState[]        @relation("RestaurantTableStateUpdatedBy")
+  created_restaurant_combinations          RestaurantTableCombination[]             @relation("RestaurantCombinationCreatedBy")
+  created_restaurant_combination_sessions  RestaurantTableCombinationSession[]      @relation("RestaurantCombinationSessionCreatedBy")
+  released_restaurant_combinations         RestaurantTableCombinationSession[]      @relation("RestaurantCombinationReleasedBy")
+  restaurant_reservation_assignments       RestaurantReservationAssignment[]        @relation("RestaurantReservationAssignmentUser")
+  restaurant_audit_logs                    RestaurantAuditLog[]                     @relation("RestaurantAuditActor")
+  restaurant_internal_notes                RestaurantInternalNote[]                 @relation("RestaurantInternalNoteAuthor")
+  restaurant_visit_waiters                 RestaurantVisit[]                        @relation("RestaurantVisitPrimaryWaiter")
+  restaurant_visit_closers                 RestaurantVisit[]                        @relation("RestaurantVisitClosedBy")
+  restaurant_visit_reopeners               RestaurantVisit[]                        @relation("RestaurantVisitReopenedBy")
+  restaurant_waitlist_creators             RestaurantWaitlist[]                     @relation("RestaurantWaitlistCreatedBy")
+  restaurant_waitlist_updaters             RestaurantWaitlist[]                     @relation("RestaurantWaitlistUpdatedBy")
+  restaurant_waitlist_events_as_actor      RestaurantWaitlistEvent[]                @relation("RestaurantWaitlistEventActor")
+  restaurant_deposit_submitters            RestaurantReservationDeposit[]           @relation("RestaurantDepositSubmittedBy")
+  restaurant_deposit_reviewers             RestaurantReservationDeposit[]           @relation("RestaurantDepositReviewedBy")
+  restaurant_deposit_refunders             RestaurantReservationDeposit[]           @relation("RestaurantDepositRefundedBy")
+  restaurant_closeout_closers              RestaurantShiftCloseout[]                @relation("RestaurantCloseoutClosedBy")
+  restaurant_closeout_reopeners            RestaurantShiftCloseout[]                @relation("RestaurantCloseoutReopenedBy")
+  restaurant_closeout_adjusters            RestaurantShiftCloseoutAdjustment[]      @relation("RestaurantCloseoutAdjustmentActor")
+  restaurant_customer_profiles_as_waiter   RestaurantCustomerProfile[]              @relation("RestaurantCustomerPreferredWaiter")
 
   @@map("user")
 }
@@ -697,26 +1350,28 @@ model StaffProfile {
 }
 
 model CustomerProfile {
-  id                        Int                      @id @default(autoincrement())
-  company_id                Int
-  user_id                   String
-  notes                     String?                  @db.Text
-  preferred_staff_id        Int?
-  created_at                DateTime                 @default(now())
-  updated_at                DateTime                 @updatedAt
-  deleted_at                DateTime?
-  bookings                  Booking[]
-  company                   Company                  @relation(fields: [company_id], references: [id])
-  preferred_staff           StaffProfile?            @relation(fields: [preferred_staff_id], references: [id])
-  user                      User                     @relation(fields: [user_id], references: [id])
-  group_event_bookings      GroupEventBooking[]
-  group_class_enrollments   GroupClassEnrollment[]
-  group_session_attendances GroupSessionAttendance[]
-  group_event_interests     GroupEventInterest[]
-  group_class_interests     GroupClassInterest[]
-  booking_groups            BookingGroup[]
-  commerce_orders           CommerceOrder[]
-  restaurant_reservations   RestaurantReservation[]
+  id                          Int                        @id @default(autoincrement())
+  company_id                  Int
+  user_id                     String
+  notes                       String?                    @db.Text
+  preferred_staff_id          Int?
+  created_at                  DateTime                   @default(now())
+  updated_at                  DateTime                   @updatedAt
+  deleted_at                  DateTime?
+  bookings                    Booking[]
+  company                     Company                    @relation(fields: [company_id], references: [id])
+  preferred_staff             StaffProfile?              @relation(fields: [preferred_staff_id], references: [id])
+  user                        User                       @relation(fields: [user_id], references: [id])
+  group_event_bookings        GroupEventBooking[]
+  group_class_enrollments     GroupClassEnrollment[]
+  group_session_attendances   GroupSessionAttendance[]
+  group_event_interests       GroupEventInterest[]
+  group_class_interests       GroupClassInterest[]
+  booking_groups              BookingGroup[]
+  commerce_orders             CommerceOrder[]
+  restaurant_reservations     RestaurantReservation[]
+  restaurant_profile          RestaurantCustomerProfile?
+  restaurant_waitlist_entries RestaurantWaitlist[]
 
   @@unique([company_id, user_id])
   @@index([preferred_staff_id])
@@ -1611,12 +2266,110 @@ enum RestaurantReservationSource {
   WALK_IN
 }
 
+enum RestaurantShiftStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum RestaurantShiftMemberRole {
+  MANAGER
+  HOST
+  WAITER
+}
+
+enum RestaurantTableOperationalStatus {
+  AVAILABLE
+  RESERVED_SOON
+  RESERVED
+  ARRIVED
+  SEATED
+  BILL_REQUESTED
+  CLEANING
+  BLOCKED
+}
+
+enum RestaurantCombinationSessionStatus {
+  ACTIVE
+  RELEASED
+}
+
 enum RestaurantNotificationEvent {
   RESTAURANT_RESERVATION_CREATED
   RESTAURANT_RESERVATION_CONFIRMED
   RESTAURANT_RESERVATION_UPDATED
   RESTAURANT_RESERVATION_CANCELLED
   RESTAURANT_RESERVATION_REMINDER
+  WAITLIST_ADDED
+  WAITLIST_TABLE_READY
+  WAITLIST_UPDATED
+  WAITLIST_CANCELLED
+  DEPOSIT_REQUIRED
+  DEPOSIT_PROOF_SUBMITTED
+  DEPOSIT_APPROVED
+  DEPOSIT_REJECTED
+  DEPOSIT_DEADLINE_REMINDER
+  DEPOSIT_EXPIRED
+  DEPOSIT_REFUNDED
+}
+
+enum RestaurantVisitStatus {
+  DRAFT
+  CLOSED
+  REOPENED
+}
+
+enum RestaurantVisitPaymentMethod {
+  CASH
+  CARD
+  QR
+  TRANSFER
+  MIXED
+  OTHER
+}
+
+enum RestaurantWaitlistStatus {
+  WAITING
+  NOTIFIED
+  ARRIVED
+  SEATED
+  LEFT
+  CANCELLED
+}
+
+enum RestaurantWaitlistSource {
+  WALK_IN
+  PHONE
+  WHATSAPP
+  OTHER
+}
+
+enum RestaurantDepositStatus {
+  REQUIRED
+  PENDING
+  PROOF_SUBMITTED
+  APPROVED
+  REJECTED
+  WAIVED
+  PARTIALLY_REFUNDED
+  REFUNDED
+  EXPIRED
+}
+
+enum RestaurantDepositPaymentMethod {
+  CASH
+  CARD
+  QR
+  TRANSFER
+  OTHER
+}
+
+enum RestaurantShiftCloseoutStatus {
+  PREVIEWED
+  CLOSED
+  FINALIZED
+  REOPENED
 }
 
 enum RestaurantDepositMode {

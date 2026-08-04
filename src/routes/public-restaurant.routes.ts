@@ -7,7 +7,7 @@ const router = Router();
 router.get('/:slug', Controller.configuration);
 router.get('/:slug/menu', MenuController.menu);
 router.get('/:slug/availability', Controller.availability);
-router.post('/:slug/deposit-proof', Controller.restaurantDepositProofUpload, Controller.uploadDepositProof);
+router.post('/:slug/reservations/:code/deposit-proof', Controller.restaurantDepositProofUpload, Controller.uploadReservationDepositProof);
 router.post('/:slug/reservations', Controller.create);
 router.get('/:slug/my-reservations', requireAuth, Controller.mine);
 router.get('/reservations/:code', Controller.detail);

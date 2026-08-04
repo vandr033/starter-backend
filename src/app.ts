@@ -63,7 +63,7 @@ const bookingAvailabilityPaths = new Set([
   "/api/booking/slots",
 ]);
 const restaurantAvailabilityPathPattern = /^\/api\/restaurant\/public\/[^/]+\/availability$/;
-const restaurantPublicWritePattern = /^\/api\/restaurant\/public\/(?:[^/]+\/reservations|reservations\/[^/]+\/cancel)$/;
+const restaurantPublicWritePattern = /^\/api\/restaurant\/public\/(?:[^/]+\/reservations|[^/]+\/reservations\/[^/]+\/deposit-proof|reservations\/[^/]+\/cancel)$/;
 
 const bookingWritePathPattern = /^\/api\/booking(?:\/public|\/customer|\/\d+(?:\/cancel)?)?$/;
 

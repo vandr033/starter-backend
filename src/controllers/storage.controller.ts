@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { env } from '../config/env';
+import { StorageService } from '../services/storage.service';
 
 export const serveFile = async (req: Request, res: Response) => {
   try {
@@ -10,21 +10,14 @@ export const serveFile = async (req: Request, res: Response) => {
     // Handle string array type from Express
     const pathStr = Array.isArray(filePath) ? filePath[0] : filePath;
 
-    // Security: sanitize file path to prevent directory traversal
-    const sanitizedPath = pathStr.replace(/\.\./g, '').replace(/\/+/g, '/');
-    const fullPath = path.join(env.storagePath, sanitizedPath);
-
-    // Ensure the path is within the storage directory
-    const resolvedPath = path.resolve(fullPath);
-    const resolvedStoragePath = path.resolve(env.storagePath);
-
-    if (!resolvedPath.startsWith(resolvedStoragePath)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
+    const relativePath = StorageService.toRelativeStoragePath(pathStr);
+    if (!relativePath || StorageService.isPrivateRelativePath(relativePath)) return res.status(404).json({ error: 'File not found' });
 
     // Check if file exists and get stats for ETag
     let stats;
+    let resolvedPath: string;
     try {
+      resolvedPath = await StorageService.getFilePath(relativePath);
       stats = await fs.stat(resolvedPath);
     } catch {
       return res.status(404).json({ error: 'File not found' });
@@ -66,6 +59,7 @@ function getContentType(ext: string): string {
     '.gif': 'image/gif',
     '.webp': 'image/webp',
     '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf',
   };
   
   return contentTypes[ext] || 'application/octet-stream';
