@@ -6,7 +6,9 @@ ALTER TABLE `restaurant_audit_log`
   ADD INDEX `restaurant_audit_target_idx`(`company_id`, `target_type`, `target_id`, `created_at`);
 
 ALTER TABLE `restaurant_notification_log`
-  DROP FOREIGN KEY `restaurant_notification_log_reservation_id_fkey`,
+  DROP FOREIGN KEY `restaurant_notification_log_reservation_id_fkey`;
+
+ALTER TABLE `restaurant_notification_log`
   MODIFY COLUMN `reservation_id` INTEGER NULL,
   ADD COLUMN `waitlist_id` INTEGER NULL AFTER `reservation_id`,
   ADD COLUMN `dedup_claim_key` VARCHAR(512) NULL,
