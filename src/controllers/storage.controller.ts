@@ -39,6 +39,7 @@ export const serveFile = async (req: Request, res: Response) => {
     // Revalidate on every request so replaced images with the same URL are shown immediately.
     res.set({
       'Content-Type': contentType,
+      'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'public, max-age=0, must-revalidate',
       'ETag': etag,
     });

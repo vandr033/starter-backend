@@ -67,6 +67,11 @@ async function assertShift(tx: Tx, companyId: number, shiftId: number) {
   return shift;
 }
 
+async function lockShift(tx: Tx, companyId: number, shiftId: number) {
+  await tx.$queryRaw`SELECT id FROM restaurant_shift WHERE company_id = ${companyId} AND id = ${shiftId} FOR UPDATE`;
+  return assertShift(tx, companyId, shiftId);
+}
+
 async function createShiftInTx(tx: Tx, companyId: number, actorUserId: string, input: { name: string; shift_date: string; start_time: string; end_time: string; timezone?: string; service_period_id?: number | null; notes?: string | null; shift_manager_user_id?: string | null }) {
   const company = await companyContext(tx, companyId);
   if (!company?.restaurant_enabled) throw Object.assign(new Error('El módulo de restaurante no está habilitado.'), { status: 403 });
@@ -192,7 +197,7 @@ export async function createShift(companyId: number, actorUserId: string, input:
 
 export async function updateShift(companyId: number, shiftId: number, actorUserId: string, input: any): Promise<Result> {
   return resultFromTransaction(async (tx) => {
-    const shift = await assertShift(tx, companyId, shiftId);
+    const shift = await lockShift(tx, companyId, shiftId);
     if (shift.status === 'CLOSED' || shift.status === 'CANCELLED') throw Object.assign(new Error('No podés editar un turno cerrado o cancelado.'), { status: 409 });
     const company = await companyContext(tx, companyId);
     const timezone = input.timezone || shift.timezone || company?.timezone || 'UTC';
@@ -208,16 +213,16 @@ export async function updateShift(companyId: number, shiftId: number, actorUserI
 }
 
 export async function deleteDraftShift(companyId: number, shiftId: number, actorUserId: string): Promise<Result> {
-  return resultFromTransaction(async (tx) => { const shift = await assertShift(tx, companyId, shiftId); if (shift.status !== 'DRAFT') throw Object.assign(new Error('Solo podés eliminar turnos en borrador.'), { status: 409 }); await audit(tx, companyId, actorUserId, 'SHIFT_DELETED', { shift_id: shiftId }); await tx.restaurantShift.delete({ where: { id: shiftId } }); return null; }, 'Borrador eliminado.');
+  return resultFromTransaction(async (tx) => { const shift = await lockShift(tx, companyId, shiftId); if (shift.status !== 'DRAFT') throw Object.assign(new Error('Solo podés eliminar turnos en borrador.'), { status: 409 }); await audit(tx, companyId, actorUserId, 'SHIFT_DELETED', { shift_id: shiftId }); await tx.restaurantShift.delete({ where: { id: shiftId } }); return null; }, 'Borrador eliminado.');
 }
 
 export async function replaceMembers(companyId: number, shiftId: number, actorUserId: string, members: Array<{ user_id: string; role: RestaurantShiftMemberRole }>): Promise<Result> {
-  return resultFromTransaction(async (tx) => { const shift = await assertShift(tx, companyId, shiftId); await replaceMembersInTx(tx, companyId, shift, actorUserId, members); return tx.restaurantShift.findFirst({ where: { id: shiftId, company_id: companyId }, include: shiftInclude }); }, 'Equipo del turno actualizado.');
+  return resultFromTransaction(async (tx) => { const shift = await lockShift(tx, companyId, shiftId); await replaceMembersInTx(tx, companyId, shift, actorUserId, members); return tx.restaurantShift.findFirst({ where: { id: shiftId, company_id: companyId }, include: shiftInclude }); }, 'Equipo del turno actualizado.');
 }
 
 export async function replaceDiningAreas(companyId: number, shiftId: number, actorUserId: string, diningAreaIds: number[]): Promise<Result> {
   return resultFromTransaction(async (tx) => {
-    const shift = await assertShift(tx, companyId, shiftId); if (shift.status === 'CLOSED' || shift.status === 'CANCELLED') throw Object.assign(new Error('No podés editar un turno cerrado o cancelado.'), { status: 409 });
+    const shift = await lockShift(tx, companyId, shiftId); if (shift.status === 'CLOSED' || shift.status === 'CANCELLED') throw Object.assign(new Error('No podés editar un turno cerrado o cancelado.'), { status: 409 });
     if (new Set(diningAreaIds).size !== diningAreaIds.length) throw Object.assign(new Error('No podés repetir áreas.'), { status: 400 });
     for (const areaId of diningAreaIds) { const area = await assertArea(tx, companyId, areaId); if (!area.is_active) throw Object.assign(new Error('No podés abrir un área inactiva.'), { status: 409 }); }
     const previous = await tx.restaurantShiftDiningArea.findMany({ where: { shift_id: shiftId }, select: { dining_area_id: true } });
@@ -231,12 +236,12 @@ export async function replaceDiningAreas(companyId: number, shiftId: number, act
 }
 
 export async function replaceAssignments(companyId: number, shiftId: number, actorUserId: string, assignments: Array<{ table_id: number; user_id: string }>): Promise<Result> {
-  return resultFromTransaction(async (tx) => { const shift = await assertShift(tx, companyId, shiftId); await replaceAssignmentsInTx(tx, companyId, shift, actorUserId, assignments); return tx.restaurantShift.findFirst({ where: { id: shiftId, company_id: companyId }, include: shiftInclude }); }, 'Asignaciones actualizadas.');
+  return resultFromTransaction(async (tx) => { const shift = await lockShift(tx, companyId, shiftId); await replaceAssignmentsInTx(tx, companyId, shift, actorUserId, assignments); return tx.restaurantShift.findFirst({ where: { id: shiftId, company_id: companyId }, include: shiftInclude }); }, 'Asignaciones actualizadas.');
 }
 
 export async function replaceSetup(companyId: number, shiftId: number, actorUserId: string, input: { members: Array<{ user_id: string; role: RestaurantShiftMemberRole }>; dining_area_ids: number[]; assignments: Array<{ table_id: number; user_id: string }> }): Promise<Result> {
   return resultFromTransaction(async (tx) => {
-    const shift = await assertShift(tx, companyId, shiftId);
+    const shift = await lockShift(tx, companyId, shiftId);
     if (new Set(input.dining_area_ids).size !== input.dining_area_ids.length) throw Object.assign(new Error('No podés repetir áreas.'), { status: 400 });
     for (const areaId of input.dining_area_ids) { const area = await assertArea(tx, companyId, areaId); if (!area.is_active) throw Object.assign(new Error('No podés abrir un área inactiva.'), { status: 409 }); }
     await replaceAssignmentsInTx(tx, companyId, shift, actorUserId, []);
@@ -252,14 +257,17 @@ export async function replaceSetup(companyId: number, shiftId: number, actorUser
 
 async function changeShiftStatus(companyId: number, shiftId: number, actorUserId: string, nextStatus: RestaurantShiftStatus): Promise<Result> {
   return resultFromTransaction(async (tx) => {
-    const shift = await assertShift(tx, companyId, shiftId);
+    const shift = await lockShift(tx, companyId, shiftId);
     const allowed: Record<RestaurantShiftStatus, RestaurantShiftStatus[]> = { DRAFT: ['OPEN', 'CANCELLED'], OPEN: ['CLOSED', 'CANCELLED'], CLOSED: [], CANCELLED: [] };
     if (!allowed[shift.status].includes(nextStatus)) throw Object.assign(new Error('La transición del turno no está permitida.'), { status: 409 });
-    const data: Prisma.RestaurantShiftUpdateInput = { status: nextStatus, updated_by: { connect: { id: actorUserId } } };
-    if (nextStatus === 'OPEN') { data.opened_at = new Date(); data.opened_by = { connect: { id: actorUserId } }; }
-    if (nextStatus === 'CLOSED') { data.closed_at = new Date(); data.closed_by = { connect: { id: actorUserId } }; }
-    if (nextStatus === 'CANCELLED') { data.cancelled_at = new Date(); data.cancelled_by = { connect: { id: actorUserId } }; }
-    const updated = await tx.restaurantShift.update({ where: { id: shiftId }, data, include: shiftInclude });
+    const data: Prisma.RestaurantShiftUncheckedUpdateManyInput = { status: nextStatus, updated_by_user_id: actorUserId };
+    if (nextStatus === 'OPEN') { data.opened_at = new Date(); data.opened_by_user_id = actorUserId; }
+    if (nextStatus === 'CLOSED') { data.closed_at = new Date(); data.closed_by_user_id = actorUserId; }
+    if (nextStatus === 'CANCELLED') { data.cancelled_at = new Date(); data.cancelled_by_user_id = actorUserId; }
+    const changed = await tx.restaurantShift.updateMany({ where: { id: shiftId, company_id: companyId, status: shift.status }, data });
+    if (changed.count !== 1) throw Object.assign(new Error('El turno cambió mientras se actualizaba. Intentá nuevamente.'), { status: 409 });
+    const updated = await tx.restaurantShift.findFirst({ where: { id: shiftId, company_id: companyId }, include: shiftInclude });
+    if (!updated) throw Object.assign(new Error('No encontramos el turno actualizado.'), { status: 404 });
     await audit(tx, companyId, actorUserId, `SHIFT_${nextStatus}`, { shift_id: shiftId });
     return updated;
   }, nextStatus === 'OPEN' ? 'Turno abierto.' : nextStatus === 'CLOSED' ? 'Turno cerrado.' : 'Turno cancelado.');

@@ -44,7 +44,7 @@ async function validateReferences(tx: Prisma.TransactionClient, companyId: numbe
 }
 async function estimate(tx: Prisma.TransactionClient, companyId: number, partySize: number, preferredAreaId?: number | null) {
   const context = await company(tx, companyId);
-  const tables = await tx.restaurantTable.findMany({ where: { company_id: companyId, is_active: true, maximum_seats: { gte: partySize }, ...(preferredAreaId ? { dining_area_id: preferredAreaId } : {}) }, select: { id: true, table_state: { select: { status: true } } } });
+  const tables = await tx.restaurantTable.findMany({ where: { company_id: companyId, is_active: true, dining_area: { is_active: true }, maximum_seats: { gte: partySize }, ...(preferredAreaId ? { dining_area_id: preferredAreaId } : {}) }, select: { id: true, table_state: { select: { status: true } } } });
   const available = tables.filter((table) => !table.table_state || table.table_state.status === 'AVAILABLE').length;
   const ahead = await tx.restaurantWaitlist.count({ where: { company_id: companyId, status: { in: queueStatuses }, party_size: { lte: partySize } } });
   const divisor = Math.max(1, available);
@@ -103,16 +103,17 @@ export async function update(companyId: number, actorUserId: string, id: number,
 export async function recommendations(companyId: number, query: { table_id?: number; at?: string }): Promise<Result> {
   const at = query.at ? new Date(query.at) : new Date();
   if (Number.isNaN(at.getTime())) return fail(400, 'El momento de consulta no es válido.');
-  const [entries, tables, states, settings] = await Promise.all([
+  const [entries, tables, states, settings, combinations] = await Promise.all([
     prisma.restaurantWaitlist.findMany({ where: { company_id: companyId, status: { in: queueStatuses } }, include: { preferred_dining_area: true }, orderBy: [{ priority: 'desc' }, { manual_order: 'asc' }, { arrival_time: 'asc' }], take: 100 }),
-    prisma.restaurantTable.findMany({ where: { company_id: companyId, is_active: true, dining_area: { is_active: true }, ...(query.table_id ? { id: query.table_id } : {}) }, include: { dining_area: true } }),
+    prisma.restaurantTable.findMany({ where: { company_id: companyId, is_active: true, dining_area: { is_active: true }, ...(query.table_id ? { id: query.table_id } : {}) }, include: { dining_area: true }, orderBy: [{ maximum_seats: 'asc' }, { id: 'asc' }] }),
     prisma.restaurantTableOperationalState.findMany({ where: { company_id: companyId } }),
     prisma.restaurantSettings.findFirst({ where: { company_id: companyId }, select: { average_dining_minutes: true } }),
+    prisma.restaurantTableCombination.findMany({ where: { company_id: companyId, is_active: true }, include: { dining_area: true, tables: { include: { table: { include: { dining_area: true } } } } }, orderBy: [{ id: 'asc' }] }),
   ]);
   const stateByTable = new Map(states.map((state) => [state.table_id, state]));
   const tableIds = tables.map((table) => table.id);
   const reservationEnd = new Date(at.getTime() + (settings?.average_dining_minutes || 90) * 60000);
-  const reservations = tableIds.length ? await prisma.restaurantReservation.findMany({ where: { company_id: companyId, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: reservationEnd }, end_time: { gt: at }, OR: [{ table_id: { in: tableIds } }, { combination: { tables: { some: { table_id: { in: tableIds } } } } }] }, select: { table_id: true, combination: { select: { tables: { select: { table_id: true } } } } } }) : [];
+  const reservations = tableIds.length ? await prisma.restaurantReservation.findMany({ where: { company_id: companyId, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: reservationEnd }, end_time: { gt: at }, OR: [{ table_id: { in: tableIds } }, { combination: { company_id: companyId, tables: { some: { company_id: companyId, table_id: { in: tableIds } } } } }] }, select: { table_id: true, combination: { select: { tables: { select: { table_id: true } } } } } }) : [];
   const reservedTableIds = new Set<number>();
   for (const reservation of reservations) {
     if (reservation.table_id) reservedTableIds.add(reservation.table_id);
@@ -121,11 +122,13 @@ export async function recommendations(companyId: number, query: { table_id?: num
   const result = entries.map((entry, index) => {
     const compatible = tables.filter((table) => table.maximum_seats >= entry.party_size && (!entry.preferred_dining_area_id || table.dining_area_id === entry.preferred_dining_area_id) && !reservedTableIds.has(table.id) && !['SEATED', 'BILL_REQUESTED', 'CLEANING', 'BLOCKED'].includes(stateByTable.get(table.id)?.status || 'AVAILABLE'));
     const selected = compatible[0] || tables.find((table) => table.maximum_seats >= entry.party_size && !reservedTableIds.has(table.id) && !['SEATED', 'BILL_REQUESTED', 'CLEANING', 'BLOCKED'].includes(stateByTable.get(table.id)?.status || 'AVAILABLE'));
-    const reasons = [`${index + 1}° en la cola`, selected ? `Capacidad ${selected.maximum_seats} para ${entry.party_size}` : 'Sin mesa compatible disponible'];
+    const compatibleCombinations = combinations.filter((combination: any) => combination.dining_area?.is_active && combination.tables.length >= 2 && combination.tables.every((part: any) => part.table.is_active && part.table.dining_area.is_active && !reservedTableIds.has(part.table_id) && !['SEATED', 'BILL_REQUESTED', 'CLEANING', 'BLOCKED'].includes(stateByTable.get(part.table_id)?.status || 'AVAILABLE')) && combination.tables.reduce((sum: number, part: any) => sum + part.table.maximum_seats, 0) >= entry.party_size && (!entry.preferred_dining_area_id || combination.dining_area_id === entry.preferred_dining_area_id || combination.tables.every((part: any) => part.table.dining_area_id === entry.preferred_dining_area_id)));
+    const selectedCombination = compatibleCombinations[0] || combinations.find((combination: any) => combination.dining_area?.is_active && combination.tables.length >= 2 && combination.tables.every((part: any) => part.table.is_active && part.table.dining_area.is_active && !reservedTableIds.has(part.table_id) && !['SEATED', 'BILL_REQUESTED', 'CLEANING', 'BLOCKED'].includes(stateByTable.get(part.table_id)?.status || 'AVAILABLE')) && combination.tables.reduce((sum: number, part: any) => sum + part.table.maximum_seats, 0) >= entry.party_size);
+    const reasons = [`${index + 1}° en la cola`, selected ? `Capacidad ${selected.maximum_seats} para ${entry.party_size}` : selectedCombination ? `Combinación de ${selectedCombination.tables.reduce((sum: number, part: any) => sum + part.table.maximum_seats, 0)} para ${entry.party_size}` : 'Sin mesa compatible disponible'];
     if (entry.preferred_dining_area_id && selected?.dining_area_id === entry.preferred_dining_area_id) reasons.push('Área preferida');
     if (entry.priority > 0) reasons.push('Prioridad manual');
     if (!selected && reservedTableIds.size) reasons.push('Las mesas compatibles tienen reservas próximas');
-    return { waitlist_id: entry.id, guest_name: entry.guest_name, party_size: entry.party_size, arrival_time: entry.arrival_time, status: entry.status, recommended_table: selected ? { id: selected.id, name: selected.name, capacity: selected.maximum_seats, dining_area: selected.dining_area.name } : null, score: (selected ? 100 : 0) + entry.priority * 1000 - index, reasons, at: at.toISOString() };
+    return { waitlist_id: entry.id, guest_name: entry.guest_name, party_size: entry.party_size, arrival_time: entry.arrival_time, status: entry.status, recommended_table: selected ? { id: selected.id, name: selected.name, capacity: selected.maximum_seats, dining_area: selected.dining_area.name } : null, recommended_combination: selectedCombination ? { id: selectedCombination.id, name: selectedCombination.name, capacity: selectedCombination.tables.reduce((sum: number, part: any) => sum + part.table.maximum_seats, 0), table_ids: selectedCombination.tables.map((part: any) => part.table_id), dining_area: selectedCombination.dining_area?.name || null } : null, score: (selected ? 100 : selectedCombination ? 80 : 0) + entry.priority * 1000 - index, reasons, at: at.toISOString() };
   });
   return ok(result.sort((a, b) => b.score - a.score));
 }
@@ -134,6 +137,8 @@ export async function seat(companyId: number, actorUserId: string, id: number, i
   try {
     const result = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM restaurant_waitlist WHERE company_id = ${companyId} AND id = ${id} FOR UPDATE`;
+      const actor = await tx.companyUser.findFirst({ where: { company_id: companyId, user_id: actorUserId, deleted_at: null }, select: { id: true } });
+      if (!actor) throw Object.assign(new Error('El usuario no pertenece a esta empresa.'), { status: 403 });
       const entry = await tx.restaurantWaitlist.findFirst({ where: { id, company_id: companyId }, include: { preferred_dining_area: true } });
       if (!entry) throw Object.assign(new Error('No encontramos el registro de espera.'), { status: 404 });
       if (!inQueue(entry.status)) throw Object.assign(new Error('El cliente ya no está disponible para ser sentado.'), { status: 409 });
@@ -148,6 +153,7 @@ export async function seat(companyId: number, actorUserId: string, id: number, i
         await tx.$queryRaw`SELECT id FROM restaurant_table WHERE company_id = ${companyId} AND id = ${tableId} FOR UPDATE`;
         table = await tx.restaurantTable.findFirst({ where: { id: tableId, company_id: companyId, is_active: true, dining_area: { is_active: true } }, include: { dining_area: true, table_state: true } });
         if (!table || ['SEATED', 'BILL_REQUESTED', 'CLEANING', 'BLOCKED'].includes(table.table_state?.status || 'AVAILABLE')) throw Object.assign(new Error('La mesa seleccionada no está disponible.'), { status: 409 });
+        if (table.maximum_seats < entry.party_size) throw Object.assign(new Error('La mesa no tiene capacidad suficiente para este grupo.'), { status: 409 });
         if (table.dining_area.company_id !== companyId) throw Object.assign(new Error('El área de la mesa no pertenece a la empresa.'), { status: 409 });
         if (table.table_state && table.table_state.company_id !== companyId) throw Object.assign(new Error('El estado operativo de la mesa no pertenece a la empresa.'), { status: 409 });
         tableIds = [table.id];
@@ -156,7 +162,7 @@ export async function seat(companyId: number, actorUserId: string, id: number, i
           where: { id: combinationId!, company_id: companyId, is_active: true },
           include: { dining_area: true, tables: { include: { table: { include: { dining_area: true, table_state: true } } } } },
         });
-        if (!combination || combination.company_id !== companyId || combination.dining_area.company_id !== companyId || combination.tables.length < 2 || combination.tables.some((part: any) => part.table.company_id !== companyId || part.table.dining_area.company_id !== companyId)) throw Object.assign(new Error('La combinación no está disponible.'), { status: 409 });
+        if (!combination || combination.company_id !== companyId || !combination.dining_area || !combination.dining_area.is_active || combination.dining_area.company_id !== companyId || combination.tables.length < 2 || combination.tables.some((part: any) => part.table.company_id !== companyId || !part.table.is_active || !part.table.dining_area.is_active || part.table.dining_area.company_id !== companyId) || combination.tables.reduce((sum: number, part: any) => sum + part.table.maximum_seats, 0) < entry.party_size) throw Object.assign(new Error('La combinación no está disponible o no tiene capacidad suficiente.'), { status: 409 });
         tableIds = combination.tables.map((part: any) => part.table_id);
         await tx.$queryRaw`SELECT id FROM restaurant_table WHERE company_id = ${companyId} AND id IN (${Prisma.join(tableIds)}) FOR UPDATE`;
         if (combination.tables.some((part: any) => part.table.table_state && part.table.table_state.company_id !== companyId || ['SEATED', 'BILL_REQUESTED', 'CLEANING', 'BLOCKED'].includes(part.table.table_state?.status || 'AVAILABLE'))) throw Object.assign(new Error('Una mesa de la combinación no está disponible.'), { status: 409 });
@@ -164,13 +170,15 @@ export async function seat(companyId: number, actorUserId: string, id: number, i
       const start = new Date();
       const end = new Date(start.getTime() + context.restaurant_settings!.average_dining_minutes * 60000);
       const shift = await tx.restaurantShift.findFirst({ where: { company_id: companyId, status: 'OPEN', start_at: { lte: start }, end_at: { gt: start } }, orderBy: { start_at: 'desc' } });
-      const overlap = await tx.restaurantReservation.findFirst({ where: { company_id: companyId, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: end }, end_time: { gt: start }, OR: [{ table_id: { in: tableIds } }, { combination: { tables: { some: { table_id: { in: tableIds } } } } }] }, select: { id: true } });
+      const overlap = await tx.restaurantReservation.findFirst({ where: { company_id: companyId, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: end }, end_time: { gt: start }, OR: [{ table_id: { in: tableIds } }, { combination: { company_id: companyId, tables: { some: { company_id: companyId, table_id: { in: tableIds } } } } }] }, select: { id: true } });
       if (overlap) throw Object.assign(new Error('La mesa acaba de ser ocupada.'), { status: 409 });
       if (entry.customer_profile_id && !await tx.customerProfile.findFirst({ where: { id: entry.customer_profile_id, company_id: companyId, deleted_at: null } })) throw Object.assign(new Error('El perfil de cliente no pertenece a la empresa.'), { status: 409 });
       const customerProfileId = entry.customer_profile_id || await resolveRestaurantCustomer(tx, companyId, context.phone_prefix, { customer_name: entry.guest_name, customer_phone: entry.phone, customer_email: entry.email });
       const phone = entry.phone ? canonicalizePhoneParts({ phoneNumber: entry.phone, defaultPrefix: context.phone_prefix }).fullPhone : null;
       const reservationDate = parseDateTimeInTimeZone(`${new Intl.DateTimeFormat('en-CA', { timeZone: context.timezone }).format(start)}T00:00:00`, context.timezone);
       const reservation = await tx.restaurantReservation.create({ data: { company_id: companyId, customer_profile_id: customerProfileId, table_id: tableId, combination_id: combinationId, reservation_code: generateRestaurantReservationCode(), reservation_date: reservationDate, start_time: start, end_time: end, party_size: entry.party_size, customer_name: entry.guest_name, customer_phone: phone, customer_email: entry.email, status: RestaurantReservationStatus.SEATED, source: RestaurantReservationSource.WALK_IN, seated_at: start, created_by_user_id: actorUserId } });
+      await tx.restaurantReservationAssignment.create({ data: { company_id: companyId, reservation_id: reservation.id, table_id: tableId, combination_id: combinationId, assigned_by_user_id: actorUserId, reason: 'Asignación inicial desde la lista de espera.' } });
+      await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: actorUserId, reservation_id: reservation.id, table_id: tableId, combination_id: combinationId, event: 'RESERVATION_CREATED', target_type: 'RESTAURANT_RESERVATION', target_id: String(reservation.id), new_values: { status: reservation.status, table_id: tableId, combination_id: combinationId, source: reservation.source } } });
       let sessionId: number | null = null;
       if (combinationId) { const session = await tx.restaurantTableCombinationSession.create({ data: { company_id: companyId, combination_id: combinationId, reservation_id: reservation.id, start_at: start, end_at: end, created_by_user_id: actorUserId } }); sessionId = session.id; }
       const visit = await tx.restaurantVisit.create({ data: { company_id: companyId, reservation_id: reservation.id, shift_id: shift?.id ?? null, table_id: tableId, combination_session_id: sessionId, primary_waiter_user_id: null, primary_waiter_name: null, dining_area_snapshot: table?.dining_area.name || combination?.dining_area?.name || null, table_name_snapshot: table?.name || null, shift_name_snapshot: shift?.name || null, guest_count: entry.party_size, currency: (await tx.company.findUnique({ where: { id: companyId }, select: { currency: true } }))?.currency || 'Bs.', status: 'DRAFT' } });

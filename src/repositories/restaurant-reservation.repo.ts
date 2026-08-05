@@ -33,7 +33,7 @@ export const restaurantReservationRepo = {
           AND rr.status IN (${Prisma.join(blockingReservationStatuses)})
           AND rr.start_time < ${end}
           AND rr.end_time > ${start}
-          AND (rr.table_id = ${tableId} OR EXISTS (SELECT 1 FROM restaurant_table_combination_table ct WHERE ct.combination_id = rr.combination_id AND ct.table_id = ${tableId}))
+          AND (rr.table_id = ${tableId} OR EXISTS (SELECT 1 FROM restaurant_table_combination_table ct INNER JOIN restaurant_table_combination rc ON rc.id = ct.combination_id WHERE ct.company_id = (SELECT company_id FROM restaurant_table WHERE id = ${tableId}) AND rc.company_id = (SELECT company_id FROM restaurant_table WHERE id = ${tableId}) AND ct.combination_id = rr.combination_id AND ct.table_id = ${tableId}))
           ${excludeId ? Prisma.sql`AND rr.id <> ${excludeId}` : Prisma.empty}
         FOR UPDATE
       `);

@@ -6,6 +6,7 @@ import { parseDateTimeInTimeZone } from '../utils/timezone';
 import { blockingReservationStatuses, reservationInclude, restaurantReservationRepo } from '../repositories/restaurant-reservation.repo';
 import { notifyRestaurantReservation } from './restaurant-notification.service';
 import type { RestaurantNotificationChanges } from './restaurant-notification-template.service';
+import { ensureReservationDeposit } from './restaurant-deposit.service';
 
 type Result = { code: number; error: boolean; message: string; data?: unknown };
 const ok = (data: unknown, message = 'Operación realizada correctamente.', code = 200): Result => ({ code, error: false, message, data });
@@ -80,9 +81,15 @@ export async function createReservation(companyId: number, userId: string, input
       if (timing.settings.require_email && !normalizeText(input.customer_email)) throw Object.assign(new Error('El correo electrónico es obligatorio.'), { status: 400 });
       const table = await selectRestaurantTable(tx, companyId, input.party_size, timing.start, timing.end, input.table_id);
       const customerProfileId = await resolveRestaurantCustomer(tx, companyId, timing.company.phone_prefix, input);
-      const status: RestaurantReservationStatus = walkIn ? (input.initial_status || 'ARRIVED') : (input.initial_status || (timing.settings.auto_confirm_reservations ? 'CONFIRMED' : 'PENDING'));
+      const depositRequired = !walkIn && timing.settings.deposit_enabled && timing.settings.deposit_amount_cents > 0;
+      if (depositRequired && input.initial_status && input.initial_status !== 'PENDING') throw Object.assign(new Error('La reserva requiere depósito y debe quedar pendiente hasta su aprobación.'), { status: 409 });
+      const status: RestaurantReservationStatus = walkIn ? (input.initial_status || 'ARRIVED') : (input.initial_status || (depositRequired ? 'PENDING' : timing.settings.auto_confirm_reservations ? 'CONFIRMED' : 'PENDING'));
       for (let attempts = 0; attempts < 3; attempts += 1) { try {
-        const reservation = await tx.restaurantReservation.create({ data: { company_id: companyId, customer_profile_id: customerProfileId, table_id: table.id, reservation_code: generateRestaurantReservationCode(), reservation_date: timing.reservationDate, start_time: timing.start, end_time: timing.end, party_size: input.party_size, customer_name: input.customer_name.trim(), customer_phone: phone.fullPhone, customer_email: normalizeText(input.customer_email)?.toLowerCase(), notes: normalizeText(input.notes), internal_notes: normalizeText(input.internal_notes), status, source: input.source as RestaurantReservationSource, seated_at: status === 'SEATED' ? new Date() : null, created_by_user_id: userId }, include: reservationInclude }); return reservation; } catch (error: any) { if (error?.code !== 'P2002' || attempts === 2) throw error; } }
+        const reservation = await tx.restaurantReservation.create({ data: { company_id: companyId, customer_profile_id: customerProfileId, table_id: table.id, reservation_code: generateRestaurantReservationCode(), reservation_date: timing.reservationDate, start_time: timing.start, end_time: timing.end, party_size: input.party_size, customer_name: input.customer_name.trim(), customer_phone: phone.fullPhone, customer_email: normalizeText(input.customer_email)?.toLowerCase(), notes: normalizeText(input.notes), internal_notes: normalizeText(input.internal_notes), status, source: input.source as RestaurantReservationSource, seated_at: status === 'SEATED' ? new Date() : null, created_by_user_id: userId }, include: reservationInclude });
+        await tx.restaurantReservationAssignment.create({ data: { company_id: companyId, reservation_id: reservation.id, table_id: table.id, assigned_by_user_id: userId, reason: 'Asignación inicial de la reserva.' } });
+        await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: userId, reservation_id: reservation.id, table_id: table.id, event: 'RESERVATION_CREATED', target_type: 'RESTAURANT_RESERVATION', target_id: String(reservation.id), new_values: { status: reservation.status, table_id: table.id, party_size: reservation.party_size } } });
+        await ensureReservationDeposit(tx, companyId, reservation.id, reservation.party_size, reservation.start_time);
+        return reservation; } catch (error: any) { if (error?.code !== 'P2002' || attempts === 2) throw error; } }
       throw new Error('No pudimos generar el código de reserva.');
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (result.status === 'PENDING' || result.status === 'CONFIRMED') {
@@ -95,8 +102,9 @@ export async function createReservation(companyId: number, userId: string, input
   }
 }
 
-export async function updateReservation(companyId: number, id: number, input: any): Promise<Result> {
+export async function updateReservation(companyId: number, id: number, input: any, actorUserId?: string): Promise<Result> {
   try { const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM restaurant_reservation WHERE company_id = ${companyId} AND id = ${id} FOR UPDATE`;
     const existing = await restaurantReservationRepo.findInTx(tx, companyId, id); if (!existing) throw Object.assign(new Error('No encontramos la reserva.'), { status: 404 });
     if (!BLOCKING.includes(existing.status)) throw Object.assign(new Error('No podés reprogramar una reserva finalizada.'), { status: 409 });
     const company = await context(tx, companyId); if (!company?.restaurant_settings) throw Object.assign(new Error('La configuración de restaurante no existe.'), { status: 404 });
@@ -109,6 +117,14 @@ export async function updateReservation(companyId: number, id: number, input: an
     const nextNotes = input.notes === undefined ? existing.notes : normalizeText(input.notes);
     const changes: RestaurantNotificationChanges = { dateChanged: timing.start.getTime() !== existing.start_time.getTime() && localDate(timing.start, company.timezone) !== localDate(existing.start_time, company.timezone), timeChanged: localTime(timing.start, company.timezone) !== localTime(existing.start_time, company.timezone), partySizeChanged: party !== existing.party_size, notesChanged: nextNotes !== existing.notes };
     const reservation = await tx.restaurantReservation.update({ where: { id }, data: { customer_profile_id: profile ?? existing.customer_profile_id, table_id: table.id, combination_id: null, reservation_date: timing.reservationDate, start_time: timing.start, end_time: timing.end, party_size: party, customer_name: snapshot.customer_name.trim(), customer_phone: canonicalizePhoneParts({ phoneNumber: snapshot.customer_phone, defaultPrefix: timing.company.phone_prefix }).fullPhone, customer_email: normalizeText(snapshot.customer_email)?.toLowerCase(), notes: nextNotes, internal_notes: input.internal_notes === undefined ? existing.internal_notes : normalizeText(input.internal_notes) }, include: reservationInclude });
+    const assignmentChanged = existing.table_id !== table.id || existing.combination_id !== null;
+    if (assignmentChanged) {
+      const activeAssignments = await tx.restaurantReservationAssignment.findMany({ where: { company_id: companyId, reservation_id: existing.id, released_at: null }, select: { id: true } });
+      if (activeAssignments.length) await tx.restaurantReservationAssignment.updateMany({ where: { company_id: companyId, id: { in: activeAssignments.map((assignment) => assignment.id) }, released_at: null }, data: { released_at: new Date() } });
+      await tx.restaurantReservationAssignment.create({ data: { company_id: companyId, reservation_id: existing.id, table_id: table.id, assigned_by_user_id: actorUserId || null, reason: 'Asignación actualizada.' } });
+    }
+    await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: actorUserId || null, reservation_id: existing.id, table_id: table.id, event: assignmentChanged ? 'RESERVATION_UPDATED_AND_REASSIGNED' : 'RESERVATION_UPDATED', target_type: 'RESTAURANT_RESERVATION', target_id: String(existing.id), previous_values: { status: existing.status, table_id: existing.table_id, combination_id: existing.combination_id, party_size: existing.party_size, start_time: existing.start_time.toISOString() }, new_values: { status: reservation.status, table_id: reservation.table_id, combination_id: reservation.combination_id, party_size: reservation.party_size, start_time: reservation.start_time.toISOString() } } });
+    await ensureReservationDeposit(tx, companyId, reservation.id, reservation.party_size, reservation.start_time);
     return { reservation, changes };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   if (result.reservation.status === 'PENDING' || result.reservation.status === 'CONFIRMED') {
@@ -126,17 +142,27 @@ export async function changeStatus(companyId: number, id: number, status: Restau
   const updated = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM restaurant_reservation WHERE company_id = ${companyId} AND id = ${id} FOR UPDATE`;
     const reservation = await restaurantReservationRepo.findInTx(tx, companyId, id); if (!reservation) throw Object.assign(new Error('No encontramos la reserva.'), { status: 404 });
+    if (actorUserId) {
+      const actor = await tx.companyUser.findFirst({ where: { company_id: companyId, user_id: actorUserId, deleted_at: null }, select: { id: true } });
+      if (!actor) throw Object.assign(new Error('El usuario no pertenece a esta empresa.'), { status: 403 });
+    }
     if (!transitions[reservation.status].includes(status)) throw Object.assign(new Error('La transición de estado no está permitida.'), { status: 409 });
     const now = new Date(); const data: Prisma.RestaurantReservationUpdateInput = { status };
     if (status === 'SEATED') data.seated_at = now; if (status === 'COMPLETED') data.completed_at = now; if (status === 'CANCELLED') { data.cancelled_at = now; data.cancellation_reason = normalizeText(reason); }
-    const next = await tx.restaurantReservation.update({ where: { id }, data, include: reservationInclude });
-      if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(status)) {
-        const sessions = await tx.restaurantTableCombinationSession.findMany({ where: { company_id: companyId, reservation_id: id, status: 'ACTIVE' }, select: { id: true, combination_id: true } });
-        if (sessions.length) {
+    const changed = await tx.restaurantReservation.updateMany({ where: { company_id: companyId, id, status: reservation.status }, data });
+    if (changed.count !== 1) throw Object.assign(new Error('La reserva cambió mientras se actualizaba.'), { status: 409 });
+    const next = await restaurantReservationRepo.findInTx(tx, companyId, id); if (!next) throw Object.assign(new Error('No encontramos la reserva después de actualizarla.'), { status: 404 });
+    if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(status)) {
+      const assignments = await tx.restaurantReservationAssignment.findMany({ where: { company_id: companyId, reservation_id: id, released_at: null }, select: { id: true } });
+      if (assignments.length) await tx.restaurantReservationAssignment.updateMany({ where: { company_id: companyId, id: { in: assignments.map((assignment) => assignment.id) }, released_at: null }, data: { released_at: now } });
+      await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: actorUserId || null, reservation_id: id, event: 'RESERVATION_ASSIGNMENTS_RELEASED', target_type: 'RESTAURANT_RESERVATION', target_id: String(id), metadata: { reason: `RESERVATION_${status}`, released_count: assignments.length } } });
+      const sessions = await tx.restaurantTableCombinationSession.findMany({ where: { company_id: companyId, reservation_id: id, status: 'ACTIVE' }, select: { id: true, combination_id: true } });
+      if (sessions.length) {
         await tx.restaurantTableCombinationSession.updateMany({ where: { company_id: companyId, reservation_id: id, id: { in: sessions.map((session) => session.id) }, status: 'ACTIVE' }, data: { status: 'RELEASED', released_at: now, released_by_user_id: actorUserId || null } });
         for (const session of sessions) await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: actorUserId || null, event: 'TABLE_COMBINATION_RELEASED', combination_id: session.combination_id, reservation_id: id, metadata: { session_id: session.id, reason: `RESERVATION_${status}` } } });
       }
     }
+    await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: actorUserId || null, reservation_id: id, event: 'RESERVATION_STATUS_CHANGED', target_type: 'RESTAURANT_RESERVATION', target_id: String(id), metadata: { reason: normalizeText(reason) }, previous_values: { status: reservation.status }, new_values: { status: next.status } } });
     return next;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   if (status === 'CONFIRMED') { try { await notifyRestaurantReservation({ companyId, reservationId: updated.id, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CONFIRMED }); } catch { /* persistence already succeeded */ } }
@@ -144,7 +170,7 @@ export async function changeStatus(companyId: number, id: number, status: Restau
   return ok(updated, 'Estado actualizado.');
 } catch (error: any) { return fail(error?.status || (error?.code === 'P2034' ? 409 : 500), error.message || 'No pudimos actualizar el estado.'); } }
 
-export async function assignTable(companyId: number, id: number, input: any): Promise<Result> { return updateReservation(companyId, id, { table_id: input.auto_assign ? undefined : input.table_id, auto_assign: input.auto_assign }); }
+export async function assignTable(companyId: number, id: number, input: any, actorUserId?: string): Promise<Result> { return updateReservation(companyId, id, { table_id: input.auto_assign ? undefined : input.table_id, auto_assign: input.auto_assign }, actorUserId); }
 
 export async function getReservation(companyId: number, id: number): Promise<Result> { const reservation = await restaurantReservationRepo.find(companyId, id); return reservation ? ok(reservation) : fail(404, 'No encontramos la reserva.'); }
 

@@ -60,13 +60,24 @@ export async function ensureReservationDeposit(
 ) {
   const company = await tx.company.findFirst({ where: { id: companyId }, select: { currency: true, restaurant_settings: true } });
   const settings = company?.restaurant_settings;
-  if (!company || !settings || !settings.deposit_enabled || settings.deposit_amount_cents <= 0) return null;
+  const reservation = await tx.restaurantReservation.findFirst({ where: { id: reservationId, company_id: companyId }, select: { id: true, status: true, deposit_amount_cents: true, deposit_mode: true } });
+  if (!reservation) throw Object.assign(new Error('La reserva no pertenece a la empresa activa.'), { status: 404 });
+  if (!company || !settings || !settings.deposit_enabled || settings.deposit_amount_cents <= 0) {
+    await tx.restaurantReservation.updateMany({ where: { id: reservationId, company_id: companyId }, data: { deposit_amount_cents: 0, deposit_mode: null, deposit_proof_image_url: null } });
+    return null;
+  }
   const required = amountFor(settings.deposit_mode, settings.deposit_amount_cents, partySize);
-  const existing = await tx.restaurantReservationDeposit.findUnique({ where: { reservation_id: reservationId }, select: { id: true, company_id: true } });
+  const existing = await tx.restaurantReservationDeposit.findUnique({ where: { reservation_id: reservationId }, select: { id: true, company_id: true, status: true, required_amount_cents: true, mode: true, currency: true } });
   if (existing && existing.company_id !== companyId) throw Object.assign(new Error('El depósito no pertenece a la empresa activa.'), { status: 409 });
-  return tx.restaurantReservationDeposit.upsert({
-    where: { reservation_id: reservationId },
-    create: {
+  const financialChanged = existing && (existing.required_amount_cents !== required || existing.mode !== settings.deposit_mode || existing.currency !== company.currency);
+  if (financialChanged && !hasDepositStatus(existing.status, [RestaurantDepositStatus.REQUIRED, RestaurantDepositStatus.PENDING, RestaurantDepositStatus.REJECTED])) throw Object.assign(new Error('No se puede cambiar el importe del depósito después de presentar o resolver un comprobante.'), { status: 409 });
+  const deposit = existing ? await tx.restaurantReservationDeposit.update({
+    where: { id: existing.id },
+    data: {
+      ...(financialChanged ? { required_amount_cents: required, currency: company.currency, mode: settings.deposit_mode, payment_deadline: deadlineFor(startAt) } : {}),
+    },
+  }) : await tx.restaurantReservationDeposit.create({
+    data: {
       company_id: companyId,
       reservation_id: reservationId,
       required_amount_cents: required,
@@ -75,13 +86,10 @@ export async function ensureReservationDeposit(
       status: RestaurantDepositStatus.PENDING,
       payment_deadline: deadlineFor(startAt),
     },
-    update: {
-      required_amount_cents: required,
-      currency: company.currency,
-      mode: settings.deposit_mode,
-      payment_deadline: deadlineFor(startAt),
-    },
   });
+  await tx.restaurantReservation.updateMany({ where: { id: reservationId, company_id: companyId }, data: { deposit_amount_cents: required, deposit_mode: settings.deposit_mode, deposit_proof_image_url: null } });
+  if (!existing || financialChanged) await tx.restaurantAuditLog.create({ data: { company_id: companyId, reservation_id: reservationId, event: 'DEPOSIT_REQUIRED', target_type: 'RESTAURANT_RESERVATION_DEPOSIT', target_id: String(deposit.id), previous_values: existing ? { required_amount_cents: existing.required_amount_cents, mode: existing.mode, currency: existing.currency } : Prisma.JsonNull, new_values: { required_amount_cents: deposit.required_amount_cents, mode: deposit.mode, currency: deposit.currency, status: deposit.status } } });
+  return deposit;
 }
 
 async function publicCompany(slug: string) {
@@ -195,9 +203,15 @@ export async function privateProofPath(companyId: number, id: number) {
 export async function reviewDeposit(companyId: number, id: number, actorUserId: string, input: { action: 'APPROVE' | 'REJECT' | 'WAIVE' | 'REFUND'; reason?: string | null; amountCents?: number; paymentMethod?: RestaurantDepositPaymentMethod | null }): Promise<Result> {
   try {
     const result = await prisma.$transaction(async (tx) => {
+      const actor = await tx.companyUser.findFirst({ where: { company_id: companyId, user_id: actorUserId, deleted_at: null }, select: { id: true } });
+      if (!actor) throw Object.assign(new Error('El usuario no pertenece a esta empresa.'), { status: 403 });
+      const pointer = await tx.restaurantReservationDeposit.findFirst({ where: { company_id: companyId, id }, select: { reservation_id: true } });
+      if (!pointer) throw Object.assign(new Error('No encontramos el depósito.'), { status: 404 });
+      await tx.$queryRaw`SELECT id FROM restaurant_reservation WHERE company_id = ${companyId} AND id = ${pointer.reservation_id} FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM restaurant_reservation_deposit WHERE company_id = ${companyId} AND id = ${id} FOR UPDATE`;
       const deposit = await tx.restaurantReservationDeposit.findFirst({ where: { company_id: companyId, id }, include: { reservation: { select: { id: true, status: true, customer_name: true } } } });
       if (!deposit) throw Object.assign(new Error('No encontramos el depósito.'), { status: 404 });
+      if (([RestaurantReservationStatus.CANCELLED, RestaurantReservationStatus.NO_SHOW] as RestaurantReservationStatus[]).includes(deposit.reservation.status) && input.action !== 'REFUND') throw Object.assign(new Error('No se puede revisar un depósito de una reserva cancelada o ausente.'), { status: 409 });
       const now = new Date();
       const previous = { status: deposit.status, refunded_amount_cents: deposit.refunded_amount_cents, rejection_reason: deposit.rejection_reason };
       const data: Prisma.RestaurantReservationDepositUpdateInput = { reviewed_by: { connect: { id: actorUserId } }, reviewed_at: now };
@@ -210,7 +224,8 @@ export async function reviewDeposit(companyId: number, id: number, actorUserId: 
         if (!input.reason?.trim()) throw Object.assign(new Error('Indicá el motivo del rechazo.'), { status: 400 });
         data.status = RestaurantDepositStatus.REJECTED; data.rejection_reason = input.reason.trim().slice(0, 500); data.approved_at = null;
       } else if (input.action === 'WAIVE') {
-        if (hasDepositStatus(deposit.status, [RestaurantDepositStatus.REFUNDED, RestaurantDepositStatus.PARTIALLY_REFUNDED])) throw Object.assign(new Error('No se puede eximir un depósito ya reembolsado.'), { status: 409 });
+        if (!input.reason?.trim()) throw Object.assign(new Error('Indicá el motivo de la exención.'), { status: 400 });
+        if (!hasDepositStatus(deposit.status, [RestaurantDepositStatus.REQUIRED, RestaurantDepositStatus.PENDING, RestaurantDepositStatus.PROOF_SUBMITTED, RestaurantDepositStatus.REJECTED])) throw Object.assign(new Error('El depósito no puede eximirse desde su estado actual.'), { status: 409 });
         data.status = RestaurantDepositStatus.WAIVED; data.rejection_reason = null;
       } else {
         if (!hasDepositStatus(deposit.status, [RestaurantDepositStatus.APPROVED, RestaurantDepositStatus.PARTIALLY_REFUNDED])) throw Object.assign(new Error('Solo se puede reembolsar un depósito aprobado.'), { status: 409 });
@@ -221,15 +236,17 @@ export async function reviewDeposit(companyId: number, id: number, actorUserId: 
         data.refunded_amount_cents = totalRefunded; data.refunded_at = now; data.refunded_by = { connect: { id: actorUserId } }; data.refund_reason = input.reason?.trim()?.slice(0, 500) || null;
       }
       const updated = await tx.restaurantReservationDeposit.update({ where: { id: deposit.id }, data });
+      let reservationConfirmed = false;
       if (input.action === 'APPROVE' && deposit.reservation.status === RestaurantReservationStatus.PENDING) {
         const settings = await tx.restaurantSettings.findUnique({ where: { company_id: companyId }, select: { auto_confirm_reservations: true } });
-        if (settings?.auto_confirm_reservations) await tx.restaurantReservation.updateMany({ where: { id: deposit.reservation.id, company_id: companyId, status: RestaurantReservationStatus.PENDING }, data: { status: RestaurantReservationStatus.CONFIRMED } });
+        if (settings?.auto_confirm_reservations) reservationConfirmed = Boolean((await tx.restaurantReservation.updateMany({ where: { id: deposit.reservation.id, company_id: companyId, status: RestaurantReservationStatus.PENDING }, data: { status: RestaurantReservationStatus.CONFIRMED } })).count);
       }
       await tx.restaurantAuditLog.create({ data: { company_id: companyId, actor_user_id: actorUserId, reservation_id: deposit.reservation.id, event: `DEPOSIT_${input.action}`, target_type: 'RESTAURANT_RESERVATION_DEPOSIT', target_id: String(id), previous_values: previous, new_values: { status: updated.status, refunded_amount_cents: updated.refunded_amount_cents, rejection_reason: updated.rejection_reason }, metadata: { reason: input.reason || null } } });
-      return { reservationId: deposit.reservation.id, status: updated.status, deposit: safeDeposit(updated) };
+      return { reservationId: deposit.reservation.id, status: updated.status, deposit: safeDeposit(updated), reservationConfirmed };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    const event = input.action === 'APPROVE' ? RestaurantNotificationEvent.DEPOSIT_APPROVED : input.action === 'REJECT' ? RestaurantNotificationEvent.DEPOSIT_REJECTED : input.action === 'REFUND' ? RestaurantNotificationEvent.DEPOSIT_REFUNDED : RestaurantNotificationEvent.DEPOSIT_REQUIRED;
-    try { await notifyRestaurantReservation({ companyId, reservationId: result.reservationId, event }); } catch { /* Delivery is isolated from the financial state transition. */ }
+    const event = input.action === 'APPROVE' ? RestaurantNotificationEvent.DEPOSIT_APPROVED : input.action === 'REJECT' ? RestaurantNotificationEvent.DEPOSIT_REJECTED : input.action === 'REFUND' ? RestaurantNotificationEvent.DEPOSIT_REFUNDED : null;
+    if (event) try { await notifyRestaurantReservation({ companyId, reservationId: result.reservationId, event }); } catch { /* Delivery is isolated from the financial state transition. */ }
+    if (result.reservationConfirmed) try { await notifyRestaurantReservation({ companyId, reservationId: result.reservationId, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CONFIRMED }); } catch { /* Delivery is isolated from the financial state transition. */ }
     return ok(result.deposit, input.action === 'APPROVE' ? 'Depósito aprobado.' : input.action === 'REJECT' ? 'Depósito rechazado.' : input.action === 'WAIVE' ? 'Depósito eximido.' : 'Reembolso registrado.');
   } catch (error: any) { return fail(error?.status || (error?.code === 'P2034' ? 409 : 500), error?.message || 'No pudimos actualizar el depósito.'); }
 }

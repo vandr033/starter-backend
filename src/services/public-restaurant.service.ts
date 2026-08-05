@@ -111,13 +111,18 @@ export async function getAvailability(slug: string, input: { date: string; party
       const start = parseDateTimeInTimeZone(`${input.date}T${time}:00`, context.timezone);
       if (start < earliest) return { time, available: false };
       const end = new Date(start.getTime() + context.restaurant_settings.average_dining_minutes * 60_000);
-      const conflict = activeTables.length ? await prisma.restaurantReservation.findFirst({ where: { table_id: { in: activeTables.map((table) => table.id) }, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: end }, end_time: { gt: start } }, select: { table_id: true } }) : null;
+      const tableIds = activeTables.map((table) => table.id);
+      const conflict = activeTables.length ? await prisma.restaurantReservation.findFirst({ where: { company_id: context.id, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: end }, end_time: { gt: start }, OR: [{ table_id: { in: tableIds } }, { combination: { company_id: context.id, tables: { some: { company_id: context.id, table_id: { in: tableIds } } } } }] }, select: { table_id: true, combination: { select: { tables: { select: { table_id: true } } } } } }) : null;
       if (!activeTables.length) return { time, available: false };
       if (!conflict) return { time, available: true };
-      const occupied = await prisma.restaurantReservation.findMany({ where: { table_id: { in: activeTables.map((table) => table.id) }, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: end }, end_time: { gt: start } }, select: { table_id: true } });
+      const occupied = await prisma.restaurantReservation.findMany({ where: { company_id: context.id, status: { in: ['PENDING', 'CONFIRMED', 'ARRIVED', 'SEATED'] }, start_time: { lt: end }, end_time: { gt: start }, OR: [{ table_id: { in: tableIds } }, { combination: { company_id: context.id, tables: { some: { company_id: context.id, table_id: { in: tableIds } } } } }] }, select: { table_id: true, combination: { select: { tables: { select: { table_id: true } } } } } });
       // Count the occupied tables, not reservation records. This remains correct even
       // if historical or imported data contains more than one overlap for a table.
-      const occupiedTableIds = new Set(occupied.map((reservation) => reservation.table_id).filter((id): id is number => id !== null));
+      const occupiedTableIds = new Set<number>();
+      for (const reservation of occupied) {
+        if (reservation.table_id !== null) occupiedTableIds.add(reservation.table_id);
+        for (const part of reservation.combination?.tables || []) occupiedTableIds.add(part.table_id);
+      }
       return { time, available: occupiedTableIds.size < activeTables.length };
     }));
     return ok({ date: input.date, partySize: input.partySize, timezone: context.timezone, slots });
@@ -151,6 +156,8 @@ export async function createPublicReservation(slug: string, input: any): Promise
       for (let attempts = 0; attempts < 3; attempts += 1) {
         try {
           const reservation = await tx.restaurantReservation.create({ data: { company_id: context.id, customer_profile_id: customerProfileId, table_id: table.id, reservation_code: generateRestaurantReservationCode(), reservation_date: parseDateTimeInTimeZone(`${input.date}T00:00:00`, context.timezone), start_time: start, end_time: end, party_size: input.partySize, customer_name: input.customer.name.trim(), customer_phone: phone.fullPhone, customer_email: normalizeText(input.customer.email)?.toLowerCase(), deposit_amount_cents: depositAmount, deposit_mode: depositAmount > 0 ? context.restaurant_settings.deposit_mode : null, deposit_proof_image_url: null, notes: normalizeText(input.notes), status, source: 'ONLINE', guests: { create: guests } } });
+          await tx.restaurantReservationAssignment.create({ data: { company_id: context.id, reservation_id: reservation.id, table_id: table.id, assigned_by_user_id: null, reason: 'Asignación inicial de la reserva pública.' } });
+          await tx.restaurantAuditLog.create({ data: { company_id: context.id, actor_user_id: null, reservation_id: reservation.id, table_id: table.id, event: 'RESERVATION_CREATED', target_type: 'RESTAURANT_RESERVATION', target_id: String(reservation.id), new_values: { status: reservation.status, table_id: table.id, party_size: reservation.party_size, source: reservation.source } } });
           await ensureReservationDeposit(tx, context.id, reservation.id, reservation.party_size, reservation.start_time);
           return reservation;
         }
@@ -193,10 +200,19 @@ export async function cancelPublicReservation(code: string, reason?: string): Pr
       const reservation = await tx.restaurantReservation.findUnique({ where: { reservation_code: code }, select: { id: true, status: true, start_time: true, reservation_code: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true, company: { select: { slug: true } } } });
       if (!reservation) throw Object.assign(new Error(NOT_FOUND), { status: 404 });
       const context = await loadPublicContext(reservation.company.slug, tx); if (!context) throw Object.assign(new Error(NOT_FOUND), { status: 404 });
+      await tx.$queryRaw`SELECT id FROM restaurant_reservation WHERE company_id = ${context.id} AND id = ${reservation.id} FOR UPDATE`;
       if (reservation.status === 'CANCELLED') return { reservation, context, didCancel: false, notificationReservationId: reservation.id };
       const deadline = new Date(reservation.start_time.getTime() - context.restaurant_settings.cancellation_limit_minutes * 60_000);
       if (!context.restaurant_settings.allow_customer_cancellation || !['PENDING', 'CONFIRMED'].includes(reservation.status) || new Date() >= deadline) throw Object.assign(new Error('El plazo para cancelar esta reserva ya terminó. Comunícate directamente con el restaurante.'), { status: 409 });
-      const updated = await tx.restaurantReservation.update({ where: { id: reservation.id }, data: { status: 'CANCELLED', cancelled_at: new Date(), cancellation_reason: normalizeText(reason) }, select: { reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true } });
+      const now = new Date();
+      const changed = await tx.restaurantReservation.updateMany({ where: { company_id: context.id, id: reservation.id, status: reservation.status }, data: { status: 'CANCELLED', cancelled_at: now, cancellation_reason: normalizeText(reason) } });
+      if (changed.count !== 1) throw Object.assign(new Error('La reserva cambió mientras se cancelaba.'), { status: 409 });
+      const updated = await tx.restaurantReservation.findFirst({ where: { company_id: context.id, id: reservation.id }, select: { reservation_code: true, status: true, start_time: true, party_size: true, customer_name: true, notes: true, deposit_amount_cents: true, deposit_mode: true } });
+      if (!updated) throw Object.assign(new Error(NOT_FOUND), { status: 404 });
+      const assignments = await tx.restaurantReservationAssignment.findMany({ where: { company_id: context.id, reservation_id: reservation.id, released_at: null }, select: { id: true } });
+      if (assignments.length) await tx.restaurantReservationAssignment.updateMany({ where: { company_id: context.id, id: { in: assignments.map((assignment) => assignment.id) }, released_at: null }, data: { released_at: now } });
+      await tx.restaurantAuditLog.create({ data: { company_id: context.id, actor_user_id: null, reservation_id: reservation.id, event: 'RESERVATION_ASSIGNMENTS_RELEASED', target_type: 'RESTAURANT_RESERVATION', target_id: String(reservation.id), metadata: { reason: 'CUSTOMER_CANCELLED', released_count: assignments.length } } });
+      await tx.restaurantAuditLog.create({ data: { company_id: context.id, actor_user_id: null, reservation_id: reservation.id, event: 'RESERVATION_STATUS_CHANGED', target_type: 'RESTAURANT_RESERVATION', target_id: String(reservation.id), metadata: { reason: normalizeText(reason), actor: 'CUSTOMER' }, previous_values: { status: reservation.status }, new_values: { status: 'CANCELLED' } } });
       return { reservation: updated, context, didCancel: true, notificationReservationId: reservation.id };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (result.didCancel) { try { await notifyRestaurantReservation({ companyId: result.context.id, reservationId: result.notificationReservationId, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CANCELLED, cancellationActor: 'CUSTOMER' }); } catch { /* cancellation remains committed */ } }

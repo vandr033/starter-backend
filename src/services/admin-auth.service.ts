@@ -113,16 +113,24 @@ async function toAdminCompanyUserSummary(
     };
 }
 
-function resolveActiveCompanyUser(
+export function resolveActiveCompanyUser(
     companyUsers: AdminCompanyUserSummary[],
     preferredCompanyId?: number | null,
 ): AdminCompanyUserSummary | null {
     if (companyUsers.length === 0) return null;
-    if (preferredCompanyId) {
+    if (preferredCompanyId !== undefined && preferredCompanyId !== null) {
         const preferred = companyUsers.find((companyUser) => companyUser.company_id === preferredCompanyId);
         if (preferred) return preferred;
+        // An explicit but stale/invalid context must not silently turn into a
+        // different company. The restaurant middleware reports the precise
+        // invalid-context reason; the session endpoint simply exposes no
+        // active company so callers can ask the user to select one again.
+        return null;
     }
-    return companyUsers[0] ?? null;
+    // A single membership is unambiguous. With multiple memberships the user
+    // must select the company explicitly; ordering memberships is not a
+    // security boundary and must never seed Restaurant Lite scope.
+    return companyUsers.length === 1 ? companyUsers[0] : null;
 }
 
 async function hasAdminDashboardAccess(userId: string): Promise<boolean> {

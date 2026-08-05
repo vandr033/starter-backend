@@ -2,6 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { restaurantVisitSchema, staffVisitSchema, waitlistSchema, depositReviewSchema, closeoutAdjustmentSchema } from '../src/schemas/restaurant-operations.schema';
 import { requireRestaurantCompanyContext } from '../src/middlewares/requireRestaurantCompanyContext';
+import { resolveActiveCompanyUser, type AdminCompanyUserSummary } from '../src/services/admin-auth.service';
+
+test('admin sessions never infer an active company from membership ordering', () => {
+  const memberships = [{ company_id: 10 }, { company_id: 20 }] as AdminCompanyUserSummary[];
+  assert.equal(resolveActiveCompanyUser(memberships), null);
+  assert.equal(resolveActiveCompanyUser(memberships, 20)?.company_id, 20);
+  assert.equal(resolveActiveCompanyUser(memberships, 99), null);
+  assert.equal(resolveActiveCompanyUser([memberships[0]]), memberships[0]);
+});
 
 test('restaurant operations schemas keep money in integer minor units and validate mixed payments', () => {
   assert.equal(restaurantVisitSchema.safeParse({ subtotal_amount_cents: 1250, total_paid_amount_cents: 1250, payment_method: 'CASH' }).success, true);
@@ -16,6 +25,7 @@ test('waitlist and closeout schemas require bounded operational fields', () => {
   assert.equal(staffVisitSchema.safeParse({ table_id: 12, complete: true, total_paid_amount_cents: 5000 }).success, true);
   assert.equal(staffVisitSchema.safeParse({ complete: true }).success, false);
   assert.equal(depositReviewSchema.safeParse({ action: 'APPROVE' }).success, true);
+  assert.equal(depositReviewSchema.safeParse({ action: 'WAIVE' }).success, false);
   assert.equal(closeoutAdjustmentSchema.safeParse({ section: 'revenue_summary', adjusted_snapshot: {}, reason: 'Caja corregida' }).success, true);
   assert.equal(closeoutAdjustmentSchema.safeParse({ section: 'revenue_summary', adjusted_snapshot: {} }).success, false);
 });
