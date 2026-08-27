@@ -8,6 +8,7 @@ import {
     getActiveCompanyIdFromRequest,
     setActiveCompanyCookie,
 } from '../utils/active-shop-cookie';
+import { logger } from '../config/logger';
 
 let mensaje: MensajeApi;
 
@@ -18,7 +19,32 @@ let mensaje: MensajeApi;
 export async function adminSignIn(req: Request, res: Response) {
     const { email, password } = req.body;
 
+    logger.info({
+        event: 'admin_sign_in_http_request',
+        method: req.method,
+        path: req.originalUrl,
+        origin: req.headers.origin ?? null,
+        referer: req.headers.referer ?? null,
+        userAgent: req.headers['user-agent'] ?? null,
+        host: req.headers.host ?? null,
+        contentType: req.headers['content-type'] ?? null,
+        email: typeof email === 'string' ? email.trim().toLowerCase() : null,
+        emailLength: typeof email === 'string' ? email.length : 0,
+        emailWasTrimmed: typeof email === 'string' && email !== email.trim(),
+        passwordProvided: typeof password === 'string' && password.length > 0,
+        passwordLength: typeof password === 'string' ? password.length : 0,
+        cookiePresent: Boolean(req.headers.cookie),
+        authorizationPresent: Boolean(req.headers.authorization),
+    }, 'Admin sign-in HTTP request received');
+
     if (!email || !password) {
+        logger.warn({
+            event: 'admin_sign_in_http_request_invalid',
+            path: req.originalUrl,
+            hasEmail: Boolean(email),
+            hasPassword: Boolean(password),
+        }, 'Admin sign-in HTTP request missing email or password');
+
         return res.status(400).json({
             code: 400,
             message: 'Email and password are required',
@@ -26,7 +52,22 @@ export async function adminSignIn(req: Request, res: Response) {
         });
     }
 
-    const result = await AdminAuthService.signInAdmin(email, password, req.headers);
+    const result = await AdminAuthService.signInAdmin(email, password, req.headers, {
+        method: req.method,
+        path: req.originalUrl,
+        origin: req.headers.origin ?? null,
+        referer: req.headers.referer ?? null,
+        userAgent: req.headers['user-agent'] ?? null,
+    });
+
+    logger.info({
+        event: 'admin_sign_in_http_response',
+        path: req.originalUrl,
+        statusCode: result.code,
+        error: result.error,
+        message: result.message,
+        cookieCount: result.cookies?.length ?? 0,
+    }, 'Admin sign-in HTTP response prepared');
 
     // Forward ALL Set-Cookie headers from Better Auth (session_token + session_data)
     if (result.cookies && result.cookies.length > 0) {
