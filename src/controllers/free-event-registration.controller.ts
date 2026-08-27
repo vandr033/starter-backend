@@ -60,6 +60,7 @@ export async function submitFreeRegistrationHandler(req: AuthenticatedRequest, r
         phonePrefix: req.body.phonePrefix,
         phoneNumber: req.body.phoneNumber,
         tosAccepted: Boolean(req.body.tosAccepted),
+        registrationQuestionAnswer: req.body.registrationQuestionAnswer,
         createAccount: Boolean(req.body.createAccount),
         otpChannelPreference: typeof req.body.otpChannelPreference === 'string'
             ? req.body.otpChannelPreference

@@ -41,6 +41,8 @@ export const createGroupEventSchema = z.object({
     price_cents: z.number().int().min(0),
     max_capacity: z.number().int().positive(),
     capacity_visible: z.boolean().optional(),
+    registration_question_text: z.string().trim().max(500).nullable().optional(),
+    registration_question_required: z.boolean().optional(),
     start_at: isoDateTime,
     end_at: isoDateTime,
     location_text: z.string().max(500).nullable().optional(),
@@ -83,6 +85,7 @@ export const createEventBookingSchema = z.object({
     booked_spots: z.number().int().positive().optional(),
     payment_method: z.enum(['NONE', 'CASH', 'QR']),
     qr_proof_image_url: imageUrlOrPathSchema.nullable().optional(),
+    registration_question_answer: z.string().trim().max(5000).nullable().optional(),
     notes: z.string().max(10000).nullable().optional(),
     extra_attendees: z.array(
         z.object({

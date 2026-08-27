@@ -300,6 +300,7 @@ export interface CreateEventBookingInput {
     booked_spots?: number;
     payment_method: 'NONE' | 'CASH' | 'QR';
     qr_proof_image_url?: string | null;
+    registration_question_answer?: string | null;
     notes?: string | null;
     extra_attendees?: EventExtraAttendeeInput[];
 }
@@ -339,6 +340,8 @@ export async function createEventBooking(
             message: `You must provide attendee details for each extra spot (${spots - 1} required)`,
         };
     }
+
+    const registrationQuestionAnswer = input.registration_question_answer?.trim() || null;
 
     const normalizedExtraAttendees: Array<{ full_name: string; email: string | null; phone: string | null }> = [];
     for (let idx = 0; idx < extrasRaw.length; idx += 1) {
@@ -380,6 +383,10 @@ export async function createEventBooking(
 
         if (new Date() > event.end_at) {
             return { code: 400, error: true, message: 'This event has already ended' } as ServiceResult;
+        }
+
+        if (event.registration_question_required && !registrationQuestionAnswer) {
+            return { code: 400, error: true, message: 'Registration question answer is required' } as ServiceResult;
         }
 
         const existingActive = await tx.groupEventBooking.findFirst({
@@ -470,6 +477,7 @@ export async function createEventBooking(
                     qr_proof_image_url: input.qr_proof_image_url ?? null,
                     total_price_cents: event.is_free ? 0 : event.price_cents * spots,
                     extra_attendees_json: normalizedExtraAttendees as Prisma.InputJsonValue,
+                    registration_question_answer: event.registration_question_text ? registrationQuestionAnswer : null,
                     notes: input.notes ?? null,
                     cancelled_at: null,
                 },
@@ -487,6 +495,7 @@ export async function createEventBooking(
                     qr_proof_image_url: input.qr_proof_image_url ?? null,
                     total_price_cents: event.is_free ? 0 : event.price_cents * spots,
                     extra_attendees_json: normalizedExtraAttendees as Prisma.InputJsonValue,
+                    registration_question_answer: event.registration_question_text ? registrationQuestionAnswer : null,
                     notes: input.notes ?? null,
                 },
             });
@@ -589,6 +598,7 @@ export async function listEventBookings(companyId: number, eventId: number): Pro
                 qr_proof_image_url: null,
                 total_price_cents: 0,
                 extra_attendees_json: null,
+                registration_question_answer: registration.registration_question_answer,
                 notes: null,
                 created_at: registration.created_at,
                 updated_at: registration.updated_at,

@@ -30,6 +30,7 @@ export interface FreeEventRegistrationInput {
     phonePrefix: string;
     phoneNumber: string;
     tosAccepted: boolean;
+    registrationQuestionAnswer?: string | null;
     createAccount?: boolean;
     otpChannelPreference?: 'email' | 'phone';
 }
@@ -942,6 +943,7 @@ export async function submitFreeRegistration(
         phonePrefix: canonicalPhone.phonePrefix ?? '',
         phoneNumber: canonicalPhone.phoneNumber ?? '',
     };
+    const registrationQuestionAnswer = input.registrationQuestionAnswer?.trim() || null;
 
     if (!trimmed.firstName) return { code: 400, error: true, message: 'firstName is required' };
     if (!trimmed.lastName) return { code: 400, error: true, message: 'lastName is required' };
@@ -1021,12 +1023,14 @@ export async function submitFreeRegistration(
             is_free: number;
             status: string;
             max_capacity: number;
+            registration_question_text: string | null;
+            registration_question_required: boolean;
             start_at: Date;
             end_at: Date;
             deleted_at: Date | null;
             company_id: number;
         }>>`
-            SELECT id, is_free, status, max_capacity, start_at, end_at, deleted_at, company_id
+            SELECT id, is_free, status, max_capacity, registration_question_text, registration_question_required, start_at, end_at, deleted_at, company_id
             FROM group_event WHERE id = ${eventId} FOR UPDATE
         `;
 
@@ -1042,6 +1046,9 @@ export async function submitFreeRegistration(
         }
         if (new Date(ev.end_at) < new Date()) {
             throw Object.assign(new Error('Event has already ended'), { statusCode: 400 });
+        }
+        if (ev.registration_question_required && !registrationQuestionAnswer) {
+            throw Object.assign(new Error('Registration question answer is required'), { statusCode: 400 });
         }
 
         // Count used capacity (both tables)
@@ -1082,6 +1089,7 @@ export async function submitFreeRegistration(
                         country_code: trimmed.countryCode || null,
                         phone_prefix: trimmed.phonePrefix,
                         phone_number: trimmed.phoneNumber,
+                        registration_question_answer: ev.registration_question_text ? registrationQuestionAnswer : null,
                         tos_accepted: input.tosAccepted,
                         source: 'free_event_form',
                         status,
@@ -1510,6 +1518,7 @@ export async function listFreeEventRegistrations(companyId: number, eventId: num
             email: true,
             phone_prefix: true,
             phone_number: true,
+            registration_question_answer: true,
             gender: true,
             age: true,
             status: true,
@@ -1530,6 +1539,7 @@ export async function listFreeEventRegistrations(companyId: number, eventId: num
             email: r.email,
             phonePrefix: r.phone_prefix,
             phoneNumber: r.phone_number,
+            registrationQuestionAnswer: r.registration_question_answer,
             gender: r.gender,
             age: r.age,
             status: r.status,
@@ -1589,6 +1599,7 @@ export async function listEventInterestedUsers(companyId: number, eventId: numbe
             email: true,
             phone_prefix: true,
             phone_number: true,
+            registration_question_answer: true,
             gender: true,
             age: true,
             created_at: true,
@@ -1606,6 +1617,7 @@ export async function listEventInterestedUsers(companyId: number, eventId: numbe
             email: r.email,
             phonePrefix: r.phone_prefix,
             phoneNumber: r.phone_number,
+            registrationQuestionAnswer: r.registration_question_answer,
             gender: r.gender,
             age: r.age,
             createdAt: r.created_at,

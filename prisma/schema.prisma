@@ -2708,26 +2708,28 @@ enum AccountVerificationStatus {
 // ─── Group Event (one-time) ─────────────────────────────────────────────────
 
 model GroupEvent {
-  id                      Int             @id @default(autoincrement())
-  company_id              Int
-  title                   String          @db.VarChar(255)
-  slug                    String          @db.VarChar(255)
-  description             String?         @db.Text
-  no_availability_message String?         @db.Text
-  cover_image_url         String?         @db.VarChar(512)
-  thumbnail_url           String?         @db.VarChar(512)
-  status                  GroupItemStatus @default(DRAFT)
-  is_free                 Boolean         @default(true)
-  price_cents             Int             @default(0)
-  max_capacity            Int
-  capacity_visible        Boolean         @default(false)
-  start_at                DateTime
-  end_at                  DateTime
-  location_text           String?         @db.VarChar(500)
-  created_by_user_id      String?
-  created_at              DateTime        @default(now())
-  updated_at              DateTime        @updatedAt
-  deleted_at              DateTime?
+  id                             Int             @id @default(autoincrement())
+  company_id                     Int
+  title                          String          @db.VarChar(255)
+  slug                           String          @db.VarChar(255)
+  description                    String?         @db.Text
+  no_availability_message        String?         @db.Text
+  cover_image_url                String?         @db.VarChar(512)
+  thumbnail_url                  String?         @db.VarChar(512)
+  status                         GroupItemStatus @default(DRAFT)
+  is_free                        Boolean         @default(true)
+  price_cents                    Int             @default(0)
+  max_capacity                   Int
+  capacity_visible               Boolean         @default(false)
+  registration_question_text     String?         @db.VarChar(500)
+  registration_question_required Boolean         @default(false)
+  start_at                       DateTime
+  end_at                         DateTime
+  location_text                  String?         @db.VarChar(500)
+  created_by_user_id             String?
+  created_at                     DateTime        @default(now())
+  updated_at                     DateTime        @updatedAt
+  deleted_at                     DateTime?
 
   company                            Company                         @relation(fields: [company_id], references: [id])
   created_by                         User?                           @relation("GroupEventCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
@@ -2854,22 +2856,23 @@ model GroupStaffAssignment {
 // ─── Event Booking (one customer → one event) ──────────────────────────────
 
 model GroupEventBooking {
-  id                   Int                @id @default(autoincrement())
-  company_id           Int
-  group_event_id       Int
-  customer_profile_id  Int?
-  user_id              String
-  status               GroupBookingStatus @default(PENDING)
-  booked_spots         Int                @default(1)
-  payment_method       PaymentMethod      @default(NONE)
-  payment_status       PaymentStatus      @default(UNPAID)
-  qr_proof_image_url   String?            @db.VarChar(512)
-  total_price_cents    Int                @default(0)
-  extra_attendees_json Json?
-  notes                String?            @db.Text
-  created_at           DateTime           @default(now())
-  updated_at           DateTime           @updatedAt
-  cancelled_at         DateTime?
+  id                           Int                @id @default(autoincrement())
+  company_id                   Int
+  group_event_id               Int
+  customer_profile_id          Int?
+  user_id                      String
+  status                       GroupBookingStatus @default(PENDING)
+  booked_spots                 Int                @default(1)
+  payment_method               PaymentMethod      @default(NONE)
+  payment_status               PaymentStatus      @default(UNPAID)
+  qr_proof_image_url           String?            @db.VarChar(512)
+  total_price_cents            Int                @default(0)
+  extra_attendees_json         Json?
+  registration_question_answer String?            @db.Text
+  notes                        String?            @db.Text
+  created_at                   DateTime           @default(now())
+  updated_at                   DateTime           @updatedAt
+  cancelled_at                 DateTime?
 
   company          Company                  @relation(fields: [company_id], references: [id])
   group_event      GroupEvent               @relation(fields: [group_event_id], references: [id])
@@ -3095,29 +3098,30 @@ model GroupClassInterest {
 }
 
 model FreeEventRegistration {
-  id                          Int                         @id @default(autoincrement())
-  group_event_id              Int
-  company_id                  Int
-  user_id                     String?
-  reservation_code            String?                     @unique @db.VarChar(6)
-  first_name                  String                      @db.VarChar(100)
-  last_name                   String                      @db.VarChar(100)
-  gender                      Gender
-  age                         Int
-  email                       String                      @db.VarChar(254)
-  country_code                String?                     @db.VarChar(2)
-  phone_prefix                String                      @db.VarChar(8)
-  phone_number                String                      @db.VarChar(32)
-  tos_accepted                Boolean                     @default(false)
-  source                      String                      @default("free_event_form") @db.VarChar(50)
-  status                      FreeEventRegistrationStatus @default(CONFIRMED)
-  create_account_requested    Boolean                     @default(false)
-  account_created             Boolean                     @default(false)
-  account_verification_status AccountVerificationStatus   @default(NOT_REQUESTED)
-  checked_in_at               DateTime?
-  checked_in_method           CheckInMethod?
-  created_at                  DateTime                    @default(now())
-  updated_at                  DateTime                    @updatedAt
+  id                           Int                         @id @default(autoincrement())
+  group_event_id               Int
+  company_id                   Int
+  user_id                      String?
+  reservation_code             String?                     @unique @db.VarChar(6)
+  first_name                   String                      @db.VarChar(100)
+  last_name                    String                      @db.VarChar(100)
+  gender                       Gender
+  age                          Int
+  email                        String                      @db.VarChar(254)
+  country_code                 String?                     @db.VarChar(2)
+  phone_prefix                 String                      @db.VarChar(8)
+  phone_number                 String                      @db.VarChar(32)
+  registration_question_answer String?                     @db.Text
+  tos_accepted                 Boolean                     @default(false)
+  source                       String                      @default("free_event_form") @db.VarChar(50)
+  status                       FreeEventRegistrationStatus @default(CONFIRMED)
+  create_account_requested     Boolean                     @default(false)
+  account_created              Boolean                     @default(false)
+  account_verification_status  AccountVerificationStatus   @default(NOT_REQUESTED)
+  checked_in_at                DateTime?
+  checked_in_method            CheckInMethod?
+  created_at                   DateTime                    @default(now())
+  updated_at                   DateTime                    @updatedAt
 
   group_event GroupEvent @relation(fields: [group_event_id], references: [id], onDelete: Cascade)
   company     Company    @relation(fields: [company_id], references: [id])

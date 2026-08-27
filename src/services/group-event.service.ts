@@ -19,6 +19,8 @@ export interface CreateGroupEventInput {
     price_cents: number;
     max_capacity: number;
     capacity_visible?: boolean;
+    registration_question_text?: string | null;
+    registration_question_required?: boolean;
     start_at: string; // ISO date-time
     end_at: string;
     location_text?: string | null;
@@ -36,6 +38,8 @@ export interface UpdateGroupEventInput {
     price_cents?: number;
     max_capacity?: number;
     capacity_visible?: boolean;
+    registration_question_text?: string | null;
+    registration_question_required?: boolean;
     start_at?: string;
     end_at?: string;
     location_text?: string | null;
@@ -155,6 +159,10 @@ export async function createGroupEvent(companyId: number, userId: string, input:
     const noAvailabilityMessage = input.is_free
         ? (input.no_availability_message?.trim() || null)
         : null;
+    const registrationQuestionText = input.registration_question_text?.trim() || null;
+    if (input.registration_question_required && !registrationQuestionText) {
+        return { code: 400, error: true, message: 'A registration question is required before it can be marked required' };
+    }
 
     const event = await prisma.groupEvent.create({
         data: {
@@ -169,6 +177,8 @@ export async function createGroupEvent(companyId: number, userId: string, input:
             price_cents: input.is_free ? 0 : input.price_cents,
             max_capacity: input.max_capacity,
             capacity_visible: input.capacity_visible ?? false,
+            registration_question_text: registrationQuestionText,
+            registration_question_required: registrationQuestionText ? (input.registration_question_required ?? false) : false,
             start_at: startAt,
             end_at: endAt,
             location_text: locationText,
@@ -230,6 +240,17 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
         updateData.max_capacity = input.max_capacity;
     }
     if (input.capacity_visible !== undefined) updateData.capacity_visible = input.capacity_visible;
+    if (input.registration_question_text !== undefined || input.registration_question_required !== undefined) {
+        const finalQuestionText = input.registration_question_text !== undefined
+            ? input.registration_question_text?.trim() || null
+            : existing.registration_question_text;
+        const finalQuestionRequired = input.registration_question_required ?? existing.registration_question_required;
+        if (finalQuestionRequired && !finalQuestionText) {
+            return { code: 400, error: true, message: 'A registration question is required before it can be marked required' };
+        }
+        updateData.registration_question_text = finalQuestionText;
+        updateData.registration_question_required = finalQuestionText ? finalQuestionRequired : false;
+    }
     const timeZone = await getCompanyTimeZone(companyId);
     if (input.start_at !== undefined) updateData.start_at = parseDateTimeInTimeZone(input.start_at, timeZone);
     if (input.end_at !== undefined) updateData.end_at = parseDateTimeInTimeZone(input.end_at, timeZone);
