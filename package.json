@@ -12,7 +12,8 @@
     "start": "ts-node src/server.ts",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "prisma:seed": "prisma db seed",
-    "prisma:seed:super-admin": "ts-node prisma/seed.super-admin-only.ts"
+    "prisma:seed:super-admin": "ts-node prisma/seed.super-admin-only.ts",
+    "prisma:seed:super-admin-priconpri": "ts-node prisma/seed.super-admin-priconpri.ts"
   },
   "keywords": [],
   "author": "",
