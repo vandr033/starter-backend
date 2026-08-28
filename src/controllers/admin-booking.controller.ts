@@ -41,6 +41,7 @@ function transformAdminBooking(booking: any) {
         },
         total_price: booking.total_price_cents,
         notes: booking.notes,
+        internal_notes: booking.internal_notes,
         payment_method: booking.payment_method,
         payment_status: booking.payment_status,
         qr_proof_image_url: booking.qr_proof_image_url,
@@ -184,6 +185,7 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
         status,
         start_at,
         notes,
+        internal_notes,
         staff_id,
         service_ids,
     } = req.body;
@@ -238,6 +240,7 @@ export async function updateBooking(req: AuthenticatedRequest, res: Response) {
             status: parsedStatus,
             start_at,
             notes,
+            internal_notes,
             staff_id: parsedStaffId,
             service_ids: parsedServiceIds,
         },
@@ -383,6 +386,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         customer_id,
         customer,
         notes,
+        internal_notes,
         is_paid,
         payment_method,
         qr_proof_image_url,
@@ -464,6 +468,7 @@ export async function createBooking(req: AuthenticatedRequest, res: Response) {
         client_phone_number: client_phone,
         client_email,
         notes,
+        internal_notes,
         is_paid: Boolean(is_paid),
         payment_method:
             typeof payment_method === 'string' && Object.values(PaymentMethod).includes(payment_method as PaymentMethod)
@@ -509,6 +514,7 @@ export async function createRecurringBookings(req: AuthenticatedRequest, res: Re
         customer_id,
         customer,
         notes,
+        internal_notes,
         sessions,
     } = req.body;
 
@@ -584,6 +590,7 @@ export async function createRecurringBookings(req: AuthenticatedRequest, res: Re
         client_phone_number: client_phone,
         client_email,
         notes,
+        internal_notes,
         sessions: normalizedSessions,
     }, userId);
 

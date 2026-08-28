@@ -66,6 +66,7 @@ export async function getBookingsWithFilters(params: {
             qr_proof_image_url: true,
             total_price_cents: true,
             notes: true,
+            internal_notes: true,
             created_at: true,
             updated_at: true,
             staff: {
@@ -141,6 +142,7 @@ export async function getBookingById(bookingId: number, companyId: number) {
             qr_proof_image_url: true,
             total_price_cents: true,
             notes: true,
+            internal_notes: true,
             created_at: true,
             updated_at: true,
             staff: {
@@ -351,6 +353,28 @@ export async function updateBookingNotes(
 }
 
 /**
+ * Update internal booking notes (visible only in admin responses).
+ */
+export async function updateBookingInternalNotes(
+    bookingId: number,
+    companyId: number,
+    internalNotes: string | null,
+    updatedByUserId: string
+) {
+    return prisma.booking.updateMany({
+        where: {
+            id: bookingId,
+            company_id: companyId,
+            deleted_at: null,
+        },
+        data: {
+            internal_notes: internalNotes,
+            updated_by_user_id: updatedByUserId,
+        },
+    });
+}
+
+/**
  * Create a walk-in booking (no customer)
  */
 export interface CreateWalkInData {
@@ -363,6 +387,7 @@ export interface CreateWalkInData {
     start_at: Date;
     end_at: Date;
     notes?: string;
+    internal_notes?: string;
     created_by_user_id: string;
     total_price_cents: number;
     payment_method?: PaymentMethod;
@@ -406,6 +431,7 @@ export async function createWalkInBooking(
                         : PaymentStatus.PENDING_CONFIRMATION),
                 qr_proof_image_url: bookingData.qr_proof_image_url ?? null,
                 notes: bookingData.notes,
+                internal_notes: bookingData.internal_notes,
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
                 booking_type: BookingType.CUSTOMER,
@@ -534,6 +560,7 @@ export interface CreateCustomerBookingData {
     start_at: Date;
     end_at: Date;
     notes?: string;
+    internal_notes?: string;
     created_by_user_id: string;
     total_price_cents: number;
     payment_method?: PaymentMethod;
@@ -573,6 +600,7 @@ export async function createCustomerBooking(
                         : PaymentStatus.PENDING_CONFIRMATION),
                 qr_proof_image_url: bookingData.qr_proof_image_url ?? null,
                 notes: bookingData.notes,
+                internal_notes: bookingData.internal_notes,
                 created_by_user_id: bookingData.created_by_user_id,
                 total_price_cents: bookingData.total_price_cents,
                 booking_type: BookingType.CUSTOMER,

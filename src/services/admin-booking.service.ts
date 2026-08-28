@@ -1531,6 +1531,7 @@ async function createAdminMultiSessionBookings(params: {
     serviceIds: number[];
     sessionSlots: AdminSessionSlotInput[];
     notes?: string;
+    internal_notes?: string;
 }): Promise<AdminBookingResult> {
     if (params.serviceIds.length !== 1) {
         return {
@@ -1687,6 +1688,7 @@ async function createAdminMultiSessionBookings(params: {
                     session_index: slot.sessionIndex,
                     session_count: sessionCount,
                     notes: params.notes,
+                    internal_notes: params.internal_notes,
                     created_by_user_id: params.createdByUserId,
                 },
             });
@@ -1756,6 +1758,7 @@ async function createAdminBookingRecord(params: {
     customer: ResolvedAdminCustomer;
     prepared: PreparedAdminBookingSession;
     notes?: string;
+    internal_notes?: string;
 }) {
     if (params.customer.customerId) {
         return AdminBookingRepo.createCustomerBooking(
@@ -1766,6 +1769,7 @@ async function createAdminBookingRecord(params: {
                 start_at: params.prepared.startAt,
                 end_at: params.prepared.endAt,
                 notes: params.notes,
+                internal_notes: params.internal_notes,
                 created_by_user_id: params.createdByUserId,
                 total_price_cents: params.prepared.totalPrice,
                 payment_method: params.prepared.payment.paymentMethod,
@@ -1788,6 +1792,7 @@ async function createAdminBookingRecord(params: {
             start_at: params.prepared.startAt,
             end_at: params.prepared.endAt,
             notes: params.notes,
+            internal_notes: params.internal_notes,
             created_by_user_id: params.createdByUserId,
             total_price_cents: params.prepared.totalPrice,
             payment_method: params.prepared.payment.paymentMethod,
@@ -2023,15 +2028,9 @@ export async function rescheduleBookingDateTime(
             };
         }
 
+        // Admins can recover a pending/confirmed booking after its original time;
+        // only the replacement slot must be in the future.
         const now = new Date();
-        if (existingBooking.start_at.getTime() < now.getTime()) {
-            return {
-                code: 400,
-                message: 'No se puede reagendar una reserva que ya empezó o está en el pasado.',
-                error: true,
-            };
-        }
-
         const company = await BookingRepo.getCompanyById(companyId);
         const timeZone = company?.timezone || 'America/La_Paz';
         const startAt = parseDateTimeInTimeZone(input.start_at, timeZone);
@@ -2242,6 +2241,7 @@ export async function updateBooking(
         status?: BookingStatus;
         start_at?: string;
         notes?: string | null;
+        internal_notes?: string | null;
         staff_id?: number;
         service_ids?: number[];
     },
@@ -2470,6 +2470,9 @@ export async function updateBooking(
                 : hasLegacyNoShowMarker(existingBooking.notes)
                     ? stripLegacyNoShowMarker(existingBooking.notes)
                     : undefined;
+        const sanitizedInternalNotes = updates.internal_notes !== undefined
+            ? updates.internal_notes?.trim() || null
+            : undefined;
 
         // Update status
         if (updates.status) {
@@ -2488,6 +2491,15 @@ export async function updateBooking(
                 companyId,
                 sanitizedNotes,
                 updatedByUserId
+            );
+        }
+
+        if (sanitizedInternalNotes !== undefined) {
+            await AdminBookingRepo.updateBookingInternalNotes(
+                bookingId,
+                companyId,
+                sanitizedInternalNotes,
+                updatedByUserId,
             );
         }
 
@@ -2627,6 +2639,7 @@ export async function createBooking(
         client_phone_number?: string;
         client_email?: string;
         notes?: string;
+        internal_notes?: string;
         is_paid?: boolean;
         payment_method?: PaymentMethod;
         qr_proof_image_url?: string | null;
@@ -2673,6 +2686,7 @@ export async function createBooking(
                 serviceIds: data.service_ids,
                 sessionSlots: data.session_slots ?? [],
                 notes: data.notes,
+                internal_notes: data.internal_notes,
             });
         }
 
@@ -2698,6 +2712,7 @@ export async function createBooking(
             customer: customerResult.customer,
             prepared: sessionResult.prepared,
             notes: data.notes,
+            internal_notes: data.internal_notes,
         });
 
         if (booking?.id) {
@@ -2747,6 +2762,7 @@ export async function createRecurringBookings(
         client_phone_number?: string;
         client_email?: string;
         notes?: string;
+        internal_notes?: string;
         sessions: Array<{
             service_ids: number[];
             start_at: string;
@@ -2826,6 +2842,7 @@ export async function createRecurringBookings(
                 customer: customerResult.customer,
                 prepared,
                 notes: data.notes,
+                internal_notes: data.internal_notes,
             });
 
             if (booking?.id) {

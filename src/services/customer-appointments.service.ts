@@ -336,7 +336,8 @@ export async function modifyBooking(
             code: 200,
             message: "Booking modified successfully",
             error: false,
-            data: { booking: updated },
+            // Keep admin-only notes out of the customer response.
+            data: { booking: { ...updated, internal_notes: undefined } },
         };
     } catch (error: any) {
         return {

@@ -1479,6 +1479,7 @@ model Booking {
   session_index         Int?
   session_count         Int?
   notes                 String?                      @db.Text
+  internal_notes        String?                      @db.Text
   created_by_user_id    String?
   updated_by_user_id    String?
   created_at            DateTime                     @default(now())
