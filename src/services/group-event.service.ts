@@ -15,6 +15,7 @@ export interface CreateGroupEventInput {
     no_availability_message?: string | null;
     cover_image_url?: string | null;
     thumbnail_url?: string | null;
+    is_private?: boolean;
     is_free: boolean;
     price_cents: number;
     max_capacity: number;
@@ -34,6 +35,7 @@ export interface UpdateGroupEventInput {
     no_availability_message?: string | null;
     cover_image_url?: string | null;
     thumbnail_url?: string | null;
+    is_private?: boolean;
     is_free?: boolean;
     price_cents?: number;
     max_capacity?: number;
@@ -173,6 +175,7 @@ export async function createGroupEvent(companyId: number, userId: string, input:
             no_availability_message: noAvailabilityMessage,
             cover_image_url: input.cover_image_url ?? null,
             thumbnail_url: input.thumbnail_url ?? null,
+            is_private: input.is_private ?? false,
             is_free: input.is_free,
             price_cents: input.is_free ? 0 : input.price_cents,
             max_capacity: input.max_capacity,
@@ -231,6 +234,7 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
     }
     if (input.cover_image_url !== undefined) updateData.cover_image_url = input.cover_image_url;
     if (input.thumbnail_url !== undefined) updateData.thumbnail_url = input.thumbnail_url;
+    if (input.is_private !== undefined) updateData.is_private = input.is_private;
     if (input.is_free !== undefined) updateData.is_free = input.is_free;
     if (input.price_cents !== undefined) updateData.price_cents = input.price_cents;
     if (input.max_capacity !== undefined) {
@@ -341,6 +345,7 @@ export async function deleteGroupEvent(companyId: number, eventId: number): Prom
 export async function listGroupEvents(companyId: number, filters?: {
     status?: GroupItemStatus;
     upcoming?: boolean;
+    isPrivate?: boolean;
 }): Promise<ServiceResult> {
     const where: Prisma.GroupEventWhereInput = {
         company_id: companyId,
@@ -352,6 +357,9 @@ export async function listGroupEvents(companyId: number, filters?: {
     }
     if (filters?.upcoming) {
         where.start_at = { gte: new Date() };
+    }
+    if (filters?.isPrivate !== undefined) {
+        where.is_private = filters.isPrivate;
     }
 
     const events = await prisma.groupEvent.findMany({

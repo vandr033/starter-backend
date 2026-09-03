@@ -35,6 +35,7 @@ export async function listPublicEvents(req: AuthenticatedRequest, res: Response)
     const result = await GroupEventService.listGroupEvents(companyId, {
         status: 'PUBLISHED',
         upcoming,
+        isPrivate: false,
     });
 
     return res.status(result.code).json(result);

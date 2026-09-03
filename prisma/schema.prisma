@@ -2718,6 +2718,7 @@ model GroupEvent {
   cover_image_url                String?         @db.VarChar(512)
   thumbnail_url                  String?         @db.VarChar(512)
   status                         GroupItemStatus @default(DRAFT)
+  is_private                     Boolean         @default(false)
   is_free                        Boolean         @default(true)
   price_cents                    Int             @default(0)
   max_capacity                   Int
@@ -2744,6 +2745,7 @@ model GroupEvent {
 
   @@unique([company_id, slug])
   @@index([company_id, status])
+  @@index([company_id, status, is_private])
   @@index([company_id, start_at])
   @@index([created_by_user_id])
   @@map("group_event")

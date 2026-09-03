@@ -37,6 +37,7 @@ export const createGroupEventSchema = z.object({
     no_availability_message: z.string().max(5000).nullable().optional(),
     cover_image_url: imageUrlOrPathSchema.nullable().optional(),
     thumbnail_url: imageUrlOrPathSchema.nullable().optional(),
+    is_private: z.boolean().optional(),
     is_free: z.boolean(),
     price_cents: z.number().int().min(0),
     max_capacity: z.number().int().positive(),
