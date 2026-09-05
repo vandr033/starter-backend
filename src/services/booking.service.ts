@@ -873,6 +873,7 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
                 companyName: company.name,
                 staffName: staff.display_name,
                 serviceNames: services.map(s => s.name),
+                serviceIds: services.map(s => s.id),
                 startAt,
                 endAt,
                 totalPriceCents: totalPrice,
@@ -1912,6 +1913,9 @@ async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Pro
                     },
                 }),
             ),
+            serviceIds: Array.from(new Set(
+                resolvedGroups.flatMap((group) => group.services.map((service) => service.id)),
+            )),
             startAt: primaryBooking.start_at,
             endAt:
                 created.bookings[created.bookings.length - 1]?.end_at ??

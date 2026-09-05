@@ -115,6 +115,9 @@ export interface CreateServiceData {
     global_type_id?: number;
     is_invite_only?: boolean;
     invite_token?: string | null;
+    notify_customer?: boolean;
+    notify_assigned_staff?: boolean;
+    notify_management?: boolean;
 }
 
 export async function createService(data: CreateServiceData) {
@@ -137,6 +140,9 @@ export async function createService(data: CreateServiceData) {
             global_type_id: data.global_type_id,
             is_invite_only: data.is_invite_only ?? false,
             invite_token: data.invite_token ?? null,
+            notify_customer: data.notify_customer ?? true,
+            notify_assigned_staff: data.notify_assigned_staff ?? true,
+            notify_management: data.notify_management ?? true,
         },
         include: {
             category: {
@@ -171,6 +177,9 @@ export interface UpdateServiceData {
     global_type_id?: number;
     is_invite_only?: boolean;
     invite_token?: string | null;
+    notify_customer?: boolean;
+    notify_assigned_staff?: boolean;
+    notify_management?: boolean;
 }
 
 export async function updateService(id: number, companyId: number, data: UpdateServiceData) {

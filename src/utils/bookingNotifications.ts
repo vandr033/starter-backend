@@ -10,6 +10,7 @@ import {
     type NotificationBranding,
 } from "./notificationBranding";
 import { wahaClient } from "../services/waha.service";
+import { companyHasCapability } from "../services/company-entitlements.service";
 
 const smtpHost = process.env.MAIL_HOST || "smtp.gmail.com";
 const smtpPort = Number(process.env.MAIL_PORT || 587);
@@ -44,6 +45,7 @@ interface BookingNotificationData {
     companyLongitude?: number | null;
     staffName: string;
     serviceNames: string[];
+    serviceIds?: number[];
     startAt: Date;
     endAt: Date;
     totalPriceCents: number;
@@ -72,9 +74,70 @@ type InternalAudience = "all" | "none" | "staff" | "management";
 interface InternalRecipient {
     userId: string;
     role: InternalRecipientRole;
+    isAssignedStaff: boolean;
+    isManagement: boolean;
     name: string;
     email: string | null;
     phone: string | null;
+}
+
+type NotificationAudiencePolicy = {
+    customer: boolean;
+    assignedStaff: boolean;
+    management: boolean;
+};
+
+const DEFAULT_NOTIFICATION_AUDIENCE: NotificationAudiencePolicy = {
+    customer: true,
+    assignedStaff: true,
+    management: true,
+};
+
+export function combineServiceNotificationAudiences(
+    services: Array<{
+        notify_customer: boolean;
+        notify_assigned_staff: boolean;
+        notify_management: boolean;
+    }>,
+): NotificationAudiencePolicy {
+    if (services.length === 0) return { ...DEFAULT_NOTIFICATION_AUDIENCE };
+
+    return {
+        customer: services.some((service) => service.notify_customer),
+        assignedStaff: services.some((service) => service.notify_assigned_staff),
+        management: services.some((service) => service.notify_management),
+    };
+}
+
+async function getNotificationAudiencePolicy(
+    companyId: number,
+    serviceIds?: number[],
+): Promise<NotificationAudiencePolicy> {
+    const uniqueServiceIds = Array.from(
+        new Set((serviceIds ?? []).filter((id) => Number.isInteger(id) && id > 0)),
+    );
+    if (uniqueServiceIds.length === 0) return DEFAULT_NOTIFICATION_AUDIENCE;
+
+    const hasMessagingPro = await companyHasCapability(companyId, "MENSAJERIA_PRO");
+    if (!hasMessagingPro) return DEFAULT_NOTIFICATION_AUDIENCE;
+
+    const services = await prisma.service.findMany({
+        where: {
+            id: { in: uniqueServiceIds },
+            company_id: companyId,
+            deleted_at: null,
+        },
+        select: {
+            notify_customer: true,
+            notify_assigned_staff: true,
+            notify_management: true,
+        },
+    });
+
+    // A booking can contain more than one service. A recipient group is included
+    // when at least one selected service enables it, so a notification is never
+    // silently lost because another service in the same booking disables it.
+    return combineServiceNotificationAudiences(services);
 }
 
 /**
@@ -218,6 +281,8 @@ async function getInternalRecipients(companyId: number, staffId?: number) {
 
         existing.email = existing.email || recipient.email;
         existing.phone = existing.phone || recipient.phone;
+        existing.isAssignedStaff = existing.isAssignedStaff || recipient.isAssignedStaff;
+        existing.isManagement = existing.isManagement || recipient.isManagement;
 
         // Keep staff role if user is both assigned staff and owner.
         if (existing.role !== "staff" && recipient.role === "staff") {
@@ -252,6 +317,8 @@ async function getInternalRecipients(companyId: number, staffId?: number) {
             upsertRecipient({
                 userId: staffProfile.user.id,
                 role: "staff",
+                isAssignedStaff: true,
+                isManagement: false,
                 name:
                     staffProfile.display_name ||
                     staffProfile.user.first_name ||
@@ -291,6 +358,8 @@ async function getInternalRecipients(companyId: number, staffId?: number) {
         upsertRecipient({
             userId: companyUser.user.id,
             role: companyUser.role === CompanyUserRole.ADMIN ? "admin" : "owner",
+            isAssignedStaff: false,
+            isManagement: true,
             name: companyUser.user.first_name || companyUser.user.name || "Admin",
             email: normalizeEmail(companyUser.user.email),
             phone: buildFullPhone(companyUser.user.phone_prefix, companyUser.user.phoneNumber),
@@ -302,8 +371,8 @@ async function getInternalRecipients(companyId: number, staffId?: number) {
 
 function recipientMatchesAudience(recipient: InternalRecipient, audience: InternalAudience = "all"): boolean {
     if (audience === "none") return false;
-    if (audience === "staff") return recipient.role === "staff";
-    if (audience === "management") return recipient.role === "owner" || recipient.role === "admin";
+    if (audience === "staff") return recipient.isAssignedStaff;
+    if (audience === "management") return recipient.isManagement;
     return true;
 }
 
@@ -767,9 +836,12 @@ function bookingNoShowEmailHtml(data: BookingNoShowNotificationData, message: st
  */
 export async function notifyBookingCreated(data: BookingNotificationData): Promise<void> {
     data = await withCompanyTimeZone(data);
-    const { sendEmail: doEmail, sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
+    const [{ sendEmail: doEmail, sendWhatsapp: doWa }, audience] = await Promise.all([
+        getNotificationSettings(data.companyId),
+        getNotificationAudiencePolicy(data.companyId, data.serviceIds),
+    ]);
 
-    if (doEmail && data.customerEmail) {
+    if (audience.customer && doEmail && data.customerEmail) {
         const html = bookingEmailHtml(
             data,
             "Reserva Confirmada",
@@ -779,7 +851,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
         void sendEmail(data.customerEmail, `Reserva confirmada – ${data.companyName}`, brandEmail(data, "Reserva Confirmada", html));
     }
 
-    if (doWa && data.customerPhone) {
+    if (audience.customer && doWa && data.customerPhone) {
         const phone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
         if (phone) {
             const text = buildWhatsappText(
@@ -796,6 +868,12 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
             const recipients = await getInternalRecipients(data.companyId, data.staffId);
             for (const recipient of recipients) {
                 if (!recipientMatchesAudience(recipient, data.internalAudience)) {
+                    continue;
+                }
+                const includedByPolicy =
+                    (recipient.isAssignedStaff && audience.assignedStaff) ||
+                    (recipient.isManagement && audience.management);
+                if (!includedByPolicy) {
                     continue;
                 }
 
@@ -827,8 +905,11 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
  */
 export async function notifyBookingPendingForManagement(data: BookingNotificationData): Promise<void> {
     data = await withCompanyTimeZone(data);
-    const { sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
-    if (!doWa) return;
+    const [{ sendWhatsapp: doWa }, audience] = await Promise.all([
+        getNotificationSettings(data.companyId),
+        getNotificationAudiencePolicy(data.companyId, data.serviceIds),
+    ]);
+    if (!doWa || !audience.management) return;
 
     try {
         const recipients = await getInternalRecipients(data.companyId);
@@ -852,8 +933,11 @@ export async function notifyBookingPendingForManagement(data: BookingNotificatio
  */
 export async function notifyBookingConfirmedForStaff(data: BookingNotificationData): Promise<void> {
     data = await withCompanyTimeZone(data);
-    const { sendEmail: doEmail, sendWhatsapp: doWa } = await getNotificationSettings(data.companyId);
-    if (!data.staffId || (!doEmail && !doWa)) return;
+    const [{ sendEmail: doEmail, sendWhatsapp: doWa }, audience] = await Promise.all([
+        getNotificationSettings(data.companyId),
+        getNotificationAudiencePolicy(data.companyId, data.serviceIds),
+    ]);
+    if (!data.staffId || !audience.assignedStaff || (!doEmail && !doWa)) return;
 
     try {
         const recipients = (await getInternalRecipients(data.companyId, data.staffId)).filter(

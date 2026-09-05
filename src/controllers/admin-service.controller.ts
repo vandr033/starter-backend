@@ -70,6 +70,9 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         global_type_id,
         required_resource_ids,
         is_invite_only,
+        notify_customer,
+        notify_assigned_staff,
+        notify_management,
     } = req.body;
 
     // Validate required fields
@@ -150,6 +153,9 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         global_type_id,
         required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
         is_invite_only: typeof is_invite_only === 'boolean' ? is_invite_only : undefined,
+        notify_customer: typeof notify_customer === 'boolean' ? notify_customer : undefined,
+        notify_assigned_staff: typeof notify_assigned_staff === 'boolean' ? notify_assigned_staff : undefined,
+        notify_management: typeof notify_management === 'boolean' ? notify_management : undefined,
     });
 
     return res.status(result.code).json(result);
@@ -199,6 +205,9 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         global_type_id,
         required_resource_ids,
         is_invite_only,
+        notify_customer,
+        notify_assigned_staff,
+        notify_management,
     } = req.body;
 
     const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
@@ -243,6 +252,9 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         global_type_id,
         required_resource_ids: Array.isArray(required_resource_ids) ? required_resource_ids : undefined,
         is_invite_only: typeof is_invite_only === 'boolean' ? is_invite_only : undefined,
+        notify_customer: typeof notify_customer === 'boolean' ? notify_customer : undefined,
+        notify_assigned_staff: typeof notify_assigned_staff === 'boolean' ? notify_assigned_staff : undefined,
+        notify_management: typeof notify_management === 'boolean' ? notify_management : undefined,
     });
 
     return res.status(result.code).json(result);

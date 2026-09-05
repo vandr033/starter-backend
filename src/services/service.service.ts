@@ -30,6 +30,45 @@ type InviteOnlyConfig = {
     invite_token?: string | null;
 };
 
+type NotificationAudienceConfig = {
+    notify_customer?: boolean;
+    notify_assigned_staff?: boolean;
+    notify_management?: boolean;
+};
+
+async function normalizeNotificationAudienceInput(
+    companyId: number,
+    input: NotificationAudienceConfig,
+): Promise<NotificationAudienceConfig | ServiceResult> {
+    const hasAudienceField =
+        input.notify_customer !== undefined ||
+        input.notify_assigned_staff !== undefined ||
+        input.notify_management !== undefined;
+
+    if (!hasAudienceField) return {};
+
+    const hasMessagingPro = await companyHasCapability(companyId, 'MENSAJERIA_PRO');
+    if (!hasMessagingPro) {
+        return {
+            code: 403,
+            message: 'La personalización de destinatarios requiere Mensajería Pro.',
+            error: true,
+        };
+    }
+
+    return {
+        ...(input.notify_customer !== undefined
+            ? { notify_customer: input.notify_customer }
+            : {}),
+        ...(input.notify_assigned_staff !== undefined
+            ? { notify_assigned_staff: input.notify_assigned_staff }
+            : {}),
+        ...(input.notify_management !== undefined
+            ? { notify_management: input.notify_management }
+            : {}),
+    };
+}
+
 function serializeServiceWithPricing(
     service: {
         price_cents: number;
@@ -291,6 +330,9 @@ export interface CreateServiceInput {
     global_type_id?: number;
     required_resource_ids?: number[];
     is_invite_only?: boolean;
+    notify_customer?: boolean;
+    notify_assigned_staff?: boolean;
+    notify_management?: boolean;
 }
 
 export async function createService(
@@ -324,6 +366,10 @@ export async function createService(
             return promotionConfig;
         }
         const inviteOnlyConfig = normalizeInviteOnlyInput(input);
+        const notificationAudienceConfig = await normalizeNotificationAudienceInput(companyId, input);
+        if ('error' in notificationAudienceConfig) {
+            return notificationAudienceConfig;
+        }
 
         const service = await ServiceRepo.createService({
             company_id: companyId,
@@ -339,6 +385,7 @@ export async function createService(
             position,
             global_type_id: input.global_type_id,
             ...inviteOnlyConfig,
+            ...notificationAudienceConfig,
         });
 
         if (input.required_resource_ids && input.required_resource_ids.length > 0) {
@@ -391,6 +438,9 @@ export interface UpdateServiceInput {
     global_type_id?: number;
     required_resource_ids?: number[];
     is_invite_only?: boolean;
+    notify_customer?: boolean;
+    notify_assigned_staff?: boolean;
+    notify_management?: boolean;
 }
 
 export async function updateService(
@@ -445,6 +495,10 @@ export async function updateService(
             input,
             (existing as { invite_token?: string | null }).invite_token ?? null,
         );
+        const notificationAudienceConfig = await normalizeNotificationAudienceInput(companyId, input);
+        if ('error' in notificationAudienceConfig) {
+            return notificationAudienceConfig;
+        }
 
         const {
             required_resource_ids,
@@ -456,6 +510,9 @@ export async function updateService(
             promo_ends_at: _promoEndsAt,
             promo_label: _promoLabel,
             is_invite_only: _isInviteOnly,
+            notify_customer: _notifyCustomer,
+            notify_assigned_staff: _notifyAssignedStaff,
+            notify_management: _notifyManagement,
             ...coreInput
         } = input;
         await ServiceRepo.updateService(serviceId, companyId, coreInput);
@@ -465,6 +522,9 @@ export async function updateService(
         }
         if (Object.keys(inviteOnlyConfig).length > 0) {
             await ServiceRepo.updateService(serviceId, companyId, inviteOnlyConfig);
+        }
+        if (Object.keys(notificationAudienceConfig).length > 0) {
+            await ServiceRepo.updateService(serviceId, companyId, notificationAudienceConfig);
         }
 
         if (required_resource_ids !== undefined) {

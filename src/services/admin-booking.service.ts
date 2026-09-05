@@ -1502,6 +1502,7 @@ async function sendAdminBookingCreatedSideEffects(params: {
             companyName: company?.name || '',
             staffName: staffProfile?.display_name || '',
             serviceNames: params.services.map((service) => service.name),
+            serviceIds: params.serviceIds,
             startAt: params.startAt,
             endAt: params.endAt,
             totalPriceCents: params.totalPrice,
@@ -2541,6 +2542,9 @@ export async function updateBooking(
             const serviceNames = updatedBooking.booking_services?.map(
                 (bs: any) => bs.service_name_snapshot || bs.service?.name || ''
             ) || [];
+            const serviceIds = updatedBooking.booking_services
+                ?.map((bookingService: any) => bookingService.service_id)
+                .filter((id: unknown): id is number => typeof id === 'number') || [];
 
             const notificationData = {
                 companyId,
@@ -2553,6 +2557,7 @@ export async function updateBooking(
                 companyName: company?.name || '',
                 staffName: staffProfile?.display_name || '',
                 serviceNames,
+                serviceIds,
                 startAt: updatedBooking.start_at,
                 endAt: updatedBooking.end_at,
                 totalPriceCents: updatedBooking.total_price_cents || 0,

@@ -1,0 +1,4 @@
+ALTER TABLE `service`
+  ADD COLUMN `notify_customer` BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN `notify_assigned_staff` BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN `notify_management` BOOLEAN NOT NULL DEFAULT TRUE;

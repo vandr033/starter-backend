@@ -1419,6 +1419,9 @@ model Service {
   is_active                Boolean                   @default(true)
   is_invite_only           Boolean                   @default(false)
   invite_token             String?                   @unique @db.VarChar(255)
+  notify_customer          Boolean                   @default(true)
+  notify_assigned_staff    Boolean                   @default(true)
+  notify_management        Boolean                   @default(true)
   created_at               DateTime                  @default(now())
   updated_at               DateTime                  @updatedAt
   deleted_at               DateTime?

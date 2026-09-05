@@ -107,9 +107,17 @@ WAHA_BASE_URL="https://waha.priconpri.com"
 WAHA_API_KEY=""
 WAHA_SESSION="default"
 WAHA_TIMEOUT_MS=15000
+WAHA_DISCONNECT_ALERT_EMAIL="sebastian.andradeg@outlook.com"
+WAHA_MONITOR_INTERVAL_MS=30000
 ```
 
 `WAHA_BASE_URL` must point to the API origin, not the dashboard URL. If your WAHA instance does not require API auth, you can leave `WAHA_API_KEY` empty and the backend will omit `X-Api-Key`.
+
+The backend checks the configured WAHA session every 30 seconds. It sends one email to
+`WAHA_DISCONNECT_ALERT_EMAIL` when the session is stopped, failed, missing, or requires a
+new QR code. Repeated checks during the same outage do not send duplicate emails; the alert
+resets after the session returns to `WORKING`. Email delivery uses the existing `MAIL_*`
+configuration.
 
 Quick WAHA smoke test:
 ```bash
