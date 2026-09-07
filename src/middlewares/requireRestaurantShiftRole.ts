@@ -16,6 +16,25 @@ export function requireRestaurantShiftRole(allowedRoles: RestaurantShiftMemberRo
     if (!companyId || !userId) return res.status(401).json({ code: 401, error: true, message: 'Sesión no válida.' });
     if (companyUser?.role === CompanyUserRole.OWNER || companyUser?.role === CompanyUserRole.ADMIN) return next();
 
+    if (req.companyAccess && req.companyAccess.companyId === companyId) {
+      const activeShiftRole = req.companyAccess.restaurant.activeShiftRole;
+      if (activeShiftRole && allowedRoles.includes(activeShiftRole)) {
+        (req as any).restaurantShiftMember = {
+          id: null,
+          shift_id: req.companyAccess.restaurant.activeShiftId,
+          role: activeShiftRole,
+        };
+        return next();
+      }
+      return res.status(403).json({
+        code: 403,
+        error: true,
+        errorCode: 'RESTAURANT_SHIFT_ROLE_REQUIRED',
+        reason: 'RESTAURANT_SHIFT_ROLE_REQUIRED',
+        message: 'Esta operación requiere un rol de anfitrión o encargado en el turno activo.',
+      });
+    }
+
     try {
       const now = new Date();
       const member = await prisma.restaurantShiftMember.findFirst({
@@ -36,6 +55,7 @@ export function requireRestaurantShiftRole(allowedRoles: RestaurantShiftMemberRo
         return res.status(403).json({
           code: 403,
           error: true,
+          errorCode: 'RESTAURANT_SHIFT_ROLE_REQUIRED',
           reason: 'RESTAURANT_SHIFT_ROLE_REQUIRED',
           message: 'Esta operación requiere un rol de anfitrión o encargado en el turno activo.',
         });

@@ -18,6 +18,7 @@ import {
     LEGACY_PLAN_EXTRA_CAPABILITIES,
     PRODUCT_CAPABILITY_CODES,
     resolveLegacyFeatureFromCapabilities,
+    isIncludedByDefaultTierCode,
     type CompanyEntitlementPayload,
     type EffectiveCompanyProduct,
     type ProductCapability,
@@ -28,23 +29,35 @@ import { prisma } from '../prisma/client';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
-type ActiveCompanyProductSubscription = {
+export type ActiveCompanyProductSubscription = {
+    id?: number;
     productCode: ProductCode;
     tierCode: ProductTierCode;
     status: CompanyProductSubscriptionStatus;
     isCoreProduct: boolean;
     capabilityCodes: ProductCapability[];
+    startsAt?: Date;
+    availableUntil?: Date | null;
+    cancelledAt?: Date | null;
+    productIsActive?: boolean;
+    tierIsActive?: boolean;
 };
 
-type CapabilityOverrideRecord = {
+export type CapabilityOverrideRecord = {
     capability: ProductCapability;
     value: boolean;
 };
 
-type CompanyEntitlementState = {
+export type CompanyEntitlementState = {
+    companyId?: number;
     plan: ShopPlan;
+    availableUntil?: Date;
+    isActive?: boolean;
+    deletedAt?: Date | null;
+    restaurantEnabled?: boolean;
     hasModularSubscriptions: boolean;
     activeSubscriptions: ActiveCompanyProductSubscription[];
+    configuredSubscriptions?: ActiveCompanyProductSubscription[];
     capabilityOverrides: CapabilityOverrideRecord[];
 };
 
@@ -154,7 +167,7 @@ function getActiveModularProducts(
             tierCode: subscription.tierCode,
             status: subscription.status,
             isCore: subscription.isCoreProduct,
-            includedByDefault: false,
+            includedByDefault: isIncludedByDefaultTierCode(subscription.tierCode),
         }))
         .sort((left, right) => {
             if (left.isCore !== right.isCore) return left.isCore ? -1 : 1;
@@ -162,22 +175,46 @@ function getActiveModularProducts(
         });
 }
 
-function withImplicitCustomerBaseAccess(
+function withImplicitBundledBaselineAccess(
     products: EffectiveCompanyProduct[],
+    configuredProductCodes?: Set<ProductCode>,
 ): EffectiveCompanyProduct[] {
-    if (products.some((product) => product.productCode === 'CRM')) {
-        return products;
+    const bundledProducts: EffectiveCompanyProduct[] = [
+        {
+            productCode: 'CRM',
+            tierCode: 'CRM_BASE',
+            status: CompanyProductSubscriptionStatus.ACTIVE,
+            isCore: false,
+            includedByDefault: true,
+        },
+        {
+            productCode: 'PERSONALIZACION',
+            tierCode: 'PERSONALIZACION_BASE',
+            status: CompanyProductSubscriptionStatus.ACTIVE,
+            isCore: false,
+            includedByDefault: true,
+        },
+        {
+            productCode: 'MENSAJERIA',
+            tierCode: 'MENSAJERIA_BASE',
+            status: CompanyProductSubscriptionStatus.ACTIVE,
+            isCore: false,
+            includedByDefault: true,
+        },
+    ];
+
+    const nextProducts = [...products];
+    for (const bundledProduct of bundledProducts) {
+        const isConfigured = configuredProductCodes?.has(bundledProduct.productCode) ?? false;
+        const isAlreadyEffective = nextProducts.some(
+            (product) => product.productCode === bundledProduct.productCode,
+        );
+        if (!isConfigured && !isAlreadyEffective) {
+            nextProducts.push(bundledProduct);
+        }
     }
 
-    const implicitCrmBase: EffectiveCompanyProduct = {
-        productCode: 'CRM',
-        tierCode: 'CRM_BASE',
-        status: CompanyProductSubscriptionStatus.ACTIVE,
-        isCore: false,
-        includedByDefault: true,
-    };
-
-    return [...products, implicitCrmBase].sort((left, right) => {
+    return nextProducts.sort((left, right) => {
         if (left.isCore !== right.isCore) return left.isCore ? -1 : 1;
         return left.productCode.localeCompare(right.productCode);
     });
@@ -196,73 +233,95 @@ function assertAtLeastOneCoreProduct(products: EffectiveCompanyProduct[]): void 
 export function resolveCompanyEntitlementsFromState(
     state: CompanyEntitlementState,
 ): CompanyEntitlementPayload {
+    let entitlements: CompanyEntitlementPayload;
+
     if (state.activeSubscriptions.length === 0) {
         if (state.hasModularSubscriptions) {
-            return buildEntitlementPayload({
+            entitlements = buildEntitlementPayload({
                 plan: state.plan,
                 source: 'modular',
                 products: [],
                 productCapabilities: getDefaultProductCapabilities(),
             });
+        } else {
+            entitlements = getLegacyPlanFallbackEntitlements(state.plan, state.capabilityOverrides);
         }
+    } else {
+        const configuredProductCodes = new Set(
+            (state.configuredSubscriptions ?? []).map((subscription) => subscription.productCode),
+        );
+        const products = withImplicitBundledBaselineAccess(
+            getActiveModularProducts(state.activeSubscriptions),
+            configuredProductCodes.size > 0 ? configuredProductCodes : undefined,
+        );
+        assertAtLeastOneCoreProduct(products);
 
-        return getLegacyPlanFallbackEntitlements(state.plan, state.capabilityOverrides);
+        const baseCapabilities = buildProductCapabilitiesFromTierCodes(
+            products.map((product) => product.tierCode),
+        );
+        const productCapabilities = applyCapabilityOverrides(
+            baseCapabilities,
+            state.capabilityOverrides,
+        );
+
+        entitlements = buildEntitlementPayload({
+            plan: state.plan,
+            source: 'modular',
+            products,
+            productCapabilities,
+        });
     }
 
-    const products = withImplicitCustomerBaseAccess(
-        getActiveModularProducts(state.activeSubscriptions),
-    );
-    assertAtLeastOneCoreProduct(products);
+    // `restaurant_enabled` is a legacy product toggle that still exists in
+    // production data. It is part of the same effective decision and cannot
+    // silently re-enable the Restaurant product when the toggle is off.
+    if (state.restaurantEnabled === false && entitlements.productCapabilities.RESTAURANT_MODULE) {
+        entitlements = buildEntitlementPayload({
+            plan: entitlements.currentPlan,
+            source: entitlements.source,
+            products: entitlements.products,
+            productCapabilities: {
+                ...entitlements.productCapabilities,
+                RESTAURANT_MODULE: false,
+            },
+        });
+    }
 
-    const baseCapabilities = buildProductCapabilitiesFromTierCodes(
-        products.map((product) => product.tierCode),
-    );
-    const productCapabilities = applyCapabilityOverrides(
-        baseCapabilities,
-        state.capabilityOverrides,
-    );
-
-    return buildEntitlementPayload({
-        plan: state.plan,
-        source: 'modular',
-        products,
-        productCapabilities,
-    });
+    return entitlements;
 }
 
-async function getCompanyEntitlementState(
+export async function getCompanyEntitlementState(
     companyId: number,
     db: DbClient,
+    now: Date = new Date(),
 ): Promise<CompanyEntitlementState> {
     const company = await db.company.findUnique({
         where: { id: companyId },
         select: {
+            id: true,
             plan: true,
+            availableUntil: true,
+            is_active: true,
+            deleted_at: true,
+            restaurant_enabled: true,
             product_subscriptions: {
-                where: {
-                    status: {
-                        in: [
-                            CompanyProductSubscriptionStatus.ACTIVE,
-                            CompanyProductSubscriptionStatus.TRIALING,
-                        ],
-                    },
-                    OR: [
-                        { availableUntil: null },
-                        { availableUntil: { gt: new Date() } },
-                    ],
-                },
                 select: {
+                    id: true,
                     status: true,
+                    startsAt: true,
                     availableUntil: true,
+                    cancelledAt: true,
                     product: {
                         select: {
                             code: true,
                             isCoreProduct: true,
+                            isActive: true,
                         },
                     },
                     productTier: {
                         select: {
                             code: true,
+                            isActive: true,
                             capabilities: {
                                 select: {
                                     capability: true,
@@ -276,7 +335,7 @@ async function getCompanyEntitlementState(
                 where: {
                     OR: [
                         { expiresAt: null },
-                        { expiresAt: { gt: new Date() } },
+                        { expiresAt: { gt: now } },
                     ],
                 },
                 orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -292,40 +351,51 @@ async function getCompanyEntitlementState(
         throw new Error(`Company ${companyId} not found`);
     }
 
+    const configuredSubscriptions: ActiveCompanyProductSubscription[] = company.product_subscriptions.map(
+        (subscription) => ({
+            id: subscription.id,
+            productCode: subscription.product.code,
+            tierCode: subscription.productTier.code,
+            status: subscription.status,
+            isCoreProduct: subscription.product.isCoreProduct ?? isCoreProductCode(subscription.product.code),
+            capabilityCodes: (subscription.productTier.capabilities ?? []).map(
+                (capability) => capability.capability,
+            ),
+            startsAt: subscription.startsAt,
+            availableUntil: subscription.availableUntil,
+            cancelledAt: subscription.cancelledAt,
+            productIsActive: subscription.product.isActive ?? true,
+            tierIsActive: subscription.productTier.isActive ?? true,
+        }),
+    );
+
+    const isEffectiveSubscription = (subscription: ActiveCompanyProductSubscription) =>
+        (subscription.status === CompanyProductSubscriptionStatus.ACTIVE ||
+            subscription.status === CompanyProductSubscriptionStatus.TRIALING) &&
+        !subscription.cancelledAt &&
+        (!subscription.startsAt || subscription.startsAt.getTime() <= now.getTime()) &&
+        (!subscription.availableUntil || subscription.availableUntil.getTime() >= now.getTime()) &&
+        subscription.productIsActive !== false &&
+        subscription.tierIsActive !== false;
+
     const overrideMap = new Map<ProductCapability, boolean>();
 
-    for (const override of company.capability_overrides) {
+    for (const override of company.capability_overrides ?? []) {
         if (!overrideMap.has(override.capability)) {
             overrideMap.set(override.capability, override.value);
         }
     }
 
     return {
+        companyId: company.id,
         plan: company.plan,
+        availableUntil: company.availableUntil,
+        isActive: company.is_active,
+        deletedAt: company.deleted_at,
+        restaurantEnabled: company.restaurant_enabled,
         hasModularSubscriptions: company.product_subscriptions.length > 0,
-        activeSubscriptions: company.product_subscriptions
-            .filter((subscription) => {
-                if (
-                    subscription.status !== CompanyProductSubscriptionStatus.ACTIVE &&
-                    subscription.status !== CompanyProductSubscriptionStatus.TRIALING
-                ) {
-                    return false;
-                }
-
-                return (
-                    subscription.availableUntil === null ||
-                    subscription.availableUntil.getTime() > Date.now()
-                );
-            })
-            .map((subscription) => ({
-                productCode: subscription.product.code,
-                tierCode: subscription.productTier.code,
-                status: subscription.status,
-                isCoreProduct: subscription.product.isCoreProduct,
-                capabilityCodes: subscription.productTier.capabilities.map(
-                    (capability) => capability.capability,
-                ),
-            })),
+        configuredSubscriptions,
+        activeSubscriptions: configuredSubscriptions.filter(isEffectiveSubscription),
         capabilityOverrides: [...overrideMap.entries()].map(([capability, value]) => ({
             capability,
             value,

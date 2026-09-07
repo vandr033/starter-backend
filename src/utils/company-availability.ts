@@ -29,9 +29,11 @@ export function isCompanyAvailableNow(
 }
 
 export function buildShopUnavailablePayload(availableUntil: Date, message?: string) {
+  const isExpired = new Date().getTime() > availableUntil.getTime();
   return {
     code: 403,
     error: true,
+    errorCode: isExpired ? 'COMPANY_EXPIRED' : 'COMPANY_ACCESS_DENIED',
     reason: 'SHOP_EXPIRED',
     message: message || SHOP_UNAVAILABLE_COPY.title.es,
     data: {

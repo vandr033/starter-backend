@@ -24,7 +24,7 @@ router.get(
 router.get(
     '/subscription-history',
     requireAuth,
-    requireCompanyRole(adminRoles),
+    requireCompanyRole(adminRoles, { allowRenewalOnly: true }),
     getCompanySubscriptionHistory,
 );
 

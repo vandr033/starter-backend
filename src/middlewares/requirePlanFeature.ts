@@ -1,16 +1,65 @@
 import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './requireAuth';
-import type { PlanFeatureKey } from '../config/plan-capabilities';
+import { getFeatureRequiredPlan, type PlanFeatureKey } from '../config/plan-capabilities';
 import {
     buildFeatureNotAvailableMessage,
     resolveFeatureAccessForCompany,
 } from '../services/plan-enforcement.service';
 import { buildProductAccessForbiddenData } from '../services/product-access-requests.service';
+import { hasCompanyFeature } from '../services/company-access.service';
 
 export const requirePlanFeatureDependencies = {
     resolveFeatureAccessForCompany,
     buildProductAccessForbiddenData,
 };
+
+async function resolveFeatureAccessForRequest(
+    req: AuthenticatedRequest,
+    companyId: number,
+    feature: PlanFeatureKey,
+) {
+    const normalizedAccess = req.companyAccess;
+    if (normalizedAccess && normalizedAccess.companyId === companyId) {
+        return {
+            allowed: normalizedAccess.lifecycle.mode === 'FULL' && hasCompanyFeature(normalizedAccess, feature),
+            currentPlan: normalizedAccess.entitlements.currentPlan,
+            requiredPlan: getFeatureRequiredPlan(feature),
+        };
+    }
+
+    return requirePlanFeatureDependencies.resolveFeatureAccessForCompany(companyId, feature);
+}
+
+function sendLifecycleDenied(req: AuthenticatedRequest, res: Response): Response | null {
+    const access = req.companyAccess;
+    const companyId = (req as any).companyID as number | undefined;
+    if (!access || access.companyId === companyId && access.lifecycle.mode === 'FULL') return null;
+
+    if (companyId && access.companyId !== companyId) {
+        return res.status(403).json({
+            code: 403,
+            error: true,
+            errorCode: 'COMPANY_ACCESS_DENIED',
+            reason: 'COMPANY_ACCESS_DENIED',
+            message: 'El contexto de empresa no coincide con la sesión activa.',
+        });
+    }
+
+    const isRenewalOnly = access.lifecycle.mode === 'RENEWAL_ONLY';
+    return res.status(403).json({
+        code: 403,
+        error: true,
+        errorCode: access.lifecycle.reason ?? 'COMPANY_ACCESS_DENIED',
+        reason: access.lifecycle.reason ?? 'COMPANY_ACCESS_DENIED',
+        message: isRenewalOnly
+            ? 'Tu plan terminó. Renová tu cuenta para volver a operar.'
+            : 'La empresa seleccionada está inactiva o ya no está disponible.',
+        data: {
+            mode: access.lifecycle.mode,
+            availableUntil: access.lifecycle.availableUntil,
+        },
+    });
+}
 
 export function requirePlanFeature(feature: PlanFeatureKey) {
     return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -24,7 +73,10 @@ export function requirePlanFeature(feature: PlanFeatureKey) {
                 });
             }
 
-            const access = await requirePlanFeatureDependencies.resolveFeatureAccessForCompany(companyId, feature);
+            const lifecycleDenied = sendLifecycleDenied(req, res);
+            if (lifecycleDenied) return lifecycleDenied;
+
+            const access = await resolveFeatureAccessForRequest(req, companyId, feature);
             if (!access.allowed) {
                 const productAccess = await requirePlanFeatureDependencies.buildProductAccessForbiddenData({
                     companyId,
@@ -34,7 +86,9 @@ export function requirePlanFeature(feature: PlanFeatureKey) {
                 return res.status(403).json({
                     code: 403,
                     error: true,
-                    reason: 'CAPABILITY_REQUIRED',
+                    ...(req.companyAccess
+                        ? { errorCode: 'FEATURE_NOT_ENTITLED', reason: 'FEATURE_NOT_ENTITLED' }
+                        : { reason: 'CAPABILITY_REQUIRED' }),
                     message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(access.requiredPlan),
                     data: {
                         feature,
@@ -71,7 +125,10 @@ export function requirePlanFeatures(features: PlanFeatureKey[]) {
             }
 
             for (const feature of features) {
-                const access = await requirePlanFeatureDependencies.resolveFeatureAccessForCompany(companyId, feature);
+                const lifecycleDenied = sendLifecycleDenied(req, res);
+                if (lifecycleDenied) return lifecycleDenied;
+
+                const access = await resolveFeatureAccessForRequest(req, companyId, feature);
                 if (!access.allowed) {
                     const productAccess = await requirePlanFeatureDependencies.buildProductAccessForbiddenData({
                         companyId,
@@ -81,7 +138,9 @@ export function requirePlanFeatures(features: PlanFeatureKey[]) {
                     return res.status(403).json({
                         code: 403,
                         error: true,
-                        reason: 'CAPABILITY_REQUIRED',
+                        ...(req.companyAccess
+                            ? { errorCode: 'FEATURE_NOT_ENTITLED', reason: 'FEATURE_NOT_ENTITLED' }
+                            : { reason: 'CAPABILITY_REQUIRED' }),
                         message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(access.requiredPlan),
                         data: {
                             feature,
@@ -119,14 +178,18 @@ export function requireAnyPlanFeature(features: PlanFeatureKey[]) {
             }
 
             for (const feature of features) {
-                const access = await requirePlanFeatureDependencies.resolveFeatureAccessForCompany(companyId, feature);
+                const lifecycleDenied = sendLifecycleDenied(req, res);
+                if (lifecycleDenied) return lifecycleDenied;
+
+                const access = await resolveFeatureAccessForRequest(req, companyId, feature);
                 if (access.allowed) {
                     return next();
                 }
             }
 
             const fallbackFeature = features[0];
-            const fallbackAccess = await requirePlanFeatureDependencies.resolveFeatureAccessForCompany(
+            const fallbackAccess = await resolveFeatureAccessForRequest(
+                req,
                 companyId,
                 fallbackFeature,
             );
@@ -138,7 +201,9 @@ export function requireAnyPlanFeature(features: PlanFeatureKey[]) {
             return res.status(403).json({
                 code: 403,
                 error: true,
-                reason: 'CAPABILITY_REQUIRED',
+                ...(req.companyAccess
+                    ? { errorCode: 'FEATURE_NOT_ENTITLED', reason: 'FEATURE_NOT_ENTITLED' }
+                    : { reason: 'CAPABILITY_REQUIRED' }),
                 message: productAccess?.requiresLabel ?? buildFeatureNotAvailableMessage(fallbackAccess.requiredPlan),
                 data: {
                     feature: fallbackFeature,

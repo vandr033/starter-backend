@@ -126,6 +126,32 @@ test('approveProductAccessRequest activates the requested product and marks the 
           status: 'ACTIVE',
         },
       ],
+      effectiveAccess: {
+        version: 1,
+        companyId: 7,
+        lifecycle: {
+          mode: 'FULL',
+          isActive: true,
+          isExpired: false,
+          availableUntil: '2027-03-12T23:59:59.000Z',
+          reason: null,
+        },
+        membership: { id: null, role: null },
+        restaurant: { activeShiftId: null, activeShiftRole: null },
+        entitlements: {
+          version: 1,
+          currentPlan: ShopPlan.STARTER,
+          maxStaffMembers: 3,
+          features: {} as never,
+          requiredPlans: {} as never,
+          source: 'modular',
+          productCapabilities: {} as never,
+          products: [],
+          activeCoreProducts: [],
+          activeAddOns: [],
+        },
+        configuredProducts: [],
+      },
       requestedProducts: [
         {
           productCode: 'EVENTOS',

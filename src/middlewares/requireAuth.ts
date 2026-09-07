@@ -3,15 +3,17 @@ import type { Request, Response, NextFunction } from "express";
 import { getAuth } from "../config/auth";
 import { prisma } from "../prisma/client";
 import { CompanyUserRole } from "@prisma/client";
-import {
-  buildShopUnavailablePayload,
-  isCompanyAvailableNow,
-} from "../utils/company-availability";
-import { getActiveCompanyIdFromRequest } from "../utils/active-shop-cookie";
+import { buildShopUnavailablePayload } from "../utils/company-availability";
+import { getActiveCompanyCookieState } from "../utils/active-shop-cookie";
+import type { EffectiveCompanyAccess } from "../services/company-access.service";
+import { resolveCompanyContextForUser } from "../services/company-access.service";
 
 export interface AuthenticatedRequest extends Request {
   authUser?: any;
   authSession?: any;
+  companyAccess?: EffectiveCompanyAccess;
+  companyUser?: any;
+  companyID?: number;
 }
 
 export async function requireAuth(
@@ -95,79 +97,15 @@ export function requireSuperAdmin(req: AuthenticatedRequest, res: Response, next
 }
 
 export async function requireCompanyAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  const user = req.authUser;
-  if (!user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  if (user.is_company_admin) {
-    return next();
-  }
-
-  const companySlug = req.params.companySlug as string;
-
-  const company = await prisma.company.findUnique({
-    where: {
-      slug: companySlug,
-    },
-  });
-
-  if (!company) {
-    return res.status(404).json({ error: "Company not found" });
-  }
-
-  const companyUser = await prisma.companyUser.findFirst({
-    where: {
-      company_id: company.id,
-      user_id: user.id,
-      role: { in: [CompanyUserRole.ADMIN, CompanyUserRole.ADMIN] }
-    }
-  })
-
-  if (!companyUser) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-  (req as any).companyID = company.id;
-
-  return next();
+  return requireCompanyRole([CompanyUserRole.OWNER, CompanyUserRole.ADMIN])(req, res, next);
 }
 
 export async function requireCompanyStaff(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  const user = req.authUser;
-  if (!user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  if (user.is_company_admin) {
-    return next();
-  }
-
-  const companySlug = req.params.companySlug as string;
-
-  const company = await prisma.company.findUnique({
-    where: {
-      slug: companySlug,
-    },
-  });
-
-  if (!company) {
-    return res.status(404).json({ error: "Company not found" });
-  }
-
-  const companyUser = await prisma.companyUser.findFirst({
-    where: {
-      company_id: company.id,
-      user_id: user.id,
-      role: { in: [CompanyUserRole.ADMIN, CompanyUserRole.ADMIN] }
-    }
-  })
-
-  if (!companyUser) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-  (req as any).companyID = company.id;
-
-  return next();
+  return requireCompanyRole([
+    CompanyUserRole.OWNER,
+    CompanyUserRole.ADMIN,
+    CompanyUserRole.STAFF,
+  ])(req, res, next);
 }
 
 /**
@@ -176,146 +114,125 @@ export async function requireCompanyStaff(req: AuthenticatedRequest, res: Respon
  * 
  * Usage: requireCompanyRole([CompanyUserRole.OWNER, CompanyUserRole.ADMIN])
  */
-export function requireCompanyRole(allowedRoles: CompanyUserRole[]) {
+export function requireCompanyRole(
+  allowedRoles: CompanyUserRole[],
+  options: { allowRenewalOnly?: boolean } = {},
+) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     const user = req.authUser;
 
     if (!user) {
-      return res.status(401).json({ error: "Unauthorized - no session" });
-    }
-
-    // Super admins: still look up their company association so controllers have companyID
-    if (user.is_super_admin) {
-      try {
-        const companyUser = await prisma.companyUser.findFirst({
-          where: {
-            user_id: user.id,
-            deleted_at: null,
-            role: { in: allowedRoles },
-          },
-          orderBy: [
-            { role: 'asc' },
-            { updated_at: 'desc' },
-          ],
-          include: {
-            company: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
-                plan: true,
-                availableUntil: true,
-                is_active: true,
-                deleted_at: true,
-              },
-            },
-          },
-        });
-
-        if (companyUser) {
-          (req as any).companyUser = companyUser;
-          (req as any).companyID = companyUser.company_id;
-        }
-      } catch (error) {
-        console.error('Error looking up super admin company:', error);
-      }
-      return next();
+      return res.status(401).json({
+        code: 401,
+        error: true,
+        errorCode: 'AUTH_REQUIRED',
+        message: "Unauthorized - no session",
+      });
     }
 
     try {
-      const activeCompanyId = getActiveCompanyIdFromRequest(req);
-      const baseWhere = {
-        user_id: user.id,
-        deleted_at: null as null,
-      };
-
-      let companyUser: any = null;
-
-      if (activeCompanyId) {
-        const activeShopMembership = await prisma.companyUser.findFirst({
-          where: {
-            ...baseWhere,
-            company_id: activeCompanyId,
-          },
-          include: {
-            company: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
-                plan: true,
-                availableUntil: true,
-                is_active: true,
-                deleted_at: true,
-              },
-            },
-          },
+      const cookie = getActiveCompanyCookieState(req);
+      if (cookie.invalid) {
+        return res.status(400).json({
+          code: 400,
+          error: true,
+          errorCode: 'COMPANY_CONTEXT_REQUIRED',
+          reason: 'ACTIVE_COMPANY_INVALID',
+          message: 'La empresa activa seleccionada no es válida. Selecciona otra empresa.',
         });
-
-        if (!activeShopMembership) {
-          return res.status(403).json({
-            error: "Forbidden - invalid active shop context",
-            activeCompanyId,
-          });
-        }
-
-        if (!allowedRoles.includes(activeShopMembership.role)) {
-          return res.status(403).json({
-            error: "Forbidden - insufficient role in active shop",
-            activeCompanyId,
-            requiredRoles: allowedRoles,
-            currentRole: activeShopMembership.role,
-          });
-        }
-
-        companyUser = activeShopMembership;
-      } else {
-        // Backward-compatible fallback when no active shop was selected yet.
-        companyUser = await prisma.companyUser.findFirst({
-          where: {
-            ...baseWhere,
-            role: { in: allowedRoles },
-          },
-          orderBy: [
-            { role: 'asc' },
-            { updated_at: 'desc' },
-          ],
-          include: {
-            company: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
-                plan: true,
-                availableUntil: true,
-                is_active: true,
-                deleted_at: true,
-              },
-            },
-          },
-        });
-
-        if (!companyUser) {
-          return res.status(403).json({
-            error: "Forbidden - insufficient role permissions",
-            requiredRoles: allowedRoles,
-          });
-        }
       }
 
-      if (!companyUser.company || !isCompanyAvailableNow(companyUser.company)) {
-        const availableUntil = companyUser.company?.availableUntil ?? new Date(0);
-        return res.status(403).json(
-          buildShopUnavailablePayload(
-            availableUntil,
-            "Tu prueba gratis terminó. Activá tu plan para seguir usando esta función.",
-          ),
+      let companyId = cookie.companyId;
+      if (!companyId) {
+        const memberships = await prisma.companyUser.findMany({
+          where: {
+            user_id: user.id,
+            deleted_at: null,
+          },
+          select: { company_id: true },
+        });
+        const companyIds = [...new Set(memberships.map((membership) => membership.company_id))];
+        if (companyIds.length === 0) {
+          return res.status(403).json({
+            code: 403,
+            error: true,
+            errorCode: 'COMPANY_ACCESS_DENIED',
+            message: 'No tienes acceso a ninguna empresa.',
+            requiredRoles: allowedRoles,
+          });
+        }
+        if (companyIds.length > 1) {
+          return res.status(400).json({
+            code: 400,
+            error: true,
+            errorCode: 'COMPANY_CONTEXT_REQUIRED',
+            reason: 'ACTIVE_COMPANY_REQUIRED',
+            message: 'Selecciona una empresa activa antes de continuar.',
+          });
+        }
+        companyId = companyIds[0] ?? null;
+      }
+
+      if (!companyId) {
+        return res.status(400).json({
+          code: 400,
+          error: true,
+          errorCode: 'COMPANY_CONTEXT_REQUIRED',
+          reason: 'ACTIVE_COMPANY_REQUIRED',
+          message: 'Selecciona una empresa activa antes de continuar.',
+        });
+      }
+
+      const context = await resolveCompanyContextForUser(user.id, companyId);
+      if (!context) {
+        return res.status(403).json({
+          code: 403,
+          error: true,
+          errorCode: 'COMPANY_ACCESS_DENIED',
+          reason: cookie.present ? 'ACTIVE_COMPANY_NOT_MEMBER' : 'COMPANY_ACCESS_DENIED',
+          message: 'No tienes una membresía activa en la empresa seleccionada.',
+          activeCompanyId: companyId,
+        });
+      }
+
+      const { membership, access } = context;
+      if (!allowedRoles.includes(membership.role)) {
+        return res.status(403).json({
+          code: 403,
+          error: true,
+          errorCode: 'ROLE_FORBIDDEN',
+          reason: 'INSUFFICIENT_COMPANY_ROLE',
+          message: 'No tienes permisos para esta operación en la empresa seleccionada.',
+          activeCompanyId: companyId,
+          requiredRoles: allowedRoles,
+          currentRole: membership.role,
+        });
+      }
+
+      if (
+        access.lifecycle.mode !== 'FULL' &&
+        !(access.lifecycle.mode === 'RENEWAL_ONLY' && options.allowRenewalOnly)
+      ) {
+        const payload = buildShopUnavailablePayload(
+          membership.company.availableUntil,
+          access.lifecycle.mode === 'RENEWAL_ONLY'
+            ? 'Tu plan terminó. Renová tu cuenta para volver a operar.'
+            : 'La empresa seleccionada está inactiva o ya no está disponible.',
         );
+        return res.status(403).json({
+          ...payload,
+          errorCode: access.lifecycle.reason ?? 'COMPANY_ACCESS_DENIED',
+          data: {
+            ...payload.data,
+            mode: access.lifecycle.mode,
+          },
+        });
       }
 
-      // Attach companyUser to request for downstream use
-      (req as any).companyUser = companyUser;
-      (req as any).companyID = companyUser.company_id;
+      access.membership.id = membership.id;
+      (req as any).companyUser = membership;
+      (req as any).companyID = membership.company_id;
+      (req as any).companyAccess = access;
 
       return next();
     } catch (error) {

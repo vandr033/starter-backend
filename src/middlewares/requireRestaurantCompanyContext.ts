@@ -1,17 +1,16 @@
 import type { NextFunction, Response } from 'express';
 import { CompanyUserRole } from '@prisma/client';
 import type { AuthenticatedRequest } from './requireAuth';
-import { prisma } from '../prisma/client';
-import { buildShopUnavailablePayload, isCompanyAvailableNow } from '../utils/company-availability';
+import { buildShopUnavailablePayload } from '../utils/company-availability';
 import { getActiveCompanyCookieState } from '../utils/active-shop-cookie';
+import { resolveCompanyContextForUser } from '../services/company-access.service';
 
 /**
  * Strict company boundary for Restaurant Lite.
  *
- * This intentionally does not reuse requireCompanyRole: that middleware still
- * supports the platform's legacy "first membership" fallback for non-restaurant
- * modules. Restaurant operations must fail closed when no active company was
- * explicitly selected.
+ * This intentionally does not reuse requireCompanyRole because Restaurant
+ * operations must fail closed when no active company was explicitly selected.
+ * Both middleware paths resolve the same canonical access contract.
  */
 export function requireRestaurantCompanyContext(allowedRoles: CompanyUserRole[]) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -37,57 +36,47 @@ export function requireRestaurantCompanyContext(allowedRoles: CompanyUserRole[])
     }
 
     try {
-      const membership = await prisma.companyUser.findFirst({
-        where: {
-          user_id: user.id,
-          company_id: cookie.companyId,
-          deleted_at: null,
-        },
-        include: {
-          company: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              plan: true,
-              availableUntil: true,
-              is_active: true,
-              deleted_at: true,
-              restaurant_enabled: true,
-              currency: true,
-              timezone: true,
-            },
-          },
-        },
-      });
+      const context = await resolveCompanyContextForUser(user.id, cookie.companyId);
 
-      if (!membership) {
+      if (!context) {
         return res.status(403).json({
           code: 403,
           error: true,
+          errorCode: 'COMPANY_ACCESS_DENIED',
           reason: 'ACTIVE_COMPANY_NOT_MEMBER',
           message: 'No tienes una membresía activa en la empresa seleccionada.',
           activeCompanyId: cookie.companyId,
         });
       }
+      const { membership, access } = context;
       if (!allowedRoles.includes(membership.role)) {
         return res.status(403).json({
           code: 403,
           error: true,
+          errorCode: 'ROLE_FORBIDDEN',
           reason: 'INSUFFICIENT_COMPANY_ROLE',
           message: 'No tienes permisos para esta operación en la empresa seleccionada.',
           activeCompanyId: cookie.companyId,
         });
       }
-      if (!membership.company || !isCompanyAvailableNow(membership.company)) {
-        return res.status(403).json(buildShopUnavailablePayload(
-          membership.company?.availableUntil ?? new Date(0),
+      if (access.lifecycle.mode !== 'FULL') {
+        const payload = buildShopUnavailablePayload(
+          membership.company.availableUntil,
           'La empresa seleccionada está inactiva o ya no está disponible.',
-        ));
+        );
+        return res.status(403).json({
+          ...payload,
+          errorCode: access.lifecycle.reason ?? 'COMPANY_ACCESS_DENIED',
+          data: {
+            ...payload.data,
+            mode: access.lifecycle.mode,
+          },
+        });
       }
 
       (req as any).companyUser = membership;
       (req as any).companyID = membership.company_id;
+      (req as any).companyAccess = access;
       (req as any).restaurantCompanyContext = {
         companyId: membership.company_id,
         role: membership.role,

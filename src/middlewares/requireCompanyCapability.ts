@@ -2,6 +2,7 @@ import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './requireAuth';
 import type { ProductCapability } from '../config/product-entitlements';
 import { companyHasCapability } from '../services/company-entitlements.service';
+import { hasCompanyCapability } from '../services/company-access.service';
 
 const DEFAULT_PUBLIC_MESSAGES: Record<ProductCapability, string> = {
   RESERVAS_BASE: 'Este negocio no tiene Reservas activas.',
@@ -71,19 +72,54 @@ export function requireCompanyCapability(
         });
       }
 
-      const allowed = await requireCompanyCapabilityDependencies.companyHasCapability(
-        companyId,
-        capability,
-      );
+      const normalizedAccess = req.companyAccess;
+      if (normalizedAccess && normalizedAccess.companyId !== companyId) {
+        return res.status(403).json({
+          code: 403,
+          error: true,
+          errorCode: 'COMPANY_ACCESS_DENIED',
+          reason: 'COMPANY_ACCESS_DENIED',
+          message: 'El contexto de empresa no coincide con la sesión activa.',
+        });
+      }
+
+      if (normalizedAccess && normalizedAccess.lifecycle.mode !== 'FULL') {
+        return res.status(403).json({
+          code: 403,
+          error: true,
+          errorCode: normalizedAccess.lifecycle.reason ?? 'COMPANY_ACCESS_DENIED',
+          reason: normalizedAccess.lifecycle.reason ?? 'COMPANY_ACCESS_DENIED',
+          message: normalizedAccess.lifecycle.mode === 'RENEWAL_ONLY'
+            ? 'Tu plan terminó. Renová tu cuenta para volver a operar.'
+            : 'La empresa seleccionada está inactiva o ya no está disponible.',
+          data: {
+            mode: normalizedAccess.lifecycle.mode,
+            availableUntil: normalizedAccess.lifecycle.availableUntil,
+          },
+        });
+      }
+
+      const allowed = normalizedAccess
+        ? hasCompanyCapability(normalizedAccess, capability)
+        : await requireCompanyCapabilityDependencies.companyHasCapability(companyId, capability);
 
       if (!allowed) {
         return res.status(403).json({
           code: 403,
           error: true,
-          reason: 'PRODUCT_NOT_ACTIVE',
+          ...(normalizedAccess
+            ? { errorCode: 'FEATURE_NOT_ENTITLED', reason: 'FEATURE_NOT_ENTITLED' }
+            : { reason: 'PRODUCT_NOT_ACTIVE' }),
           message: options?.message ?? DEFAULT_PUBLIC_MESSAGES[capability],
           data: {
             capability,
+            ...(normalizedAccess
+              ? {
+                  mode: normalizedAccess.lifecycle.mode,
+                  currentPlan: normalizedAccess.entitlements.currentPlan,
+                  source: normalizedAccess.entitlements.source,
+                }
+              : {}),
           },
         });
       }

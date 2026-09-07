@@ -11,6 +11,10 @@ import {
     getCompanyEntitlements,
 } from './company-entitlements.service';
 import type { CompanyEntitlementPayload } from '../config/product-entitlements';
+import {
+    resolveEffectiveCompanyAccess,
+    type EffectiveCompanyAccess,
+} from './company-access.service';
 import { logger } from '../config/logger';
 import {
     BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
@@ -29,6 +33,7 @@ export type AdminCompanyUserSummary = {
         currency: string;
         plan: ShopPlan;
         capabilities: CompanyEntitlementPayload;
+        effectiveAccess: EffectiveCompanyAccess;
         availableUntil: Date;
         default_language: string;
     };
@@ -162,6 +167,13 @@ async function toAdminCompanyUserSummary(
 ): Promise<AdminCompanyUserSummary> {
     const defaultLanguage =
         companyUser.company?.config_messages?.[0]?.value?.trim().toLowerCase() || FALLBACK_DEFAULT_LANGUAGE;
+    const effectiveAccess = companyUser.company
+        ? await resolveEffectiveCompanyAccess({
+            companyId: companyUser.company.id,
+            userId: companyUser.user_id,
+            role: companyUser.role,
+        })
+        : null;
 
     return {
         id: companyUser.id,
@@ -175,7 +187,8 @@ async function toAdminCompanyUserSummary(
                 slug: companyUser.company.slug,
                 currency: companyUser.company.currency,
                 plan: companyUser.company.plan,
-                capabilities: await getCompanyEntitlements(companyUser.company.id),
+                capabilities: effectiveAccess?.entitlements ?? await getCompanyEntitlements(companyUser.company.id),
+                effectiveAccess: effectiveAccess!,
                 availableUntil: companyUser.company.availableUntil,
                 default_language: defaultLanguage,
             }

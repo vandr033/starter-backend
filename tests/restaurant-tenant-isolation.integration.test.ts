@@ -251,7 +251,8 @@ test('real MySQL strict context and active-company lifecycle', { skip: skipReaso
   const entitlementResponse = responseRecorder();
   await requirePlanFeature('RESTAURANT_MODULE')(entitlementRequest.request, entitlementResponse.response, () => entitlementResponse.continue());
   assert.equal(entitlementResponse.statusCode, 403);
-  assert.equal(entitlementResponse.payload.reason, 'CAPABILITY_REQUIRED');
+  assert.equal(entitlementResponse.payload.reason, 'FEATURE_NOT_ENTITLED');
+  assert.equal(entitlementResponse.payload.errorCode, 'FEATURE_NOT_ENTITLED');
 });
 
 test('real MySQL tenant-scoped reads and mutations reject Company B resources', { skip: skipReason }, async () => {

@@ -9,10 +9,10 @@ const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
 const staffOnlyRoles = [CompanyUserRole.STAFF];
 
 // GET /api/admin/staff/me - Get current staff profile
-router.get('/me', requireAuth, requireCompanyRole(staffOnlyRoles), AdminStaffController.getMyProfile);
+router.get('/me', requireAuth, requireCompanyRole(staffOnlyRoles, { allowRenewalOnly: true }), AdminStaffController.getMyProfile);
 
 // PUT /api/admin/staff/me - Update current staff profile
-router.put('/me', requireAuth, requireCompanyRole(staffOnlyRoles), AdminStaffController.updateMyProfile);
+router.put('/me', requireAuth, requireCompanyRole(staffOnlyRoles, { allowRenewalOnly: true }), AdminStaffController.updateMyProfile);
 
 // GET /api/admin/staff - List all staff profiles for the admin's company
 router.get('/', requireAuth, requireCompanyRole(adminRoles), AdminStaffController.listStaff);

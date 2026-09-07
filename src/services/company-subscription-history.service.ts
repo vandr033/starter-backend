@@ -10,12 +10,14 @@ import {
 } from './company-product-history.service';
 import {
     buildActiveProductSnapshot,
-    buildLegacyFallbackActiveProducts,
-    isAutoIncludedAddonTier,
     parseRequestedProductsSnapshot,
     type ActiveProductSnapshot,
     type RequestedProductSnapshot,
 } from './super-admin-shop-commercial.service';
+import {
+    resolveEffectiveCompanyAccess,
+    type EffectiveCompanyAccess,
+} from './company-access.service';
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
 
@@ -58,6 +60,7 @@ export interface CompanySubscriptionSnapshot {
     isExpired: boolean;
     activeProducts: ActiveProductSnapshot[];
     requestedProducts: RequestedProductSnapshot[];
+    effectiveAccess: EffectiveCompanyAccess;
 }
 
 export interface CompanyProductHistoryItem {
@@ -146,15 +149,6 @@ export async function getCompanySubscriptionHistoryPayload(
             currency: true,
             isMarketplaceVisible: true,
             product_subscriptions: {
-                where: {
-                    status: {
-                        in: ['ACTIVE', 'TRIALING'],
-                    },
-                    OR: [
-                        { availableUntil: null },
-                        { availableUntil: { gt: new Date() } },
-                    ],
-                },
                 include: {
                     product: {
                         select: {
@@ -178,6 +172,14 @@ export async function getCompanySubscriptionHistoryPayload(
     });
 
     if (!company) return null;
+
+    // The same resolver used by admin APIs and sessions is the source of truth
+    // for the Super Admin product view. The history endpoint may still include
+    // every configured row below, but never invents a different effective set.
+    const effectiveAccess = await resolveEffectiveCompanyAccess({
+        companyId: company.id,
+        db,
+    });
 
     const historyRows = await db.companySubscriptionHistory.findMany({
         where: {
@@ -337,29 +339,23 @@ export async function getCompanySubscriptionHistoryPayload(
         (row) => row.action === 'REQUESTED_PRODUCTS_SET',
     );
 
-    const activeProducts =
-        company.product_subscriptions.length > 0
-            ? company.product_subscriptions.map((subscription) =>
-                buildActiveProductSnapshot({
-                    productCode: subscription.product.code,
-                    tierCode: subscription.productTier.code,
-                    billingCycle: subscription.billingCycle ?? company.billingCycle,
-                    pricePaid: subscription.pricePaid,
-                    currency: subscription.currency ?? company.currency,
-                    availableUntil: subscription.availableUntil ?? company.availableUntil,
-                    includedByDefault: isAutoIncludedAddonTier(subscription.productTier.code),
-                }),
-            )
-            : buildLegacyFallbackActiveProducts({
-                legacyPlan: company.plan,
-                companyBillingCycle: company.billingCycle,
-                companyPricePaid:
-                    company.pricePaid === null || company.pricePaid === undefined
-                        ? null
-                        : Number(company.pricePaid.toString()),
-                companyCurrency: company.currency,
-                companyAvailableUntil: company.availableUntil,
-            }).map((product) => buildActiveProductSnapshot(product));
+    const activeProducts = effectiveAccess.entitlements.products.map((product) => {
+        const subscription = company.product_subscriptions.find(
+            (candidate) => candidate.product.code === product.productCode,
+        );
+
+        return buildActiveProductSnapshot({
+            productCode: product.productCode,
+            tierCode: product.tierCode,
+            billingCycle: subscription?.billingCycle ?? company.billingCycle,
+            pricePaid: subscription?.pricePaid ?? (
+                product.isCore ? company.pricePaid : null
+            ),
+            currency: subscription?.currency ?? company.currency,
+            availableUntil: subscription?.availableUntil ?? company.availableUntil,
+            includedByDefault: product.includedByDefault,
+        });
+    });
 
     return {
         company: {
@@ -371,9 +367,10 @@ export async function getCompanySubscriptionHistoryPayload(
             pricePaid: toDecimalString(company.pricePaid),
             availableUntil: company.availableUntil.toISOString(),
             isMarketplaceVisible: company.isMarketplaceVisible,
-            isExpired: Date.now() > company.availableUntil.getTime(),
+            isExpired: effectiveAccess.lifecycle.isExpired,
             activeProducts,
             requestedProducts: parseRequestedProductsSnapshot(latestRequestedProducts?.newValue),
+            effectiveAccess,
         },
         history,
         productHistory,

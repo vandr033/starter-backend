@@ -538,6 +538,10 @@ const LEGACY_INCLUDED_BY_DEFAULT_TIER_CODES = new Set<ProductTierCode>([
     PrismaProductTierCode.MENSAJERIA_BASE,
 ]);
 
+export function isIncludedByDefaultTierCode(tierCode: ProductTierCode): boolean {
+    return LEGACY_INCLUDED_BY_DEFAULT_TIER_CODES.has(tierCode);
+}
+
 export const CORE_PRODUCT_CODES: ProductCode[] = PRODUCT_CATALOG_SEED.filter(
     (product) => product.isCoreProduct,
 ).map((product) => product.code);
