@@ -1,157 +1,769 @@
 -- Phase 0 schema reconciliation generated from the empty migration-created schema.
 -- Keep the existing restaurant_waitlist company FK; it is already canonical.
 -- DropForeignKey
-ALTER TABLE `category` DROP FOREIGN KEY `category_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'category'
+    AND CONSTRAINT_NAME = 'category_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `category` DROP FOREIGN KEY `category_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `commerce_order_item_component_snapshot` DROP FOREIGN KEY `commerce_order_item_component_snapshot_product_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'commerce_order_item_component_snapshot'
+    AND CONSTRAINT_NAME = 'commerce_order_item_component_snapshot_product_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `commerce_order_item_component_snapshot` DROP FOREIGN KEY `commerce_order_item_component_snapshot_product_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_class_enrollment` DROP FOREIGN KEY `gce_sponsored_admin_fk`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_class_enrollment'
+    AND CONSTRAINT_NAME = 'gce_sponsored_admin_fk'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_class_enrollment` DROP FOREIGN KEY `gce_sponsored_admin_fk`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_class_enrollment` DROP FOREIGN KEY `gce_sponsored_session_fk`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_class_enrollment'
+    AND CONSTRAINT_NAME = 'gce_sponsored_session_fk'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_class_enrollment` DROP FOREIGN KEY `gce_sponsored_session_fk`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_class_guest_enrollment_session` DROP FOREIGN KEY `gcges_session_fk`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_class_guest_enrollment_session'
+    AND CONSTRAINT_NAME = 'gcges_session_fk'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_class_guest_enrollment_session` DROP FOREIGN KEY `gcges_session_fk`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_class_interest` DROP FOREIGN KEY `group_class_interest_customer_profile_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_class_interest'
+    AND CONSTRAINT_NAME = 'group_class_interest_customer_profile_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_class_interest` DROP FOREIGN KEY `group_class_interest_customer_profile_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_session_public_attendance_attempt` DROP FOREIGN KEY `gspaa_company_fk`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_session_public_attendance_attempt'
+    AND CONSTRAINT_NAME = 'gspaa_company_fk'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_session_public_attendance_attempt` DROP FOREIGN KEY `gspaa_company_fk`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_session_public_attendance_attempt` DROP FOREIGN KEY `gspaa_session_fk`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_session_public_attendance_attempt'
+    AND CONSTRAINT_NAME = 'gspaa_session_fk'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_session_public_attendance_attempt` DROP FOREIGN KEY `gspaa_session_fk`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_session_public_attendance_attempt` DROP FOREIGN KEY `gspaa_user_fk`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_session_public_attendance_attempt'
+    AND CONSTRAINT_NAME = 'gspaa_user_fk'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_session_public_attendance_attempt` DROP FOREIGN KEY `gspaa_user_fk`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `group_ticket` DROP FOREIGN KEY `group_ticket_group_event_booking_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_ticket'
+    AND CONSTRAINT_NAME = 'group_ticket_group_event_booking_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `group_ticket` DROP FOREIGN KEY `group_ticket_group_event_booking_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_actor_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_audit_log'
+    AND CONSTRAINT_NAME = 'restaurant_audit_actor_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_actor_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_combination_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_audit_log'
+    AND CONSTRAINT_NAME = 'restaurant_audit_combination_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_combination_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_audit_log'
+    AND CONSTRAINT_NAME = 'restaurant_audit_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_reservation_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_audit_log'
+    AND CONSTRAINT_NAME = 'restaurant_audit_reservation_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_reservation_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_shift_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_audit_log'
+    AND CONSTRAINT_NAME = 'restaurant_audit_shift_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_shift_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_table_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_audit_log'
+    AND CONSTRAINT_NAME = 'restaurant_audit_table_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_audit_log` DROP FOREIGN KEY `restaurant_audit_table_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_notification_log` DROP FOREIGN KEY `restaurant_notification_log_reservation_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_notification_log'
+    AND CONSTRAINT_NAME = 'restaurant_notification_log_reservation_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_notification_log` DROP FOREIGN KEY `restaurant_notification_log_reservation_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_reservation_assignment` DROP FOREIGN KEY `restaurant_reservation_assignment_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_reservation_assignment'
+    AND CONSTRAINT_NAME = 'restaurant_reservation_assignment_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_reservation_assignment` DROP FOREIGN KEY `restaurant_reservation_assignment_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_reservation_deposit'
+    AND CONSTRAINT_NAME = 'restaurant_deposit_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_refunded_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_reservation_deposit'
+    AND CONSTRAINT_NAME = 'restaurant_deposit_refunded_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_refunded_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_reservation_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_reservation_deposit'
+    AND CONSTRAINT_NAME = 'restaurant_deposit_reservation_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_reservation_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_reviewed_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_reservation_deposit'
+    AND CONSTRAINT_NAME = 'restaurant_deposit_reviewed_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_reviewed_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_submitted_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_reservation_deposit'
+    AND CONSTRAINT_NAME = 'restaurant_deposit_submitted_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_reservation_deposit` DROP FOREIGN KEY `restaurant_deposit_submitted_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift` DROP FOREIGN KEY `restaurant_shift_manager_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift'
+    AND CONSTRAINT_NAME = 'restaurant_shift_manager_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift` DROP FOREIGN KEY `restaurant_shift_manager_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_closed_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_closed_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_closed_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_reopened_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_reopened_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_reopened_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_shift_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_shift_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout` DROP FOREIGN KEY `restaurant_closeout_shift_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout_adjustment` DROP FOREIGN KEY `restaurant_closeout_adjustment_actor_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout_adjustment'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_adjustment_actor_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout_adjustment` DROP FOREIGN KEY `restaurant_closeout_adjustment_actor_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout_adjustment` DROP FOREIGN KEY `restaurant_closeout_adjustment_closeout_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout_adjustment'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_adjustment_closeout_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout_adjustment` DROP FOREIGN KEY `restaurant_closeout_adjustment_closeout_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_closeout_adjustment` DROP FOREIGN KEY `restaurant_closeout_adjustment_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_closeout_adjustment'
+    AND CONSTRAINT_NAME = 'restaurant_closeout_adjustment_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_closeout_adjustment` DROP FOREIGN KEY `restaurant_closeout_adjustment_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_dining_area` DROP FOREIGN KEY `restaurant_shift_area_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_dining_area'
+    AND CONSTRAINT_NAME = 'restaurant_shift_area_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_dining_area` DROP FOREIGN KEY `restaurant_shift_area_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_dining_area` DROP FOREIGN KEY `restaurant_shift_area_dining_area_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_dining_area'
+    AND CONSTRAINT_NAME = 'restaurant_shift_area_dining_area_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_dining_area` DROP FOREIGN KEY `restaurant_shift_area_dining_area_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_dining_area` DROP FOREIGN KEY `restaurant_shift_area_shift_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_dining_area'
+    AND CONSTRAINT_NAME = 'restaurant_shift_area_shift_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_dining_area` DROP FOREIGN KEY `restaurant_shift_area_shift_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_template_dining_area` DROP FOREIGN KEY `restaurant_shift_template_area_dining_area_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_template_dining_area'
+    AND CONSTRAINT_NAME = 'restaurant_shift_template_area_dining_area_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_template_dining_area` DROP FOREIGN KEY `restaurant_shift_template_area_dining_area_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_template_dining_area` DROP FOREIGN KEY `restaurant_shift_template_area_template_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_template_dining_area'
+    AND CONSTRAINT_NAME = 'restaurant_shift_template_area_template_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_template_dining_area` DROP FOREIGN KEY `restaurant_shift_template_area_template_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_template_table_assignment` DROP FOREIGN KEY `restaurant_shift_template_table_table_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_template_table_assignment'
+    AND CONSTRAINT_NAME = 'restaurant_shift_template_table_table_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_template_table_assignment` DROP FOREIGN KEY `restaurant_shift_template_table_table_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_template_table_assignment` DROP FOREIGN KEY `restaurant_shift_template_table_template_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_template_table_assignment'
+    AND CONSTRAINT_NAME = 'restaurant_shift_template_table_template_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_template_table_assignment` DROP FOREIGN KEY `restaurant_shift_template_table_template_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_shift_template_table_assignment` DROP FOREIGN KEY `restaurant_shift_template_table_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_shift_template_table_assignment'
+    AND CONSTRAINT_NAME = 'restaurant_shift_template_table_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_shift_template_table_assignment` DROP FOREIGN KEY `restaurant_shift_template_table_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_combination_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_combination_session'
+    AND CONSTRAINT_NAME = 'restaurant_combination_session_combination_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_combination_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_combination_session'
+    AND CONSTRAINT_NAME = 'restaurant_combination_session_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_created_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_combination_session'
+    AND CONSTRAINT_NAME = 'restaurant_combination_session_created_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_created_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_released_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_combination_session'
+    AND CONSTRAINT_NAME = 'restaurant_combination_session_released_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_released_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_reservation_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_combination_session'
+    AND CONSTRAINT_NAME = 'restaurant_combination_session_reservation_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_combination_session` DROP FOREIGN KEY `restaurant_combination_session_reservation_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_operational_state` DROP FOREIGN KEY `restaurant_table_state_company_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_operational_state'
+    AND CONSTRAINT_NAME = 'restaurant_table_state_company_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_operational_state` DROP FOREIGN KEY `restaurant_table_state_company_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_operational_state` DROP FOREIGN KEY `restaurant_table_state_table_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_operational_state'
+    AND CONSTRAINT_NAME = 'restaurant_table_state_table_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_operational_state` DROP FOREIGN KEY `restaurant_table_state_table_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropForeignKey
-ALTER TABLE `restaurant_table_operational_state` DROP FOREIGN KEY `restaurant_table_state_updated_by_user_id_fkey`;
+SET @fk_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_table_operational_state'
+    AND CONSTRAINT_NAME = 'restaurant_table_state_updated_by_user_id_fkey'
+);
+SET @sql := IF(
+  @fk_exists > 0,
+  'ALTER TABLE `restaurant_table_operational_state` DROP FOREIGN KEY `restaurant_table_state_updated_by_user_id_fkey`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropIndex
-DROP INDEX `category_company_id_is_active_position_idx` ON `category`;
+SET @idx_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'category'
+    AND INDEX_NAME = 'category_company_id_is_active_position_idx'
+);
+SET @sql := IF(
+  @idx_exists > 0,
+  'DROP INDEX `category_company_id_is_active_position_idx` ON `category`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropIndex
-DROP INDEX `group_class_interest_customer_profile_id_idx` ON `group_class_interest`;
+SET @idx_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_class_interest'
+    AND INDEX_NAME = 'group_class_interest_customer_profile_id_idx'
+);
+SET @sql := IF(
+  @idx_exists > 0,
+  'DROP INDEX `group_class_interest_customer_profile_id_idx` ON `group_class_interest`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropIndex
-DROP INDEX `group_ticket_group_event_booking_id_seat_number_idx` ON `group_ticket`;
+SET @idx_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'group_ticket'
+    AND INDEX_NAME = 'group_ticket_group_event_booking_id_seat_number_idx'
+);
+SET @sql := IF(
+  @idx_exists > 0,
+  'DROP INDEX `group_ticket_group_event_booking_id_seat_number_idx` ON `group_ticket`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- DropIndex
-DROP INDEX `restaurant_notification_log_dedup_idx` ON `restaurant_notification_log`;
+SET @idx_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'restaurant_notification_log'
+    AND INDEX_NAME = 'restaurant_notification_log_dedup_idx'
+);
+SET @sql := IF(
+  @idx_exists > 0,
+  'DROP INDEX `restaurant_notification_log_dedup_idx` ON `restaurant_notification_log`',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- AlterTable
 ALTER TABLE `booking_group` ALTER COLUMN `updated_at` DROP DEFAULT;
