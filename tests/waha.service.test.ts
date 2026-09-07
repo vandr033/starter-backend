@@ -5,11 +5,14 @@ import {
   assertWahaConfiguration,
   buildWahaChatId,
   createWahaClient,
+  getWahaProviderState,
   normalizeWhatsappPhoneNumber,
 } from '../src/services/waha.service';
-import { sendWhatsappText } from '../src/utils/whatsappSender';
+import { queueWhatsappText } from '../src/utils/whatsappSender';
 
 const ENV_KEYS = [
+  'WAHA_ENABLED',
+  'WAHA_TRANSPORT',
   'WAHA_BASE_URL',
   'WAHA_API_KEY',
   'WAHA_SESSION',
@@ -113,7 +116,7 @@ test('sendText maps the existing payload to WAHA /api/sendText', async () => {
     },
   });
 
-  const result = await client.sendText('+591 71234567', 'Hello from WAHA');
+  const result = await client.sendTextNow('+591 71234567', 'Hello from WAHA');
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].input, 'https://waha.priconpri.com/api/sendText');
@@ -157,7 +160,7 @@ test('surfaces WAHA API error responses with status and response details', async
   });
 
   await assert.rejects(
-    () => client.sendText('59171234567', 'Hello from WAHA'),
+    () => client.sendTextNow('59171234567', 'Hello from WAHA'),
     (error: unknown) => {
       assert.ok(error instanceof WahaRequestError);
       assert.equal(error.status, 502);
@@ -172,32 +175,39 @@ test('surfaces WAHA API error responses with status and response details', async
   );
 });
 
-test('sendWhatsappText keeps the legacy helper contract for existing flows', async () => {
+test('queueWhatsappText persists acceptance without making a provider call', async () => {
+  process.env.WAHA_ENABLED = 'true';
+  process.env.WAHA_TRANSPORT = 'remote';
   process.env.WAHA_BASE_URL = 'https://waha.priconpri.com';
   process.env.WAHA_API_KEY = 'test-api-key';
   process.env.WAHA_SESSION = 'default';
   process.env.WAHA_MIN_INTERVAL_MS = '0';
 
-  let capturedPayload: Record<string, unknown> | null = null;
-  globalThis.fetch = (async (_input, init) => {
-    capturedPayload = JSON.parse(String(init?.body));
-    return new Response(JSON.stringify({ id: 'compat-1' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  }) as typeof fetch;
+  let createCalls = 0;
+  const repository = {
+    async createJob(input: Record<string, unknown>) {
+      createCalls += 1;
+      return {
+        job: { id: createCalls, status: 'PENDING' },
+        duplicate: createCalls > 1,
+        input,
+      };
+    },
+  } as any;
+  const providerState = getWahaProviderState();
 
-  const successResult = await sendWhatsappText('71234567', 'Mensaje de prueba');
-  assert.notEqual(successResult, -1);
-  assert.equal(capturedPayload?.['chatId'], '59171234567@c.us');
-  assert.match(String(capturedPayload?.['text']), /Mensaje de prueba/);
-  assert.match(String(capturedPayload?.['text']), /Priconpri/);
+  const first = await queueWhatsappText('71234567', 'Mensaje de prueba', {
+    sourceType: 'TEST',
+    sourceId: '1',
+    dedupeKey: 'compat-1',
+  }, { repository, providerState });
+  const second = await queueWhatsappText('71234567', 'Segundo mensaje', {
+    sourceType: 'TEST',
+    sourceId: '1',
+    dedupeKey: 'compat-1',
+  }, { repository, providerState });
 
-  globalThis.fetch = (async () => new Response(JSON.stringify({ error: 'unauthorized' }), {
-    status: 401,
-    headers: { 'content-type': 'application/json' },
-  })) as typeof fetch;
-
-  const failedResult = await sendWhatsappText('71234567', 'Segundo mensaje');
-  assert.equal(failedResult, -1);
+  assert.equal(first.status, 'QUEUED');
+  assert.equal(second.status, 'DUPLICATE');
+  assert.equal(createCalls, 2);
 });

@@ -1,7 +1,8 @@
 import { logger } from '../config/logger';
 import { MensajeApi } from '../types/MensajeApi';
 import { sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_MIN_LENGTH = 8;
@@ -122,7 +123,14 @@ export async function sendTestEmailNotification(input: SendTestEmailInput): Prom
     `;
 
     try {
-        await sendGenericEmail(email, subject, html);
+        const result = await sendGenericEmail(email, subject, html);
+        if (!isEmailDeliverySuccessful(result)) {
+            return {
+                code: result.reason === 'PROVIDER_NOT_CONFIGURED' ? 503 : 502,
+                error: true,
+                message: `Test email was not delivered: ${result.reason}`,
+            };
+        }
 
         logger.info(
             {
@@ -182,7 +190,7 @@ export async function sendTestWhatsappNotification(input: SendTestWhatsappInput)
         };
     }
 
-    const sentAt = new Date();
+    const queuedAt = new Date();
     const actorLabel = resolveActorLabel(input.requestedBy);
     const whatsappText = [
         'PriConPri test message',
@@ -190,11 +198,14 @@ export async function sendTestWhatsappNotification(input: SendTestWhatsappInput)
         message,
         '',
         `Sent by: ${actorLabel}`,
-        `Sent at (UTC): ${sentAt.toISOString()}`,
+        `Queued at (UTC): ${queuedAt.toISOString()}`,
     ].join('\n');
 
-    const result = await sendWhatsappText(phoneNumber, whatsappText);
-    if (result === -1) {
+    const result = await queueWhatsappText(phoneNumber, whatsappText, {
+        sourceType: 'SUPER_ADMIN_TEST',
+        sourceId: `${input.requestedBy?.id ?? 'unknown'}:${queuedAt.toISOString()}`,
+    });
+    if (!isWhatsappEnqueueAccepted(result)) {
         logger.error(
             {
                 event: 'super_admin_test_whatsapp_failed',
@@ -213,20 +224,22 @@ export async function sendTestWhatsappNotification(input: SendTestWhatsappInput)
 
     logger.info(
         {
-            event: 'super_admin_test_whatsapp_sent',
+            event: 'super_admin_test_whatsapp_queued',
             to: phoneNumber,
             requestedBy: input.requestedBy?.id || null,
         },
-        'Super admin test WhatsApp sent',
+        'Super admin test WhatsApp queued',
     );
 
     return {
         code: 200,
         error: false,
-        message: 'Test WhatsApp message sent successfully',
+        message: 'Test WhatsApp message queued successfully',
         data: {
             phone_number: phoneNumber,
-            sent_at: sentAt.toISOString(),
+            status: result.status === 'DUPLICATE' ? result.existingStatus ?? 'PENDING' : 'PENDING',
+            job_id: result.jobId ?? null,
+            queued_at: queuedAt.toISOString(),
         },
     };
 }

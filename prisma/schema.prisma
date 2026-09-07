@@ -45,6 +45,8 @@ model Company {
   bookings                                 Booking[]
   booking_audit_logs                       BookingAuditLog[]
   booking_notification_attempts            BookingNotificationAttempt[]
+  outbound_message_batches                 OutboundMessageBatch[]
+  outbound_message_jobs                    OutboundMessageJob[]
   booking_discounts                        BookingDiscount[]
   booking_services                         BookingService[]
   categories                               Category[]
@@ -85,6 +87,7 @@ model Company {
   installment_reminder_logs                InstallmentReminderLog[]
   booking_groups                           BookingGroup[]
   commerce_store                           CommerceStore?
+  commerce_order_sequence                  CommerceOrderSequence?
   commerce_categories                      CommerceCategory[]
   commerce_products                        CommerceProduct[]
   commerce_pickup_points                   CommercePickupPoint[]
@@ -120,6 +123,7 @@ model Company {
   restaurant_customer_profiles             RestaurantCustomerProfile[]
   restaurant_shift_closeouts               RestaurantShiftCloseout[]
   restaurant_shift_closeout_adjustments    RestaurantShiftCloseoutAdjustment[]
+  upload_intents                           UploadIntent[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -297,6 +301,7 @@ model RestaurantReservationGuest {
   created_at     DateTime              @default(now())
   updated_at     DateTime              @updatedAt
   reservation    RestaurantReservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  notification_logs RestaurantNotificationLog[] @relation("RestaurantGuestNotificationLogs")
 
   @@unique([reservation_id, whatsapp_phone], map: "restaurant_reservation_guest_phone_key")
   @@index([reservation_id], map: "restaurant_reservation_guest_reservation_id_idx")
@@ -872,6 +877,7 @@ model RestaurantNotificationLog {
   id              Int                           @id @default(autoincrement())
   company_id      Int
   reservation_id  Int?
+  reservation_guest_id Int?
   waitlist_id     Int?
   event           RestaurantNotificationEvent
   channel         RestaurantNotificationChannel
@@ -888,12 +894,17 @@ model RestaurantNotificationLog {
   updated_at      DateTime                      @updatedAt
   company         Company                       @relation(fields: [company_id], references: [id])
   reservation     RestaurantReservation?        @relation(fields: [reservation_id], references: [id], onDelete: SetNull)
+  reservation_guest RestaurantReservationGuest? @relation("RestaurantGuestNotificationLogs", fields: [reservation_guest_id], references: [id], onDelete: SetNull)
   waitlist        RestaurantWaitlist?           @relation(fields: [waitlist_id], references: [id], onDelete: SetNull)
+  outbound_message_job_id Int?
+  outbound_message_job OutboundMessageJob?      @relation("RestaurantNotificationOutboxJob", fields: [outbound_message_job_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, reservation_id], map: "restaurant_notification_log_company_reservation_idx")
   @@index([company_id, status], map: "restaurant_notification_log_company_status_idx")
   @@index([reservation_id, event], map: "restaurant_notification_log_reservation_event_idx")
   @@index([company_id, waitlist_id, event], map: "restaurant_notification_log_waitlist_event_idx")
+  @@index([reservation_guest_id], map: "restaurant_notification_log_reservation_guest_idx")
+  @@index([outbound_message_job_id], map: "restaurant_notification_log_outbound_job_idx")
   @@index([company_id, reservation_id, event, channel, dedup_key], map: "restaurant_notification_log_dedup_idx")
   @@map("restaurant_notification_log")
 }
@@ -1550,17 +1561,85 @@ model BookingNotificationAttempt {
   next_retry_at     DateTime?
   last_attempted_at DateTime?
   sent_at           DateTime?
+  outbound_message_job_id Int?
   payload           Json?
   created_at        DateTime         @default(now())
   updated_at        DateTime         @updatedAt
   audit_log         BookingAuditLog? @relation(fields: [audit_log_id], references: [id])
   booking           Booking          @relation(fields: [booking_id], references: [id])
   company           Company          @relation(fields: [company_id], references: [id])
+  outbound_message_job OutboundMessageJob? @relation("BookingNotificationOutboxJob", fields: [outbound_message_job_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, booking_id, created_at], map: "booking_notification_company_booking_idx")
   @@index([status, next_retry_at], map: "booking_notification_status_retry_idx")
   @@index([audit_log_id], map: "booking_notification_audit_log_idx")
+  @@index([outbound_message_job_id], map: "booking_notification_outbound_job_idx")
   @@map("booking_notification_attempt")
+}
+
+model OutboundMessageBatch {
+  id                 String                 @id @default(cuid()) @db.VarChar(30)
+  company_id         Int?
+  channel            OutboundMessageChannel
+  source_type        String                 @db.VarChar(64)
+  source_id          String?                @db.VarChar(191)
+  idempotency_key    String                 @unique @db.VarChar(191)
+  created_by_user_id String?                @db.VarChar(191)
+  metadata           Json?
+  completed_at       DateTime?
+  created_at         DateTime               @default(now())
+  updated_at         DateTime               @updatedAt
+
+  company Company?             @relation(fields: [company_id], references: [id], onDelete: SetNull)
+  jobs    OutboundMessageJob[]
+
+  @@index([company_id, created_at], map: "outbound_batch_company_created_idx")
+  @@index([source_type, source_id], map: "outbound_batch_source_idx")
+  @@map("outbound_message_batch")
+}
+
+model OutboundMessageJob {
+  id                  Int                    @id @default(autoincrement())
+  company_id          Int?
+  channel             OutboundMessageChannel
+  message_type        OutboundMessageType
+  status              OutboundMessageStatus  @default(PENDING)
+  recipient           String                 @db.VarChar(255)
+  payload             Json
+  source_type         String                 @db.VarChar(64)
+  source_id           String?                @db.VarChar(191)
+  batch_id            String?                @db.VarChar(30)
+  dedupe_key          String                 @unique @db.VarChar(128)
+  attempts            Int                    @default(0)
+  max_attempts        Int                    @default(8)
+  next_attempt_at     DateTime               @default(now())
+  locked_at           DateTime?
+  lock_owner          String?                @db.VarChar(191)
+  last_error_code     String?                @db.VarChar(64)
+  last_error_message  String?                @db.VarChar(500)
+  provider_message_id String?                @db.VarChar(255)
+  expires_at          DateTime?
+  sent_at             DateTime?
+  group_ticket_id     Int?
+  created_at          DateTime               @default(now())
+  updated_at          DateTime               @updatedAt
+
+  company Company?              @relation(fields: [company_id], references: [id], onDelete: SetNull)
+  batch   OutboundMessageBatch? @relation(fields: [batch_id], references: [id], onDelete: SetNull)
+  restaurant_notification_logs RestaurantNotificationLog[] @relation("RestaurantNotificationOutboxJob")
+  booking_notification_attempts BookingNotificationAttempt[] @relation("BookingNotificationOutboxJob")
+  installment_reminder_logs InstallmentReminderLog[] @relation("InstallmentReminderOutboxJob")
+  paid_event_guest_checkout_sessions PaidEventGuestCheckoutSession[] @relation("PaidEventGuestCheckoutOtpOutboxJob")
+  group_class_guest_enrollment_sessions GroupClassGuestEnrollmentSession[] @relation("GroupClassGuestEnrollmentOtpOutboxJob")
+  commerce_guest_checkout_sessions CommerceGuestCheckoutSession[] @relation("CommerceGuestCheckoutOtpOutboxJob")
+  group_ticket GroupTicket? @relation("GroupTicketOutboxJob", fields: [group_ticket_id], references: [id], onDelete: SetNull)
+
+  @@index([status, next_attempt_at], map: "outbound_job_status_retry_idx")
+  @@index([company_id, status], map: "outbound_job_company_status_idx")
+  @@index([source_type, source_id], map: "outbound_job_source_idx")
+  @@index([batch_id], map: "outbound_job_batch_idx")
+  @@index([group_ticket_id], map: "outbound_job_group_ticket_idx")
+  @@map("outbound_message_job")
 }
 
 model BookingGroup {
@@ -1688,6 +1767,16 @@ model CommerceStore {
 
   @@index([company_id, is_active], map: "commerce_store_company_active_idx")
   @@map("commerce_store")
+}
+
+model CommerceOrderSequence {
+  company_id        Int      @id
+  next_order_number Int      @default(1)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+  company           Company  @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  @@map("commerce_order_sequence")
 }
 
 model CommerceCategory {
@@ -2388,9 +2477,12 @@ enum RestaurantNotificationChannel {
 
 enum RestaurantNotificationStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
   SKIPPED
+  EXPIRED
+  CANCELLED
 }
 
 enum RestaurantNotificationTrigger {
@@ -2426,6 +2518,24 @@ enum VerificationPurpose {
   LOGIN
   PROFILE_UPDATE
   STAFF_INVITE
+}
+
+enum OutboundMessageChannel {
+  WHATSAPP
+}
+
+enum OutboundMessageType {
+  TEXT
+  IMAGE
+}
+
+enum OutboundMessageStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  EXPIRED
+  CANCELLED
 }
 
 enum StaffProfileStatus {
@@ -2627,6 +2737,7 @@ enum CommerceFulfillmentStatus {
 enum CommerceDeliveryCostMode {
   MANUAL
   FIXED
+  FREE
 }
 
 // ─── Group Reservations ─────────────────────────────────────────────────────
@@ -2980,19 +3091,53 @@ model InstallmentReminderLog {
   recipient_phone  String?  @db.VarChar(32)
   message_subject  String?  @db.VarChar(255)
   message_body     String?  @db.Text
-  sent_at          DateTime @default(now())
+  status           String   @default("SENT") @db.VarChar(32)
+  sent_at          DateTime?
+  outbound_message_job_id Int?
 
   company       Company               @relation(fields: [company_id], references: [id], onDelete: Cascade)
   enrollment    GroupClassEnrollment  @relation(fields: [enrollment_id], references: [id], onDelete: Cascade)
   installment   EnrollmentInstallment @relation(fields: [installment_id], references: [id], onDelete: Cascade)
   sent_by_admin User?                 @relation("InstallmentReminderSentBy", fields: [sent_by_admin_id], references: [id], onDelete: SetNull)
+  outbound_message_job OutboundMessageJob? @relation("InstallmentReminderOutboxJob", fields: [outbound_message_job_id], references: [id], onDelete: SetNull)
 
-  @@index([company_id, sent_at])
-  @@index([enrollment_id, sent_at])
-  @@index([installment_id, sent_at])
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  @@index([company_id, created_at], map: "installment_reminder_log_company_created_idx")
+  @@index([enrollment_id, created_at], map: "installment_reminder_log_enrollment_created_idx")
+  @@index([installment_id, created_at], map: "installment_reminder_log_installment_created_idx")
   @@index([sent_by_admin_id])
-  @@index([channel, sent_at])
+  @@index([channel, created_at], map: "installment_reminder_log_channel_created_idx")
+  @@index([company_id, sent_at], map: "installment_reminder_log_company_id_sent_at_idx")
+  @@index([enrollment_id, sent_at], map: "installment_reminder_log_enrollment_id_sent_at_idx")
+  @@index([installment_id, sent_at], map: "installment_reminder_log_installment_id_sent_at_idx")
+  @@index([channel, sent_at], map: "installment_reminder_log_channel_sent_at_idx")
+  @@index([outbound_message_job_id], map: "installment_reminder_outbound_job_idx")
   @@map("installment_reminder_log")
+}
+
+// ─── Public upload intents ──────────────────────────────────────────────────
+
+model UploadIntent {
+  id                 Int       @id @default(autoincrement())
+  company_id         Int
+  purpose            String    @db.VarChar(64)
+  context_id         String?   @db.VarChar(191)
+  nonce              String    @unique @db.VarChar(64)
+  token_hash         String    @unique @db.Char(64)
+  max_bytes          Int
+  allowed_mime_types Json
+  expires_at         DateTime
+  consumed_at        DateTime?
+  stored_path        String?   @unique @db.VarChar(512)
+  created_at         DateTime  @default(now())
+
+  company Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+
+  @@index([company_id, purpose, context_id], map: "upload_intent_company_purpose_context_idx")
+  @@index([expires_at], map: "upload_intent_expires_at_idx")
+  @@map("upload_intent")
 }
 
 // ─── Session Attendance ─────────────────────────────────────────────────────
@@ -3056,6 +3201,7 @@ model GroupTicket {
   event_booking    GroupEventBooking?    @relation(fields: [group_event_booking_id], references: [id], onDelete: Cascade)
   class_enrollment GroupClassEnrollment? @relation(fields: [group_class_enrollment_id], references: [id], onDelete: Cascade)
   class_session    GroupClassSession?    @relation(fields: [group_class_session_id], references: [id], onDelete: SetNull)
+  outbound_message_jobs OutboundMessageJob[] @relation("GroupTicketOutboxJob")
 
   @@index([company_id])
   @@index([group_event_booking_id])
@@ -3161,6 +3307,8 @@ model PaidEventGuestCheckoutSession {
   resend_available_at      DateTime
   email_delivery_succeeded Boolean   @default(false)
   phone_delivery_succeeded Boolean   @default(false)
+  phone_delivery_status    String    @default("PENDING") @db.VarChar(32)
+  phone_delivery_job_id    Int?
   delivery_attempted_at    DateTime?
   consumed_at              DateTime?
   created_at               DateTime  @default(now())
@@ -3169,11 +3317,13 @@ model PaidEventGuestCheckoutSession {
   company     Company    @relation(fields: [company_id], references: [id], onDelete: Cascade)
   group_event GroupEvent @relation(fields: [group_event_id], references: [id], onDelete: Cascade)
   user        User?      @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+  phone_delivery_job OutboundMessageJob? @relation("PaidEventGuestCheckoutOtpOutboxJob", fields: [phone_delivery_job_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, group_event_id, consumed_at], map: "pegcs_company_event_consumed_idx")
   @@index([email, phone_number], map: "pegcs_email_phone_idx")
   @@index([resolved_user_id], map: "pegcs_user_idx")
   @@index([otp_expires_at], map: "pegcs_otp_expires_idx")
+  @@index([phone_delivery_job_id], map: "pegcs_phone_delivery_job_idx")
   @@map("paid_event_guest_checkout_session")
 }
 
@@ -3198,6 +3348,8 @@ model GroupClassGuestEnrollmentSession {
   resend_available_at      DateTime
   email_delivery_succeeded Boolean   @default(false)
   phone_delivery_succeeded Boolean   @default(false)
+  phone_delivery_status    String    @default("PENDING") @db.VarChar(32)
+  phone_delivery_job_id    Int?
   delivery_attempted_at    DateTime?
   consumed_at              DateTime?
   created_at               DateTime  @default(now())
@@ -3207,12 +3359,14 @@ model GroupClassGuestEnrollmentSession {
   group_class   GroupClass         @relation(fields: [group_class_id], references: [id], onDelete: Cascade)
   group_session GroupClassSession? @relation(fields: [group_class_session_id], references: [id], onDelete: Cascade)
   user          User?              @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+  phone_delivery_job OutboundMessageJob? @relation("GroupClassGuestEnrollmentOtpOutboxJob", fields: [phone_delivery_job_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, group_class_id, consumed_at], map: "gcges_company_class_consumed_idx")
   @@index([company_id, group_class_session_id, consumed_at], map: "gcges_company_session_consumed_idx")
   @@index([email, phone_number], map: "gcges_email_phone_idx")
   @@index([resolved_user_id], map: "gcges_user_idx")
   @@index([otp_expires_at], map: "gcges_otp_expires_idx")
+  @@index([phone_delivery_job_id], map: "gcges_phone_delivery_job_idx")
   @@map("group_class_guest_enrollment_session")
 }
 
@@ -3259,6 +3413,8 @@ model CommerceGuestCheckoutSession {
   resend_available_at      DateTime
   email_delivery_succeeded Boolean   @default(false)
   phone_delivery_succeeded Boolean   @default(false)
+  phone_delivery_status    String    @default("PENDING") @db.VarChar(32)
+  phone_delivery_job_id    Int?
   delivery_attempted_at    DateTime?
   consumed_at              DateTime?
   created_at               DateTime  @default(now())
@@ -3267,11 +3423,13 @@ model CommerceGuestCheckoutSession {
   company Company       @relation(fields: [company_id], references: [id], onDelete: Cascade)
   store   CommerceStore @relation(fields: [store_id], references: [id], onDelete: Cascade)
   user    User?         @relation(fields: [resolved_user_id], references: [id], onDelete: SetNull)
+  phone_delivery_job OutboundMessageJob? @relation("CommerceGuestCheckoutOtpOutboxJob", fields: [phone_delivery_job_id], references: [id], onDelete: SetNull)
 
   @@index([company_id, store_id, consumed_at], map: "cgcs_company_store_consumed_idx")
   @@index([email, phone_number], map: "cgcs_email_phone_idx")
   @@index([resolved_user_id], map: "cgcs_user_idx")
   @@index([otp_expires_at], map: "cgcs_otp_expires_idx")
+  @@index([phone_delivery_job_id], map: "cgcs_phone_delivery_job_idx")
   @@map("commerce_guest_checkout_session")
 }
 

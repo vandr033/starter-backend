@@ -63,7 +63,7 @@ export async function getEnrollmentInstallmentPlan(params: {
                         select: { id: true, name: true, email: true },
                     },
                     reminder_logs: {
-                        orderBy: { sent_at: 'desc' },
+                        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
                         take: 5,
                         select: {
                             id: true,
@@ -72,7 +72,10 @@ export async function getEnrollmentInstallmentPlan(params: {
                             recipient_phone: true,
                             message_subject: true,
                             message_body: true,
+                            status: true,
                             sent_at: true,
+                            created_at: true,
+                            outbound_message_job_id: true,
                             sent_by_admin_id: true,
                             sent_by_admin: {
                                 select: { id: true, name: true, email: true },
@@ -120,7 +123,7 @@ export async function listFullCoursePaymentPlansForUser(userId: string) {
                         select: { id: true, name: true, email: true },
                     },
                     reminder_logs: {
-                        orderBy: { sent_at: 'desc' },
+                        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
                         take: 5,
                         select: {
                             id: true,
@@ -129,7 +132,10 @@ export async function listFullCoursePaymentPlansForUser(userId: string) {
                             recipient_phone: true,
                             message_subject: true,
                             message_body: true,
+                            status: true,
                             sent_at: true,
+                            created_at: true,
+                            outbound_message_job_id: true,
                             sent_by_admin_id: true,
                             sent_by_admin: {
                                 select: { id: true, name: true, email: true },
@@ -209,7 +215,7 @@ export async function listCompanyGroupPaymentSourceData(companyId: number) {
                             select: { id: true, name: true, email: true },
                         },
                         reminder_logs: {
-                            orderBy: { sent_at: 'desc' },
+                            orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
                             take: 5,
                             select: {
                                 id: true,
@@ -218,7 +224,10 @@ export async function listCompanyGroupPaymentSourceData(companyId: number) {
                                 recipient_phone: true,
                                 message_subject: true,
                                 message_body: true,
+                                status: true,
                                 sent_at: true,
+                                created_at: true,
+                                outbound_message_job_id: true,
                                 sent_by_admin_id: true,
                                 sent_by_admin: {
                                     select: { id: true, name: true, email: true },
@@ -275,7 +284,7 @@ export async function getInstallmentReminderTarget(companyId: number, installmen
                 },
             },
             reminder_logs: {
-                orderBy: { sent_at: 'desc' },
+                orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
                 take: 20,
                 select: {
                     id: true,
@@ -284,7 +293,10 @@ export async function getInstallmentReminderTarget(companyId: number, installmen
                     recipient_phone: true,
                     message_subject: true,
                     message_body: true,
+                    status: true,
                     sent_at: true,
+                    created_at: true,
+                    outbound_message_job_id: true,
                     sent_by_admin_id: true,
                     sent_by_admin: {
                         select: { id: true, name: true, email: true },
@@ -301,7 +313,7 @@ export async function getLatestReminderLog(installmentId: number, channel: strin
             installment_id: installmentId,
             channel,
         },
-        orderBy: { sent_at: 'desc' },
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
     });
 }
 
@@ -315,6 +327,9 @@ export async function createReminderLog(data: {
     recipient_phone?: string | null;
     message_subject?: string | null;
     message_body?: string | null;
+    status?: string;
+    sent_at?: Date | null;
+    outbound_message_job_id?: number | null;
 }) {
     return prisma.installmentReminderLog.create({
         data: {
@@ -327,12 +342,26 @@ export async function createReminderLog(data: {
             recipient_phone: data.recipient_phone ?? null,
             message_subject: data.message_subject ?? null,
             message_body: data.message_body ?? null,
+            status: data.status ?? 'SENT',
+            sent_at: data.sent_at ?? (data.status === 'SENT' || data.status === undefined ? new Date() : null),
+            outbound_message_job_id: data.outbound_message_job_id ?? null,
         },
         include: {
             sent_by_admin: {
                 select: { id: true, name: true, email: true },
             },
         },
+    });
+}
+
+export async function updateReminderLogStatus(
+    companyId: number,
+    logId: number,
+    data: { status: string; sent_at?: Date | null },
+) {
+    return prisma.installmentReminderLog.updateMany({
+        where: { id: logId, company_id: companyId },
+        data,
     });
 }
 
@@ -347,7 +376,7 @@ export async function listReminderLogs(companyId: number, installmentId: number)
                 select: { id: true, name: true, email: true },
             },
         },
-        orderBy: { sent_at: 'desc' },
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
     });
 }
 
@@ -396,7 +425,7 @@ export async function listInstallmentsEligibleForReminders(params: {
                 },
             },
             reminder_logs: {
-                orderBy: { sent_at: 'desc' },
+                orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
                 take: 20,
                 select: {
                     id: true,
@@ -405,7 +434,10 @@ export async function listInstallmentsEligibleForReminders(params: {
                     recipient_phone: true,
                     message_subject: true,
                     message_body: true,
+                    status: true,
                     sent_at: true,
+                    created_at: true,
+                    outbound_message_job_id: true,
                     sent_by_admin_id: true,
                 },
             },

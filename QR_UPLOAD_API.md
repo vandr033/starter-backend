@@ -1,293 +1,131 @@
-# QR Code Upload API
+# Public proof upload API
 
-## Upload QR Code
+Public proof uploads use a short-lived server-issued upload intent. The caller
+never selects the storage tenant with `company_id`.
 
-### Endpoint
+## 1. Issue an intent
+
+```http
+POST /api/upload/intents/:shopSlug
+Content-Type: application/json
 ```
-POST /api/upload/qr
-```
 
-### Description
-Upload a QR code payment proof image for bookings. This endpoint is public and does not require authentication.
+Example for a public booking (the optional `id` is a browser-generated flow
+context used when a guest may resume after sign-in):
 
-### Request
-- **Method**: POST
-- **Content-Type**: multipart/form-data
-- **Body**: FormData with:
-  - `image` (file): The QR code image file
-  - `company_id` (number): The company ID for organizing uploads
-
-### File Requirements
-- **Types**: JPEG, JPG, PNG, WebP
-- **Maximum Size**: 5MB
-- **Naming**: Automatic (format: qr-{timestamp}-{random}.{extension})
-
-### Response
 ```json
 {
-  "code": 200,
+  "purpose": "BOOKING_QR_PROOF",
+  "context": { "type": "BOOKING", "id": "guest-flow-0123456789" }
+}
+```
+
+The server resolves and validates the shop from `:shopSlug`, fixes the purpose
+and context, and returns:
+
+```json
+{
+  "code": 201,
   "error": false,
-  "message": "QR code uploaded successfully",
   "data": {
-    "url": "/api/storage/uploads/1/qr/qr-1640995200000-abc123.jpg",
-    "filename": "qr-1640995200000-abc123.jpg",
-    "size": 245760,
-    "mimetype": "image/jpeg"
+    "uploadIntent": "upi1....",
+    "expiresAt": "2026-09-05T12:10:00.000Z",
+    "maxBytes": 5242880,
+    "allowedMimeTypes": ["image/jpeg", "image/png", "image/webp", "application/pdf"],
+    "purpose": "BOOKING_QR_PROOF",
+    "contextId": "BOOKING:guest-flow-0123456789"
   }
 }
 ```
 
-### Error Responses
+Supported purposes are `BOOKING_QR_PROOF`, `ORDER_PAYMENT_PROOF`,
+`RESTAURANT_DEPOSIT_PROOF`, and `GROUP_PAYMENT_PROOF`. Context validation also
+checks the related published event/class, unpaid installment, active deposit,
+or authorized order where applicable. Intents are one-time and replay
+protected in the database.
 
-#### 400 Bad Request
+## 2. Upload with the intent
+
+```http
+POST /api/upload/qr
+Content-Type: multipart/form-data
+```
+
+Multipart fields:
+
+- `image`: the proof file;
+- `uploadIntent`: the complete intent returned in step 1.
+
+The server verifies the signed tenant, purpose, context, expiry, nonce, file
+size, declared MIME type, filename, and file signature. JPEG, PNG, WebP, and
+PDF files up to 5 MB are accepted. `company_id` is ignored for attribution and
+must not be used by clients.
+
+Successful response:
+
 ```json
 {
-  "code": 400,
-  "error": true,
-  "message": "No file uploaded"
-}
-```
-
-```json
-{
-  "code": 400,
-  "error": true,
-  "message": "Invalid file type. Only JPEG, PNG, and WebP images are allowed"
-}
-```
-
-```json
-{
-  "code": 400,
-  "error": true,
-  "message": "File too large. Maximum size is 5MB"
-}
-```
-
-## Delete QR Code
-
-### Endpoint
-```
-DELETE /api/upload/qr
-```
-
-### Description
-Delete a previously uploaded QR code image.
-
-### Request Body
-```json
-{
-  "url": "/api/storage/uploads/1/qr/qr-1640995200000-abc123.jpg"
-}
-```
-
-### Response
-```json
-{
-  "code": 200,
+  "code": 201,
   "error": false,
-  "message": "QR code deleted successfully"
+  "data": {
+    "url": "/api/storage/uploads/1/qr/qr-...png",
+    "deleteToken": "sdt1....",
+    "filename": "qr-...png",
+    "size": 245760,
+    "mimetype": "image/png",
+    "purpose": "BOOKING_QR_PROOF",
+    "contextId": "BOOKING:guest-flow-0123456789"
+  }
 }
 ```
 
-## Usage in Booking
+## 3. Use the stored URL
 
-### Step 1: Upload QR Code
-```javascript
-const uploadQR = async (file, companyId) => {
-  const formData = new FormData();
-  formData.append('image', file);
-  formData.append('company_id', companyId);
+Pass the returned `url` as `qr_proof_image_url` to the appropriate booking,
+group, or order endpoint. The business write re-checks the stored upload's
+tenant, purpose, context, and file existence before persisting the path.
 
-  const response = await fetch('/api/upload/qr', {
-    method: 'POST',
-    body: formData,
-  });
+## Controlled errors
 
-  const result = await response.json();
-  if (!result.error) {
-    return result.data.url; // Returns the QR image URL
-  }
-  throw new Error(result.message);
-};
-```
+Expected upload failures return a structured 4xx response:
 
-### Step 2: Create Booking with QR URL
-```javascript
-const createBooking = async (qrUrl) => {
-  const response = await fetch('/api/booking/public', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      company_id: 1,
-      staff_id: 1,
-      service_ids: [1],
-      start_at: '2024-01-15T10:00:00.000Z',
-      payment_method: 'QR',
-      qr_proof_image_url: qrUrl, // Include the uploaded QR URL
-      client_name: 'John Doe',
-      client_email: 'john@example.com',
-      client_phone_number: '71234567',
-    }),
-  });
-
-  return await response.json();
-};
-```
-
-### Complete Example
-```javascript
-// Handle QR upload and booking
-const handleQRBooking = async (file) => {
-  try {
-    // Step 1: Upload QR code
-    const qrUrl = await uploadQR(file, 1);
-    
-    // Step 2: Create booking with QR URL
-    const booking = await createBooking(qrUrl);
-    
-    console.log('Booking created:', booking);
-    
-    // If booking fails, you might want to delete the uploaded QR
-    if (booking.error) {
-      await deleteQR(qrUrl);
-    }
-  } catch (error) {
-    console.error('Booking failed:', error);
-  }
-};
-
-// Delete QR if needed
-const deleteQR = async (url) => {
-  await fetch('/api/upload/qr', {
-    method: 'DELETE',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ url }),
-  });
-};
-```
-
-## React Component Example
-
-```jsx
-import React, { useState } from 'react';
-
-function QRBookingForm() {
-  const [qrFile, setQrFile] = useState(null);
-  const [qrUrl, setQrUrl] = useState('');
-  const [uploading, setUploading] = useState(false);
-
-  const handleQRUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setUploading(true);
-    
-    try {
-      const formData = new FormData();
-      formData.append('image', file);
-      formData.append('company_id', '1');
-
-      const response = await fetch('/api/upload/qr', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const result = await response.json();
-      
-      if (!result.error) {
-        setQrUrl(result.data.url);
-        setQrFile(file);
-      } else {
-        alert(result.message);
-      }
-    } catch (error) {
-      alert('Upload failed');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    if (!qrUrl) {
-      alert('Please upload QR code first');
-      return;
-    }
-
-    // Create booking with QR URL
-    const bookingData = {
-      company_id: 1,
-      staff_id: 1,
-      service_ids: [1],
-      start_at: '2024-01-15T10:00:00.000Z',
-      payment_method: 'QR',
-      qr_proof_image_url: qrUrl,
-      // ... other fields
-    };
-
-    const response = await fetch('/api/booking/public', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(bookingData),
-    });
-
-    const result = await response.json();
-    console.log('Booking result:', result);
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div>
-        <label>Upload QR Payment Proof:</label>
-        <input
-          type="file"
-          accept="image/*"
-          onChange={handleQRUpload}
-          disabled={uploading}
-        />
-        {uploading && <p>Uploading...</p>}
-        {qrUrl && (
-          <div>
-            <img src={qrUrl} alt="QR Code" style={{ maxWidth: '200px' }} />
-            <p>QR uploaded successfully</p>
-          </div>
-        )}
-      </div>
-      
-      <button type="submit" disabled={!qrUrl}>
-        Create Booking
-      </button>
-    </form>
-  );
+```json
+{
+  "code": 415,
+  "error": true,
+  "errorCode": "UPLOAD_SIGNATURE_INVALID",
+  "reason": "UPLOAD_SIGNATURE_INVALID",
+  "message": "..."
 }
 ```
 
-## Security Considerations
+Codes include `UPLOAD_TOO_LARGE`, `UPLOAD_TYPE_NOT_ALLOWED`,
+`UPLOAD_SIGNATURE_INVALID`, `UPLOAD_INTENT_INVALID`, `UPLOAD_INTENT_EXPIRED`,
+`UPLOAD_INTENT_REPLAYED`, `UPLOAD_FILE_REQUIRED`, `UPLOAD_FILENAME_INVALID`,
+`UPLOAD_MULTIPART_INVALID`, and `UPLOAD_RATE_LIMITED`.
 
-1. **File Type Validation**: Only image files are accepted
-2. **Size Limits**: Maximum file size of 5MB
-3. **Path Validation**: Files are stored in organized directory structure
-4. **URL Format**: QR URLs follow a predictable pattern for validation
+## Delete an unreferenced upload
 
-## File Storage
+```http
+DELETE /api/upload/qr
+Content-Type: application/json
+```
 
-- QR codes are stored in: `uploads/{company_id}/qr/`
-- URLs are served via: `/api/storage/uploads/{company_id}/qr/{filename}`
-- Automatic cleanup can be implemented based on booking status
+```json
+{
+  "url": "/api/storage/uploads/1/qr/qr-...png",
+  "deleteToken": "sdt1...."
+}
+```
 
-## Booking Details
+The delete token is signed and path-bound. Deletion is rejected if the token
+is forged, expired, mismatched, or the upload is already referenced by a
+booking/order/group record. `/api/upload/file` applies the same contract for
+commerce payment proofs.
 
-The QR proof URL is now included in:
-- Admin booking list endpoints
-- Individual booking details
-- Public booking confirmation (if implemented)
+## Client flow
 
-This allows staff to view and verify QR payment proofs for bookings.
+Use the shared frontend helper `app/shop/lib/uploadApi.ts` (or reproduce the
+two requests above). Do not construct a public upload request with a caller-
+selected `company_id`, and do not expose raw backend error text to users;
+localize the returned error code.

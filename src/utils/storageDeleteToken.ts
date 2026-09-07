@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 const STORAGE_DELETE_TOKEN_VERSION = 1;
 const STORAGE_DELETE_TOKEN_PREFIX = 'sdt1';
+const DEFAULT_STORAGE_DELETE_TOKEN_TTL_SECONDS = 60 * 60;
 
 type StorageDeleteTokenPayload = {
     v: number;
@@ -9,6 +10,14 @@ type StorageDeleteTokenPayload = {
     iat: number;
     nonce: string;
 };
+
+let developmentSecret: string | null = null;
+
+function getStorageDeleteTokenTtlMs(): number {
+    const parsed = Number.parseInt(process.env.STORAGE_DELETE_TOKEN_TTL_SECONDS || '', 10);
+    const seconds = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_STORAGE_DELETE_TOKEN_TTL_SECONDS;
+    return seconds * 1000;
+}
 
 function getStorageDeleteTokenSecret(): string {
     const configuredSecret = [
@@ -29,7 +38,8 @@ function getStorageDeleteTokenSecret(): string {
         throw new Error('STORAGE_DELETE_TOKEN_SECRET (or auth secret) must be configured in production');
     }
 
-    return 'dev-storage-delete-token-secret-change-me';
+    developmentSecret ??= randomBytes(32).toString('hex');
+    return developmentSecret;
 }
 
 function base64UrlEncode(input: string | Buffer): string {
@@ -96,7 +106,10 @@ export function verifyStorageDeleteToken(token: string, relativePath: string): b
         return (
             payload.v === STORAGE_DELETE_TOKEN_VERSION &&
             typeof payload.p === 'string' &&
-            payload.p === relativePath
+            payload.p === relativePath &&
+            typeof payload.iat === 'number' &&
+            payload.iat > Date.now() - getStorageDeleteTokenTtlMs() &&
+            payload.iat <= Date.now() + 60_000
         );
     } catch {
         return false;

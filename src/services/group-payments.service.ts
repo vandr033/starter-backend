@@ -4,8 +4,9 @@ import { buildCustomerKey } from '../repositories/customer.repo';
 import * as GroupPaymentsRepo from '../repositories/group-payments.repo';
 import { MensajeApi } from '../types/MensajeApi';
 import { sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
 import { companyHasCapability } from './company-entitlements.service';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
 
 type ServiceResult = MensajeApi & { data?: any };
 type ReminderChannel = 'WHATSAPP' | 'EMAIL';
@@ -13,7 +14,6 @@ type DerivedInstallmentStatus = PaymentStatus | 'OVERDUE';
 type PaymentRowType = 'EVENT_PAYMENT' | 'CLASS_PAYMENT' | 'INSTALLMENT';
 
 const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const WHATSAPP_MIN_INTERVAL_MS = 350;
 
 async function canSendInstallmentReminders(companyId: number): Promise<boolean> {
     const [hasClassesPro, hasMessagingPro] = await Promise.all([
@@ -22,10 +22,6 @@ async function canSendInstallmentReminders(companyId: number): Promise<boolean> 
     ]);
 
     return hasClassesPro && hasMessagingPro;
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function startOfToday(): Date {
@@ -176,6 +172,8 @@ function serializeInstallment(installment: any) {
         is_overdue: derivedStatus === 'OVERDUE',
         last_reminder_at: latestReminder?.sent_at ?? null,
         last_reminder_channel: latestReminder?.channel ?? null,
+        last_reminder_status: latestReminder?.status ?? null,
+        last_reminder_queued_at: latestReminder?.created_at ?? null,
         reminder_logs: installment.reminder_logs ?? [],
     };
 }
@@ -720,7 +718,9 @@ export async function sendInstallmentReminder(
     }
 
     const latestLog = await GroupPaymentsRepo.getLatestReminderLog(installment.id, channel);
-    if (latestLog && Date.now() - latestLog.sent_at.getTime() < REMINDER_COOLDOWN_MS) {
+    const latestLogIsActive = latestLog && ['PENDING', 'PROCESSING', 'SENT'].includes(latestLog.status);
+    const latestLogAt = latestLog?.sent_at?.getTime() ?? latestLog?.created_at.getTime();
+    if (latestLogIsActive && latestLogAt && Date.now() - latestLogAt < REMINDER_COOLDOWN_MS) {
         return { code: 429, error: true, message: 'A reminder was already sent in the last 24 hours' };
     }
 
@@ -739,14 +739,56 @@ export async function sendInstallmentReminder(
         isOverdue: getInstallmentDerivedStatus(installment) === 'OVERDUE',
     });
 
+    let queuedLogId: number | null = null;
+    let queueResult: { jobId?: number } | null = null;
+    let queueAccepted = false;
     try {
         if (channel === 'WHATSAPP') {
-            const result = await sendWhatsappText(recipientPhone!, reminderCopy.text, { companyId });
-            if (result === -1) {
+            const pendingLog = await GroupPaymentsRepo.createReminderLog({
+                company_id: companyId,
+                enrollment_id: installment.enrollment_id,
+                installment_id: installment.id,
+                sent_by_admin_id: adminUserId,
+                channel,
+                recipient_email: recipientEmail,
+                recipient_phone: recipientPhone,
+                message_subject: reminderCopy.subject,
+                message_body: reminderCopy.text,
+                status: 'PENDING',
+                sent_at: null,
+            });
+            queuedLogId = pendingLog.id;
+            const reminderWindow = Math.floor(Date.now() / REMINDER_COOLDOWN_MS);
+            const result = await queueWhatsappText(recipientPhone!, reminderCopy.text, {
+                companyId,
+                sourceType: 'INSTALLMENT_REMINDER',
+                sourceId: String(installment.id),
+                dedupeKey: `installment-reminder:${installment.id}:${reminderWindow}`,
+                installmentReminderLogId: pendingLog.id,
+            });
+            queueResult = result;
+            if (!isWhatsappEnqueueAccepted(result)) {
                 throw new Error('WhatsApp reminder delivery failed');
             }
+            queueAccepted = true;
+
+            const log = await GroupPaymentsRepo.getLatestReminderLog(installment.id, channel);
+            return {
+                code: 200,
+                error: false,
+                message: 'Reminder queued',
+                data: {
+                    channel,
+                    status: log?.status ?? 'PENDING',
+                    job_id: result.jobId ?? null,
+                    log,
+                },
+            };
         } else {
-            await sendGenericEmail(recipientEmail!, reminderCopy.subject, reminderCopy.html, { companyId });
+            const result = await sendGenericEmail(recipientEmail!, reminderCopy.subject, reminderCopy.html, { companyId });
+            if (!isEmailDeliverySuccessful(result)) {
+                throw new Error(`Email reminder delivery failed: ${result.reason}`);
+            }
         }
 
         const log = await GroupPaymentsRepo.createReminderLog({
@@ -759,6 +801,8 @@ export async function sendInstallmentReminder(
             recipient_phone: recipientPhone,
             message_subject: reminderCopy.subject,
             message_body: reminderCopy.text,
+            status: 'SENT',
+            sent_at: new Date(),
         });
 
         return {
@@ -771,6 +815,12 @@ export async function sendInstallmentReminder(
             },
         };
     } catch (error) {
+        // Once a job exists, its repository/worker owns the lifecycle. Do not
+        // turn a queued job into FAILED merely because a response read failed
+        // or because a duplicate job is already terminal.
+        if (queuedLogId !== null && !queueAccepted && !queueResult?.jobId) {
+            await GroupPaymentsRepo.updateReminderLogStatus(companyId, queuedLogId, { status: 'FAILED', sent_at: null });
+        }
         logger.error({ companyId, installmentId, adminUserId, error }, 'Failed to send installment reminder');
         return {
             code: 502,
@@ -827,9 +877,10 @@ export async function bulkSendInstallmentReminders(
     }
 
     let sent = 0;
+    let queued = 0;
     let skipped = 0;
     let failed = 0;
-    const results: Array<{ installment_id: number; status: 'sent' | 'skipped' | 'failed'; message: string }> = [];
+    const results: Array<{ installment_id: number; status: 'sent' | 'queued' | 'skipped' | 'failed'; message: string }> = [];
 
     for (const candidate of candidates) {
         const result = await sendInstallmentReminder(companyId, candidate.id, adminUserId);
@@ -841,10 +892,12 @@ export async function bulkSendInstallmentReminders(
                 failed += 1;
                 results.push({ installment_id: candidate.id, status: 'failed', message: result.message });
             }
+        } else if (result.data?.status === 'PENDING' || result.data?.status === 'PROCESSING') {
+            queued += 1;
+            results.push({ installment_id: candidate.id, status: 'queued', message: result.message });
         } else {
             sent += 1;
             results.push({ installment_id: candidate.id, status: 'sent', message: result.message });
-            await sleep(WHATSAPP_MIN_INTERVAL_MS);
         }
     }
 
@@ -855,6 +908,7 @@ export async function bulkSendInstallmentReminders(
         data: {
             total: candidates.length,
             sent,
+            queued,
             skipped,
             failed,
             results,

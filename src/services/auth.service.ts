@@ -11,10 +11,14 @@ import {
 import { VerificationChannel, VerificationPurpose } from "../types/verification-enums";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { sendWhatsappCode } from "../utils/whatsappSender";
+import { getWhatsappEnqueueLifecycleStatus, isWhatsappEnqueueAccepted, queueWhatsappCode } from "../utils/whatsappSender";
 import { canonicalizePhoneParts } from "../utils/phoneNormalization";
 import { sendEmailCode } from "../utils/sendEmail";
 import { getAuth } from "../config/auth";
+import {
+  BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+  BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from "../config/auth-constants";
 import { prisma } from "../prisma/client";
 import { logger } from "../config/logger";
 
@@ -89,7 +93,7 @@ async function signInExistingEmailUser(
   const credentialAccount = await prisma.account.findFirst({
     where: {
       userId: user.id,
-      providerId: { in: ["credential", "credentials"] },
+      providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
     },
     orderBy: {
       createdAt: "asc",
@@ -100,7 +104,7 @@ async function signInExistingEmailUser(
     await prisma.account.update({
       where: { id: credentialAccount.id },
       data: {
-        providerId: "credential",
+        providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
         accountId: user.email,
         password: hashedPassword,
       },
@@ -109,7 +113,7 @@ async function signInExistingEmailUser(
     await prisma.account.create({
       data: {
         userId: user.id,
-        providerId: "credential",
+        providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
         accountId: user.email,
         password: hashedPassword,
       },
@@ -449,7 +453,7 @@ export async function sendVerificationCodePhone(
     const code_hash = await bcrypt.hash(code, 10);
     const expires_at = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
 
-    await VerificationRepo.createVerification({
+    const verification = await VerificationRepo.createVerification({
       channel: VerificationChannel.WHATSAPP,
       purpose: VerificationPurpose.CUSTOMER_SIGNUP,
       identifier: normalizedPhone,
@@ -458,15 +462,28 @@ export async function sendVerificationCodePhone(
     });
 
     // Send code via WhatsApp
-    const result = await sendWhatsappCode(normalizedPhone, code);
-    if (result === -1) {
+    const result = await queueWhatsappCode(normalizedPhone, code, {
+      sourceType: 'AUTH_SIGNUP_OTP',
+      sourceId: String(verification.id),
+      expiresAt: expires_at,
+    });
+    if (!isWhatsappEnqueueAccepted(result)) {
       throw new Error("Error al enviar el codigo de verificacion");
     }
 
+    const deliveryStatus = getWhatsappEnqueueLifecycleStatus(result);
+
     mensaje = {
       code: 200,
-      message: "Codigo de verificacion enviado",
+      message: deliveryStatus === 'SENT'
+        ? "Codigo de verificacion ya enviado"
+        : "Codigo de verificacion en cola",
       error: false,
+      data: {
+        status: deliveryStatus,
+        queued: deliveryStatus === 'PENDING' || deliveryStatus === 'PROCESSING',
+        job_id: result.jobId ?? null,
+      },
     };
   } catch (error: any) {
     mensaje = {
@@ -704,8 +721,12 @@ export async function sendLoginOtpPhone(params: {
 
     return {
       code: 200,
-      message: "Código de verificación enviado por WhatsApp",
+      message: "Código de verificación en proceso de entrega por WhatsApp",
       error: false,
+      data: {
+        status: 'PENDING',
+        queued: true,
+      },
     };
   } catch (error: any) {
     return {

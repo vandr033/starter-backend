@@ -3,20 +3,14 @@ import multer from 'multer';
 import { prisma } from '../prisma/client';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import { StorageService } from '../services/storage.service';
+import { sendUploadError, uploadErrorCode } from '../utils/upload-errors';
+import { validateUploadFile } from '../utils/upload-validation';
 
 // Configure multer for memory storage
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only JPEG, PNG, WebP, and GIF images are allowed.'));
-    }
   },
 });
 
@@ -97,6 +91,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       'about_1',
       'about_2',
       'about_3',
+      'company_qr',
       'commerce_store_qr',
       'restaurant_deposit_qr',
       'commerce_category',
@@ -144,15 +139,11 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
-    // Get file extension
-    const fileExtension = req.file.originalname.split('.').pop()?.toLowerCase();
-    if (!fileExtension) {
-      return res.status(400).json({
-        code: 400,
-        error: true,
-        message: 'Invalid file extension',
-      });
-    }
+    const validated = validateUploadFile(req.file, {
+      maxBytes: 5 * 1024 * 1024,
+      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+    });
+    const fileExtension = validated.extension;
 
     let previousImageUrl: string | null = null;
     if (type === 'group_event_cover' || type === 'group_event_thumbnail') {
@@ -181,6 +172,12 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         });
       }
       previousImageUrl = type === 'group_class_cover' ? currentRecord.cover_image_url : currentRecord.thumbnail_url;
+    } else if (type === 'company_qr') {
+      const currentRecord = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { qr_image_url: true },
+      });
+      previousImageUrl = currentRecord?.qr_image_url ?? null;
     } else if (type === 'commerce_store_qr') {
       const currentRecord = await prisma.commerceStore.findUnique({
         where: { company_id: companyId },
@@ -247,6 +244,11 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
         const imageNumber = type.split('_')[1];
         filename = `image${imageNumber}.${fileExtension}`;
         imageUrlField = `about_image_${imageNumber}_url`;
+        break;
+      case 'company_qr':
+        storageType = 'qr';
+        filename = buildVersionedCommerceFilename('company-qr', fileExtension);
+        imageUrlField = 'qr_image_url';
         break;
       case 'commerce_store_qr':
         storageType = 'commerce-store';
@@ -327,6 +329,12 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
           message: 'Staff profile not found',
         });
       }
+    } else if (type === 'company_qr') {
+      await prisma.companySettings.upsert({
+        where: { company_id: companyId },
+        create: { company_id: companyId, qr_image_url: url },
+        update: { qr_image_url: url },
+      });
     } else if (type === 'commerce_store_qr') {
       await prisma.commerceStore.upsert({
         where: { company_id: companyId },
@@ -447,6 +455,7 @@ export const uploadImage = async (req: AuthenticatedRequest, res: Response) => {
       },
     });
   } catch (error) {
+    if (uploadErrorCode(error)) return sendUploadError(res, error);
     console.error('Error uploading image:', error);
     res.status(500).json({
       code: 500,
@@ -483,6 +492,7 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       'about_1',
       'about_2',
       'about_3',
+      'company_qr',
       'commerce_store_qr',
       'commerce_category',
       'staff',
@@ -534,6 +544,7 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       | 'about'
       | 'staff'
       | 'gallery'
+      | 'qr'
       | 'commerce-store'
       | 'commerce-categories'
       | 'group-events'
@@ -588,6 +599,11 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
           message: 'Group class not found',
         });
       }
+    } else if (type === 'company_qr') {
+      currentRecord = await prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { qr_image_url: true },
+      });
     } else if (type === 'commerce_store_qr') {
       currentRecord = await prisma.commerceStore.findUnique({
         where: { company_id: companyId },
@@ -662,6 +678,11 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
         storageType = 'about';
         imageUrlField = 'about_image_3_url';
         break;
+      case 'company_qr':
+        currentImageUrl = currentRecord?.qr_image_url ?? null;
+        storageType = 'qr';
+        imageUrlField = 'qr_image_url';
+        break;
       case 'commerce_store_qr':
         currentImageUrl = currentRecord?.qr_image_url ?? null;
         storageType = 'commerce-store';
@@ -724,6 +745,11 @@ export const deleteImage = async (req: AuthenticatedRequest, res: Response) => {
       await prisma.staffProfile.update({
         where: { id: numericEntityId! },
         data: { image_url: null },
+      });
+    } else if (type === 'company_qr') {
+      await prisma.companySettings.updateMany({
+        where: { company_id: companyId },
+        data: { qr_image_url: null },
       });
     } else if (type === 'commerce_store_qr') {
       await prisma.commerceStore.updateMany({

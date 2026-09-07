@@ -8,13 +8,14 @@ import { logger } from '../config/logger';
 import { prisma } from '../prisma/client';
 import { restaurantNotificationLogRepo } from '../repositories/restaurant-notification-log.repo';
 import { sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
 import { renderRestaurantReservationMessage, type RestaurantNotificationChanges } from './restaurant-notification-template.service';
 
 export type RestaurantDeliveryResult = {
   channel: 'EMAIL' | 'WHATSAPP';
-  status: 'SENT' | 'FAILED' | 'SKIPPED';
+  status: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'SKIPPED' | 'EXPIRED' | 'CANCELLED';
   providerId?: string;
+  jobId?: number;
   reason?: string;
 };
 
@@ -65,18 +66,54 @@ function providerId(value: unknown): string | undefined {
   const candidate = (value as any)?.data?.id ?? (value as any)?.data?.messageId ?? (value as any)?.data?.key?.id;
   return typeof candidate === 'string' ? candidate.slice(0, 255) : undefined;
 }
+
+function mapOutboxStatusToRestaurantStatus(status: string | undefined): RestaurantDeliveryResult['status'] {
+  if (status === 'PROCESSING') return 'PROCESSING';
+  if (status === 'SENT') return 'SENT';
+  if (status === 'FAILED') return 'FAILED';
+  if (status === 'EXPIRED') return 'EXPIRED';
+  if (status === 'CANCELLED') return 'CANCELLED';
+  return 'PENDING';
+}
+
+export function mapWhatsappEnqueueToRestaurantDelivery(response: unknown): Pick<RestaurantDeliveryResult, 'status' | 'reason' | 'providerId' | 'jobId'> {
+  if (!response || typeof response !== 'object') {
+    return { status: 'FAILED', reason: 'WHATSAPP_TRANSPORT_FAILED' };
+  }
+  const result = response as { accepted?: boolean; status?: string; reason?: string; jobId?: number; existingStatus?: string };
+  const jobLink = typeof result.jobId === 'number' ? { jobId: result.jobId } : {};
+  const duplicateReason = result.status === 'DUPLICATE'
+    ? `DUPLICATE_${result.existingStatus ?? 'PENDING'}`
+    : null;
+  if (result.status === 'SKIPPED') {
+    return { status: 'SKIPPED', reason: result.reason || 'PROVIDER_DISABLED' };
+  }
+  if (!isWhatsappEnqueueAccepted(response)) {
+    return {
+      status: result.status === 'DUPLICATE' ? mapOutboxStatusToRestaurantStatus(result.existingStatus) : 'FAILED',
+      ...jobLink,
+      reason: result.reason || duplicateReason || 'WHATSAPP_ENQUEUE_FAILED',
+    };
+  }
+  return {
+    status: result.status === 'DUPLICATE' ? mapOutboxStatusToRestaurantStatus(result.existingStatus) : 'PENDING',
+    ...jobLink,
+    reason: duplicateReason || 'QUEUED',
+  };
+}
 function maskRecipient(value: string | null) {
   if (!value) return null;
   if (value.includes('@')) { const [name, domain] = value.split('@'); return `${name.slice(0, 2)}•••@${domain}`; }
   return `${value.slice(0, 3)}•••${value.slice(-2)}`;
 }
 
-async function startLog(companyId: number, reservationId: number, event: RestaurantNotificationEvent, trigger: RestaurantNotificationTrigger, channel: RestaurantNotificationChannel, recipient: string | null, dedupKey: string) {
+async function startLog(companyId: number, reservationId: number, event: RestaurantNotificationEvent, trigger: RestaurantNotificationTrigger, channel: RestaurantNotificationChannel, recipient: string | null, dedupKey: string, reservationGuestId?: number | null) {
   if (trigger === RestaurantNotificationTrigger.AUTOMATIC) {
     if (await restaurantNotificationLogRepo.hasAutomaticSend(companyId, reservationId, event, dedupKey)) return null;
     return restaurantNotificationLogRepo.claimAutomatic({
       company_id: companyId,
       reservation_id: reservationId,
+      reservation_guest_id: reservationGuestId ?? null,
       event,
       trigger,
       channel,
@@ -89,6 +126,7 @@ async function startLog(companyId: number, reservationId: number, event: Restaur
   return restaurantNotificationLogRepo.create({
     company_id: companyId,
     reservation_id: reservationId,
+    reservation_guest_id: reservationGuestId ?? null,
     event,
     trigger,
     channel,
@@ -118,25 +156,25 @@ async function startWaitlistLog(companyId: number, waitlistId: number, event: Re
   return restaurantNotificationLogRepo.claimAutomatic({ company_id: companyId, waitlist_id: waitlistId, event, trigger: RestaurantNotificationTrigger.AUTOMATIC, channel, recipient, status: RestaurantNotificationStatus.PENDING, dedup_key: dedupKey, dedup_claim_key: `${companyId}:waitlist:${waitlistId}:${event}:${dedupKey}:${channel}` });
 }
 
-async function deliverWaitlistChannel(args: { companyId: number; waitlistId: number; event: RestaurantNotificationEvent; channel: RestaurantNotificationChannel; recipient: string | null; dedupKey: string }, send: () => Promise<RestaurantDeliveryResult>) {
+async function deliverWaitlistChannel(args: { companyId: number; waitlistId: number; event: RestaurantNotificationEvent; channel: RestaurantNotificationChannel; recipient: string | null; dedupKey: string }, send: (logId: number) => Promise<RestaurantDeliveryResult>) {
   const log = await startWaitlistLog(args.companyId, args.waitlistId, args.event, args.channel, args.recipient, args.dedupKey);
   if (!log) return { channel: args.channel as 'WHATSAPP' | 'EMAIL', status: 'SKIPPED' as const, reason: 'DUPLICATE_EVENT' };
   let result: RestaurantDeliveryResult;
-  try { result = await send(); } catch (error) { result = { channel: args.channel as 'WHATSAPP' | 'EMAIL', status: 'FAILED', reason: errorSummary(error) }; }
-  await finishLog(args.companyId, args.waitlistId, args.event, args.channel, log.id, result);
+  try { result = await send(log.id); } catch (error) { result = { channel: args.channel as 'WHATSAPP' | 'EMAIL', status: 'FAILED', reason: errorSummary(error) }; }
+  if (!result.jobId) await finishLog(args.companyId, args.waitlistId, args.event, args.channel, log.id, result);
   return result;
 }
 
-async function deliverChannel(args: { companyId: number; reservationId: number; event: RestaurantNotificationEvent; trigger: RestaurantNotificationTrigger; channel: RestaurantNotificationChannel; recipient: string | null; dedupKey: string }, send: () => Promise<RestaurantDeliveryResult>) {
-  const log = await startLog(args.companyId, args.reservationId, args.event, args.trigger, args.channel, args.recipient, args.dedupKey);
+async function deliverChannel(args: { companyId: number; reservationId: number; event: RestaurantNotificationEvent; trigger: RestaurantNotificationTrigger; channel: RestaurantNotificationChannel; recipient: string | null; dedupKey: string; reservationGuestId?: number | null }, send: (logId: number) => Promise<RestaurantDeliveryResult>) {
+  const log = await startLog(args.companyId, args.reservationId, args.event, args.trigger, args.channel, args.recipient, args.dedupKey, args.reservationGuestId);
   if (!log) return { channel: args.channel as 'WHATSAPP' | 'EMAIL', status: 'SKIPPED' as const, reason: 'DUPLICATE_EVENT' };
   let result: RestaurantDeliveryResult;
   try {
-    result = await send();
+    result = await send(log.id);
   } catch (error) {
     result = { channel: args.channel as 'WHATSAPP' | 'EMAIL', status: 'FAILED', reason: errorSummary(error) };
   }
-  await finishLog(args.companyId, args.reservationId, args.event, args.channel, log.id, result);
+  if (!result.jobId) await finishLog(args.companyId, args.reservationId, args.event, args.channel, log.id, result);
   return result;
 }
 
@@ -164,14 +202,20 @@ export async function notifyRestaurantReservation({ companyId, reservationId, ..
   const emailEnabled = settings?.send_email_notifications ?? true;
   const results: RestaurantDeliveryResult[] = [];
   const phone = reservation.customer_phone?.replace(/\D/g, '') || null;
-  const whatsapp = await deliverChannel({ companyId: reservation.company_id, reservationId: reservation.id, event: options.event, trigger, channel: RestaurantNotificationChannel.WHATSAPP, recipient: phone, dedupKey }, async () => {
+  const whatsapp = await deliverChannel({ companyId: reservation.company_id, reservationId: reservation.id, event: options.event, trigger, channel: RestaurantNotificationChannel.WHATSAPP, recipient: phone, dedupKey }, async (logId) => {
     if (!url) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'MISSING_PUBLIC_BASE_URL' };
     if (!whatsappEnabled) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'CHANNEL_DISABLED' };
     if (!phone) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'MISSING_RECIPIENT' };
     if (phone.length < 6) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'INVALID_RECIPIENT' };
-    if (!process.env.WAHA_BASE_URL) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'MISSING_PROVIDER_CONFIGURATION' };
-    const response = await sendWhatsappText(phone, message.text, { companyId: reservation.company_id });
-    return response === -1 ? { channel: 'WHATSAPP', status: 'FAILED', reason: 'El proveedor de WhatsApp rechazó o no pudo entregar el mensaje.' } : { channel: 'WHATSAPP', status: 'SENT', providerId: providerId(response) };
+    const response = await queueWhatsappText(phone, message.text, {
+      companyId: reservation.company_id,
+      sourceType: 'RESTAURANT_RESERVATION_NOTIFICATION',
+      sourceId: String(reservation.id),
+      dedupeKey: `restaurant-reservation:${reservation.id}:${options.event}:${dedupKey}`,
+      expiresAt: reservation.start_time,
+      restaurantNotificationLogId: logId,
+    });
+    return { channel: 'WHATSAPP', ...mapWhatsappEnqueueToRestaurantDelivery(response) };
   });
   results.push(whatsapp);
   const email = reservation.customer_email?.trim().toLowerCase() || null;
@@ -180,9 +224,8 @@ export async function notifyRestaurantReservation({ companyId, reservationId, ..
     if (!emailEnabled) return { channel: 'EMAIL', status: 'SKIPPED', reason: 'CHANNEL_DISABLED' };
     if (!email) return { channel: 'EMAIL', status: 'SKIPPED', reason: 'MISSING_RECIPIENT' };
     if (!emailPattern.test(email)) return { channel: 'EMAIL', status: 'SKIPPED', reason: 'INVALID_RECIPIENT' };
-    if (!process.env.MAIL_FROM || !process.env.MAIL_HOST) return { channel: 'EMAIL', status: 'SKIPPED', reason: 'MISSING_PROVIDER_CONFIGURATION' };
-    await sendGenericEmail(email, message.subject, message.html, { companyId: reservation.company_id });
-    return { channel: 'EMAIL', status: 'SENT' };
+    const response = await sendGenericEmail(email, message.subject, message.html, { companyId: reservation.company_id });
+    return { channel: 'EMAIL', status: response.status, reason: response.reason, providerId: response.providerId };
   });
   results.push(mail);
   for (const result of results) logger.info({ reservationId: reservation.id, companyId: reservation.company_id, event: options.event, channel: result.channel, status: result.status, providerId: result.providerId }, 'Restaurant notification delivery result');
@@ -203,9 +246,8 @@ export async function notifyRestaurantReservationGuests({ companyId, reservation
   const whatsappEnabled = reservation.company.company_settings?.send_whatsapp_notifications ?? false;
   return Promise.all(reservation.guests.map(async (guest) => {
     const dedupKey = `GUEST_INVITATION:${reservation.updated_at.toISOString()}:${guest.id}`;
-    const result = await deliverChannel({ companyId: reservation.company_id, reservationId: reservation.id, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CREATED, trigger: RestaurantNotificationTrigger.AUTOMATIC, channel: RestaurantNotificationChannel.WHATSAPP, recipient: guest.whatsapp_phone, dedupKey }, async () => {
+    const result = await deliverChannel({ companyId: reservation.company_id, reservationId: reservation.id, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CREATED, trigger: RestaurantNotificationTrigger.AUTOMATIC, channel: RestaurantNotificationChannel.WHATSAPP, recipient: guest.whatsapp_phone, dedupKey, reservationGuestId: guest.id }, async (logId) => {
       if (!whatsappEnabled) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'CHANNEL_DISABLED' };
-      if (!process.env.WAHA_BASE_URL) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'MISSING_PROVIDER_CONFIGURATION' };
       const statusLine = reservation.status === 'CONFIRMED' ? 'La reserva está confirmada.' : 'La reserva está pendiente de confirmación.';
       const text = [
         `Hola, ${guest.name}.`, '',
@@ -215,10 +257,16 @@ export async function notifyRestaurantReservationGuests({ companyId, reservation
         `Personas: ${reservation.party_size}`,
         reservation.company.phone ? `Contacto: ${reservation.company.phone}` : null,
       ].join('\n');
-      const response = await sendWhatsappText(guest.whatsapp_phone, text, { companyId: reservation.company_id });
-      return response === -1 ? { channel: 'WHATSAPP', status: 'FAILED', reason: 'El proveedor de WhatsApp rechazó o no pudo entregar el mensaje.' } : { channel: 'WHATSAPP', status: 'SENT', providerId: providerId(response) };
+      const response = await queueWhatsappText(guest.whatsapp_phone, text, {
+        companyId: reservation.company_id,
+        sourceType: 'RESTAURANT_GUEST_INVITATION',
+        sourceId: String(guest.id),
+        dedupeKey: `restaurant-guest:${reservation.id}:${guest.id}:${dedupKey}`,
+        expiresAt: reservation.start_time,
+        restaurantNotificationLogId: logId,
+      });
+      return { channel: 'WHATSAPP', ...mapWhatsappEnqueueToRestaurantDelivery(response) };
     });
-    if (result.status === 'SENT') await prisma.restaurantReservationGuest.update({ where: { id: guest.id }, data: { invited_at: new Date() } });
     logger.info({ reservationId: reservation.id, companyId: reservation.company_id, guestId: guest.id, channel: result.channel, status: result.status, providerId: result.providerId }, 'Restaurant guest invitation delivery result');
     return result;
   }));
@@ -234,21 +282,25 @@ export async function notifyRestaurantWaitlist(input: { companyId: number; waitl
     ? `Hola, ${entry.guest_name}. Tu mesa en ${entry.company.name} está lista. Acercate al restaurante${entry.company.phone ? ` o comunicate al ${entry.company.phone}` : ''}.`
     : `Hola, ${entry.guest_name}. Te agregamos a la lista de espera de ${entry.company.name}. Tiempo aproximado: ${entry.estimated_wait_minutes} minutos para ${entry.party_size} personas.`;
   const results: RestaurantDeliveryResult[] = [];
-  const whatsapp = await deliverWaitlistChannel({ companyId: input.companyId, waitlistId: input.waitlistId, event: input.event, channel: RestaurantNotificationChannel.WHATSAPP, recipient: phone, dedupKey: triggerKey }, async () => {
+  const whatsapp = await deliverWaitlistChannel({ companyId: input.companyId, waitlistId: input.waitlistId, event: input.event, channel: RestaurantNotificationChannel.WHATSAPP, recipient: phone, dedupKey: triggerKey }, async (logId) => {
     if (!(settings?.send_whatsapp_notifications ?? false)) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'CHANNEL_DISABLED' };
     if (!phone) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'MISSING_RECIPIENT' };
-    if (!process.env.WAHA_BASE_URL) return { channel: 'WHATSAPP', status: 'SKIPPED', reason: 'MISSING_PROVIDER_CONFIGURATION' };
-    const response = await sendWhatsappText(phone, text, { companyId: input.companyId });
-    return response === -1 ? { channel: 'WHATSAPP', status: 'FAILED', reason: 'El proveedor de WhatsApp rechazó o no pudo entregar el mensaje.' } : { channel: 'WHATSAPP', status: 'SENT', providerId: providerId(response) };
+    const response = await queueWhatsappText(phone, text, {
+      companyId: input.companyId,
+      sourceType: 'RESTAURANT_WAITLIST_NOTIFICATION',
+      sourceId: String(input.waitlistId),
+      dedupeKey: `restaurant-waitlist:${input.waitlistId}:${input.event}:${triggerKey}`,
+      restaurantNotificationLogId: logId,
+    });
+    return { channel: 'WHATSAPP', ...mapWhatsappEnqueueToRestaurantDelivery(response) };
   });
   results.push(whatsapp);
   const email = entry.email?.trim().toLowerCase() || null;
   const mail = await deliverWaitlistChannel({ companyId: input.companyId, waitlistId: input.waitlistId, event: input.event, channel: RestaurantNotificationChannel.EMAIL, recipient: email, dedupKey: triggerKey }, async () => {
     if (!(settings?.send_email_notifications ?? true)) return { channel: 'EMAIL', status: 'SKIPPED', reason: 'CHANNEL_DISABLED' };
     if (!email || !emailPattern.test(email)) return { channel: 'EMAIL', status: 'SKIPPED', reason: email ? 'INVALID_RECIPIENT' : 'MISSING_RECIPIENT' };
-    if (!process.env.MAIL_FROM || !process.env.MAIL_HOST) return { channel: 'EMAIL', status: 'SKIPPED', reason: 'MISSING_PROVIDER_CONFIGURATION' };
-    await sendGenericEmail(email, input.event === RestaurantNotificationEvent.WAITLIST_TABLE_READY ? 'Tu mesa está lista' : 'Lista de espera registrada', `<p>${text}</p>`, { companyId: input.companyId });
-    return { channel: 'EMAIL', status: 'SENT' };
+    const response = await sendGenericEmail(email, input.event === RestaurantNotificationEvent.WAITLIST_TABLE_READY ? 'Tu mesa está lista' : 'Lista de espera registrada', `<p>${text}</p>`, { companyId: input.companyId });
+    return { channel: 'EMAIL', status: response.status, reason: response.reason, providerId: response.providerId };
   });
   results.push(mail);
   return results;

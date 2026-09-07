@@ -21,7 +21,8 @@ import { sendReviewRequestReminder } from '../utils/reviewNotifications';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
 import { sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
 import {
     hasLegacyNoShowMarker,
     isNoShowBooking,
@@ -1156,13 +1157,20 @@ async function dispatchRescheduleNotificationAttempt(attemptId: number): Promise
         if (attempt.channel === 'EMAIL') {
             const subject = typeof payload?.subject === 'string' ? payload.subject : 'Reserva reagendada';
             const html = typeof payload?.html === 'string' ? payload.html : '';
-            await sendGenericEmail(attempt.target, subject, html, { companyId: attempt.company_id });
-            ok = true;
+            const result = await sendGenericEmail(attempt.target, subject, html, { companyId: attempt.company_id });
+            ok = isEmailDeliverySuccessful(result);
+            if (!ok) failureReason = `EMAIL_${result.reason}`;
         } else if (attempt.channel === 'WHATSAPP') {
             const text = typeof payload?.text === 'string' ? payload.text : '';
-            const result = await sendWhatsappText(attempt.target, text, { companyId: attempt.company_id });
-            ok = result !== -1 && typeof result === 'object' && result.status >= 200 && result.status < 300;
-            if (!ok) failureReason = 'WHATSAPP_SEND_FAILED';
+            const result = await queueWhatsappText(attempt.target, text, {
+                companyId: attempt.company_id,
+                sourceType: 'BOOKING_RESCHEDULE',
+                sourceId: String(attempt.id),
+                dedupeKey: `booking-reschedule:${attempt.id}`,
+                bookingNotificationAttemptId: attempt.id,
+            });
+            ok = isWhatsappEnqueueAccepted(result);
+            if (!ok) failureReason = `WHATSAPP_${result.reason ?? result.status}`;
         } else {
             failureReason = 'UNSUPPORTED_CHANNEL';
         }
@@ -1170,6 +1178,10 @@ async function dispatchRescheduleNotificationAttempt(attemptId: number): Promise
         failureReason = attempt.channel === 'EMAIL' ? 'EMAIL_SEND_FAILED' : 'WHATSAPP_SEND_FAILED';
         logger.warn({ attemptId, channel: attempt.channel, error }, 'Booking reschedule notification attempt failed');
     }
+
+    // Durable WhatsApp enqueue is not provider delivery. The outbox repository
+    // linked the attempt to the job and the worker owns its later lifecycle.
+    if (ok && attempt.channel === 'WHATSAPP') return;
 
     const nextAttemptCount = attempt.attempt_count + 1;
     if (ok) {
@@ -3028,6 +3040,20 @@ export async function sendNoShowNotificationForBooking(
             customMessage,
         });
 
+        if (sendResult.queued) {
+            return {
+                code: 200,
+                message: 'No-show notification queued',
+                error: false,
+                data: {
+                    booking_id: booking.id,
+                    status: sendResult.status || 'PENDING',
+                    channel: sendResult.channel,
+                    job_id: sendResult.jobId ?? null,
+                },
+            };
+        }
+
         if (!sendResult.sent) {
             const status = sendResult.reason?.startsWith('NO_') ? 'SKIPPED' : 'FAILED';
             return {
@@ -3236,6 +3262,21 @@ export async function sendTodayReminderForBooking(companyId: number, bookingId: 
             totalPriceCents: booking.total_price_cents,
             locale: context.locale,
         });
+
+        if (sendResult.queued) {
+            reminderSentAtCache.set(cacheKey, Date.now());
+            return {
+                code: 200,
+                message: 'Reminder queued',
+                error: false,
+                data: {
+                    booking_id: booking.id,
+                    status: sendResult.status || 'PENDING',
+                    channel: sendResult.channel,
+                    job_id: sendResult.jobId ?? null,
+                },
+            };
+        }
 
         if (!sendResult.sent || !sendResult.channel) {
             return {

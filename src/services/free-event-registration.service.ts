@@ -9,7 +9,8 @@ import {
 } from '@prisma/client';
 import { logger } from '../config/logger';
 import { sendGenericEmail, isTemporaryEmailAddress } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
 import { sendLoginOtpEmail, sendLoginOtpPhone } from './auth.service';
 import { getAuth } from '../config/auth';
 import crypto from 'crypto';
@@ -58,6 +59,7 @@ export interface FreeRegistrationResult {
             primaryChannel: 'email' | 'phone' | null;
             availableChannels?: Array<'email' | 'phone'>;
             maskedDestination?: string | null;
+            deliveryStatus?: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
         };
         nextActions?: {
             canCompleteMissingPhoneLater?: boolean;
@@ -226,6 +228,7 @@ interface AccountResolutionResult {
         primaryChannel: OtpChannel | null;
         availableChannels?: Array<OtpChannel>;
         maskedDestination?: string | null;
+        deliveryStatus?: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
     };
     nextActions: {
         canCompleteMissingPhoneLater?: boolean;
@@ -290,14 +293,27 @@ type AccountCandidateUser = {
     last_name: string | null;
 };
 
-async function dispatchEmailOtp(email: string): Promise<boolean> {
+type OtpDispatchChannelResult = {
+    accepted: boolean;
+    status: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+};
+
+async function dispatchEmailOtp(email: string): Promise<OtpDispatchChannelResult> {
     const result = await sendLoginOtpEmail(email);
-    return !result.error && result.code < 400;
+    return {
+        accepted: !result.error && result.code < 400,
+        status: !result.error && result.code < 400 ? 'SENT' : 'FAILED',
+    };
 }
 
-async function dispatchPhoneOtp(phoneNumber: string, phonePrefix: string): Promise<boolean> {
+async function dispatchPhoneOtp(phoneNumber: string, phonePrefix: string): Promise<OtpDispatchChannelResult> {
     const result = await sendLoginOtpPhone({ phoneNumber, phonePrefix });
-    return !result.error && result.code < 400;
+    const accepted = !result.error && result.code < 400;
+    const rawStatus = result.data?.status;
+    const status = rawStatus === 'PROCESSING' || rawStatus === 'SENT' || rawStatus === 'EXPIRED' || rawStatus === 'CANCELLED'
+        ? rawStatus
+        : accepted ? 'PENDING' : 'FAILED';
+    return { accepted, status };
 }
 
 async function dispatchPreferredOtp(params: {
@@ -306,7 +322,8 @@ async function dispatchPreferredOtp(params: {
     phone?: string | null;
     phonePrefix?: string | null;
 }): Promise<{
-    sent: boolean;
+    accepted: boolean;
+    deliveryStatus: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
     channel: OtpChannel | null;
     availableChannels: OtpChannel[];
     maskedDestination: string | null;
@@ -326,7 +343,8 @@ async function dispatchPreferredOtp(params: {
 
     if (availableChannels.length === 0) {
         return {
-            sent: false,
+            accepted: false,
+            deliveryStatus: 'FAILED',
             channel: null,
             availableChannels: [],
             maskedDestination: null,
@@ -340,10 +358,11 @@ async function dispatchPreferredOtp(params: {
 
     for (const channel of orderedChannels) {
         if (channel === 'email' && email) {
-            const sent = await dispatchEmailOtp(email);
-            if (sent) {
+            const delivery = await dispatchEmailOtp(email);
+            if (delivery.accepted) {
                 return {
-                    sent: true,
+                    accepted: true,
+                    deliveryStatus: delivery.status,
                     channel: 'email',
                     availableChannels,
                     maskedDestination: maskEmail(email),
@@ -353,10 +372,11 @@ async function dispatchPreferredOtp(params: {
         }
 
         if (channel === 'phone' && phone && phonePrefix) {
-            const sent = await dispatchPhoneOtp(phone, phonePrefix);
-            if (sent) {
+            const delivery = await dispatchPhoneOtp(phone, phonePrefix);
+            if (delivery.accepted) {
                 return {
-                    sent: true,
+                    accepted: true,
+                    deliveryStatus: delivery.status,
                     channel: 'phone',
                     availableChannels,
                     maskedDestination: maskPhone(fullPhone),
@@ -367,7 +387,8 @@ async function dispatchPreferredOtp(params: {
 
     const fallbackChannel = orderedChannels[0] ?? null;
     return {
-        sent: false,
+        accepted: false,
+        deliveryStatus: 'FAILED',
         channel: fallbackChannel,
         availableChannels,
         maskedDestination: fallbackChannel === 'phone' ? maskPhone(fullPhone) : maskEmail(email),
@@ -526,7 +547,7 @@ async function resolveAccountForFreeRegistration(input: {
                 phone: input.phoneNumber,
                 phonePrefix: input.phonePrefix,
             });
-            if (!otpDispatch.sent) {
+            if (!otpDispatch.accepted) {
                 logger.warn(
                     { email: input.email, phone: buildE164Phone(input.phonePrefix, input.phoneNumber), preferredChannel },
                     'Free event: account created but OTP dispatch failed',
@@ -543,6 +564,7 @@ async function resolveAccountForFreeRegistration(input: {
                     primaryChannel: otpDispatch.channel ?? preferredChannel ?? 'email',
                     availableChannels: otpDispatch.availableChannels,
                     maskedDestination: otpDispatch.maskedDestination,
+                    deliveryStatus: otpDispatch.deliveryStatus,
                 },
                 nextActions: {},
                 accountCreated: true,
@@ -568,7 +590,7 @@ async function resolveAccountForFreeRegistration(input: {
             preferredChannel: 'email',
             email: emailMatch.email,
         });
-        if (!otpDispatch.sent) {
+        if (!otpDispatch.accepted) {
             logger.warn({ email: emailMatch.email, userId: emailMatch.id }, 'Free event: failed to dispatch OTP for existing email account');
         }
 
@@ -582,6 +604,7 @@ async function resolveAccountForFreeRegistration(input: {
                 primaryChannel: otpDispatch.channel ?? 'email',
                 availableChannels: otpDispatch.availableChannels.length > 0 ? otpDispatch.availableChannels : ['email'],
                 maskedDestination: otpDispatch.maskedDestination ?? maskEmail(emailMatch.email),
+                deliveryStatus: otpDispatch.deliveryStatus,
             },
             nextActions: {
                 canCompleteMissingPhoneLater: !emailMatch.phoneNumber,
@@ -601,7 +624,7 @@ async function resolveAccountForFreeRegistration(input: {
             phone: otpTargetPhone,
             phonePrefix: otpTargetPrefix,
         });
-        if (!otpDispatch.sent) {
+        if (!otpDispatch.accepted) {
             logger.warn(
                 { userId: phoneMatch.id, phoneNumber: fallbackPhone ?? otpTargetPhone },
                 'Free event: failed to dispatch OTP for existing phone account',
@@ -620,6 +643,7 @@ async function resolveAccountForFreeRegistration(input: {
                 primaryChannel: otpDispatch.channel ?? 'phone',
                 availableChannels: otpDispatch.availableChannels.length > 0 ? otpDispatch.availableChannels : ['phone'],
                 maskedDestination: otpDispatch.maskedDestination ?? maskPhone(fallbackPhone),
+                deliveryStatus: otpDispatch.deliveryStatus,
             },
             nextActions: {
                 canCompleteMissingEmailLater: hasMissingEmail,
@@ -641,7 +665,7 @@ async function resolveAccountForFreeRegistration(input: {
         phonePrefix: unifiedUser.phone_prefix ?? input.phonePrefix,
     });
 
-    if (!otpDispatch.sent) {
+    if (!otpDispatch.accepted) {
         logger.warn(
             {
                 userId: unifiedUser.id,
@@ -668,6 +692,7 @@ async function resolveAccountForFreeRegistration(input: {
                 ?? (hasPhone && input.otpChannelPreference === 'phone'
                     ? maskPhone(fallbackPhone)
                     : maskEmail(unifiedUser.email)),
+            deliveryStatus: otpDispatch.deliveryStatus,
         },
         nextActions: {},
         accountCreated: false,
@@ -1257,12 +1282,15 @@ async function sendRegistrationNotifications(opts: {
         // TODO: replace with branded HTML template when designed
         if (sendEmailEnabled) {
             try {
-                await sendGenericEmail(
+                const result = await sendGenericEmail(
                     opts.email,
                     content.emailSubject,
                     content.emailHtml,
                     { companyId: opts.companyId },
                 );
+                if (!isEmailDeliverySuccessful(result)) {
+                    logger.warn({ eventId: opts.eventId, reason: result.reason }, 'Free event: email notification was not delivered');
+                }
             } catch (err) {
                 logger.warn({ err, eventId: opts.eventId, email: opts.email }, 'Free event: email notification failed');
             }
@@ -1273,7 +1301,16 @@ async function sendRegistrationNotifications(opts: {
         if (sendWhatsappEnabled) {
             try {
                 const fullPhone = `${opts.phonePrefix}${opts.phoneNumber}`;
-                await sendWhatsappText(fullPhone, content.whatsappMessage, { companyId: opts.companyId });
+                const result = await queueWhatsappText(fullPhone, content.whatsappMessage, {
+                    companyId: opts.companyId,
+                    sourceType: 'FREE_EVENT_CONFIRMATION',
+                    sourceId: opts.reservationCode,
+                    dedupeKey: `free-event-confirmation:${opts.eventId}:${opts.reservationCode}`,
+                    expiresAt: event.start_at,
+                });
+                if (!isWhatsappEnqueueAccepted(result)) {
+                    logger.warn({ eventId: opts.eventId, reason: result.reason ?? 'WHATSAPP_ENQUEUE_FAILED' }, 'Free event: WhatsApp notification was not queued');
+                }
             } catch (err) {
                 logger.warn(
                     { err, eventId: opts.eventId, phone: `${opts.phonePrefix}${opts.phoneNumber}` },
@@ -1637,7 +1674,7 @@ export async function inviteInterestedRegistration(
 ) {
     const event = await prisma.groupEvent.findFirst({
         where: { id: eventId, company_id: companyId, deleted_at: null },
-        select: { id: true, is_free: true, title: true, max_capacity: true },
+        select: { id: true, is_free: true, title: true, max_capacity: true, start_at: true },
     });
     if (!event || !event.is_free) {
         return { code: 404, error: true, message: 'Free event not found' };
@@ -1699,7 +1736,10 @@ export async function inviteInterestedRegistration(
     // Send notifications according to admin-selected channels
     if (channels.email && !isTemporaryEmailAddress(registration.email)) {
         try {
-            await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml, { companyId });
+            const result = await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml, { companyId });
+            if (!isEmailDeliverySuccessful(result)) {
+                logger.warn({ eventId, registrationId, reason: result.reason }, 'Invite: email was not delivered');
+            }
         } catch (err) {
             logger.warn({ err, eventId, registrationId }, 'Invite: email send failed');
         }
@@ -1708,7 +1748,16 @@ export async function inviteInterestedRegistration(
     if (channels.whatsapp) {
         try {
             const fullPhone = `${registration.phone_prefix}${registration.phone_number}`;
-            await sendWhatsappText(fullPhone, content.whatsappMessage, { companyId });
+            const result = await queueWhatsappText(fullPhone, content.whatsappMessage, {
+                companyId,
+                sourceType: 'FREE_EVENT_INVITATION',
+                sourceId: String(registrationId),
+                dedupeKey: `free-event-invite:${eventId}:${registrationId}:${reservationCode}`,
+                expiresAt: event.start_at,
+            });
+            if (!isWhatsappEnqueueAccepted(result)) {
+                logger.warn({ eventId, registrationId, reason: result.reason ?? 'WHATSAPP_ENQUEUE_FAILED' }, 'Invite: WhatsApp was not queued');
+            }
         } catch (err) {
             logger.warn({ err, eventId, registrationId }, 'Invite: WhatsApp send failed');
         }

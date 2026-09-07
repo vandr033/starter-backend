@@ -1,13 +1,16 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import {
+    BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+    BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from "../src/config/auth-constants";
 
 const prisma = new PrismaClient();
 
 const SUPER_ADMIN_EMAIL = "superadmin@gmail.com";
 const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD;
 const SUPER_ADMIN_NAME = process.env.SUPER_ADMIN_NAME || "Super Admin";
-const CREDENTIAL_PROVIDER_IDS = ["credential", "credentials"] as const;
 
 async function main() {
     if (!SUPER_ADMIN_PASSWORD) {
@@ -57,20 +60,20 @@ async function main() {
     const credentialAccounts = await prisma.account.findMany({
         where: {
             userId: user.id,
-            providerId: { in: [...CREDENTIAL_PROVIDER_IDS] },
+            providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
         },
         orderBy: { createdAt: "asc" },
     });
 
     const primaryAccount =
-        credentialAccounts.find((account) => account.providerId === "credential") ||
+        credentialAccounts.find((account) => account.providerId === BETTER_AUTH_CREDENTIAL_PROVIDER_ID) ||
         credentialAccounts[0];
 
     if (primaryAccount) {
         await prisma.account.update({
             where: { id: primaryAccount.id },
             data: {
-                providerId: "credential",
+                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                 accountId: normalizedEmail,
                 password: hashedPassword,
                 updatedAt: now,
@@ -80,7 +83,7 @@ async function main() {
         await prisma.account.deleteMany({
             where: {
                 userId: user.id,
-                providerId: { in: [...CREDENTIAL_PROVIDER_IDS] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                 id: { not: primaryAccount.id },
             },
         });
@@ -88,7 +91,7 @@ async function main() {
         await prisma.account.create({
             data: {
                 accountId: normalizedEmail,
-                providerId: "credential",
+                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                 userId: user.id,
                 password: hashedPassword,
             },

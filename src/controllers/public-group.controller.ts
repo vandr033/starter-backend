@@ -142,6 +142,7 @@ export async function createEventBooking(req: AuthenticatedRequest, res: Respons
         booked_spots: payload.booked_spots,
         payment_method: payload.payment_method,
         qr_proof_image_url: payload.qr_proof_image_url,
+        upload_intent: payload.upload_intent,
         registration_question_answer: payload.registration_question_answer,
         notes: payload.notes,
         extra_attendees: payload.extra_attendees,
@@ -219,6 +220,7 @@ export async function createClassEnrollment(req: AuthenticatedRequest, res: Resp
         group_class_session_id: payload.group_class_session_id,
         payment_method: payload.payment_method,
         qr_proof_image_url: payload.qr_proof_image_url,
+        upload_intent: payload.upload_intent,
     });
 
     return res.status(result.code).json(result);

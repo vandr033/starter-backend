@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../prisma/client';
 import bcrypt from 'bcryptjs';
 import { VerificationChannel, VerificationPurpose } from '../types/verification-enums';
+import { BETTER_AUTH_CREDENTIAL_PROVIDER_ID } from '../config/auth-constants';
 
 /**
  * GET /api/staff/invite-info/:token
@@ -127,7 +128,7 @@ export async function acceptInvite(req: Request, res: Response) {
         const existingAccount = await prisma.account.findFirst({
             where: {
                 userId: staff.user_id,
-                providerId: 'credential',
+                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
             },
         });
 
@@ -140,7 +141,7 @@ export async function acceptInvite(req: Request, res: Response) {
             await prisma.account.create({
                 data: {
                     userId: staff.user_id,
-                    providerId: 'credential',
+                    providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                     accountId: staff.user_id,
                     password: hashedPassword,
                 },

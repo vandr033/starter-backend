@@ -1,8 +1,9 @@
 import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
 import { CompanyUserRole } from '@prisma/client';
-import { sendWhatsappText } from './whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from './whatsappSender';
 import { sendGenericEmail } from './sendEmail';
+import { isEmailDeliverySuccessful } from '../services/notification-provider.service';
 import { companyHasCapability } from '../services/company-entitlements.service';
 
 export const reviewNotificationDependencies = {
@@ -153,9 +154,18 @@ export async function notifyNewReview(data: NewReviewNotificationData): Promise<
             <p><strong>Comentario:</strong> ${commentSnippet}</p>
           </div>
         `;
-        void sendGenericEmail(admin.user.email, subject, html, { companyId: data.companyId }).catch((err) => {
-          logger.error({ err, adminEmail: admin.user.email }, 'Failed to send new review email to admin');
-        });
+        void sendGenericEmail(admin.user.email, subject, html, { companyId: data.companyId })
+          .then((result) => {
+            if (!isEmailDeliverySuccessful(result)) {
+              logger.warn(
+                { adminEmail: admin.user.email, status: result.status, reason: result.reason },
+                'New review email was not delivered to admin',
+              );
+            }
+          })
+          .catch((err) => {
+            logger.error({ err, adminEmail: admin.user.email }, 'Failed to send new review email to admin');
+          });
       }
 
       // WhatsApp
@@ -173,9 +183,23 @@ export async function notifyNewReview(data: NewReviewNotificationData): Promise<
             .filter(Boolean)
             .join('\n');
 
-          void sendWhatsappText(fullPhone, text, { companyId: data.companyId }).catch((err) => {
-            logger.error({ err, phone: fullPhone }, 'Failed to send new review WhatsApp to admin');
-          });
+          void queueWhatsappText(fullPhone, text, {
+            companyId: data.companyId,
+            sourceType: 'NEW_REVIEW_ADMIN_NOTIFICATION',
+            sourceId: String(data.reviewId),
+            dedupeKey: `new-review:${data.reviewId}:admin:${admin.user.phoneNumber}`,
+          })
+            .then((result) => {
+              if (!isWhatsappEnqueueAccepted(result)) {
+                logger.warn(
+                  { phone: fullPhone, status: result.status, reason: result.reason },
+                  'New review WhatsApp was not queued for admin',
+                );
+              }
+            })
+            .catch((err) => {
+              logger.error({ err, phone: fullPhone }, 'Failed to send new review WhatsApp to admin');
+            });
         }
       }
     }
@@ -190,7 +214,10 @@ export async function notifyNewReview(data: NewReviewNotificationData): Promise<
 
 export async function sendReviewRequestReminder(data: ReviewRequestReminderData): Promise<{
   sent: boolean;
+  queued?: boolean;
   channel?: 'EMAIL' | 'WHATSAPP';
+  status?: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+  jobId?: number;
   reason?: string;
 }> {
   const dedupKey = `review-request:${data.bookingId}`;
@@ -239,8 +266,26 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
                 reviewUrl,
               ].join('\n');
 
-        await sendWhatsappText(fullPhone, text, { companyId: data.companyId });
-        return { sent: true, channel: 'WHATSAPP' };
+        const result = await queueWhatsappText(fullPhone, text, {
+          companyId: data.companyId,
+          sourceType: 'REVIEW_REQUEST',
+          sourceId: String(data.bookingId),
+          dedupeKey: dedupKey,
+        });
+        if (isWhatsappEnqueueAccepted(result)) {
+          const status = result.status === 'DUPLICATE' ? result.existingStatus : 'PENDING';
+          if (status === 'SENT') {
+            return { sent: true, channel: 'WHATSAPP', status: 'SENT', jobId: result.jobId, reason: 'Already sent' };
+          }
+          return {
+            sent: false,
+            queued: true,
+            channel: 'WHATSAPP',
+            status: status === 'PROCESSING' ? 'PROCESSING' : 'PENDING',
+            jobId: result.jobId,
+            reason: result.status === 'DUPLICATE' ? 'Already queued' : 'Queued',
+          };
+        }
       }
     }
 
@@ -271,8 +316,11 @@ export async function sendReviewRequestReminder(data: ReviewRequestReminderData)
             </div>
           `;
 
-      await sendGenericEmail(data.customerEmail, subject, html, { companyId: data.companyId });
-      return { sent: true, channel: 'EMAIL' };
+      const result = await sendGenericEmail(data.customerEmail, subject, html, { companyId: data.companyId });
+      if (isEmailDeliverySuccessful(result)) {
+        return { sent: true, channel: 'EMAIL', status: 'SENT' };
+      }
+      return { sent: false, reason: `EMAIL_${result.reason}` };
     }
 
     return { sent: false, reason: 'No contact channel available' };

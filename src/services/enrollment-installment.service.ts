@@ -4,8 +4,11 @@ import { MensajeApi } from '../types/MensajeApi';
 import { getEnrollmentInstallmentPlan } from './group-payments.service';
 import { cancelTicketsForClassEnrollment, issueClassTicketForEnrollment } from './group-ticket.service';
 import { logger } from '../config/logger';
+import { assertStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
+import { UploadSecurityError } from '../utils/upload-errors';
+import { StorageService } from './storage.service';
 
-type ServiceResult = MensajeApi & { data?: unknown };
+type ServiceResult = MensajeApi & { data?: unknown; errorCode?: string; reason?: string };
 type EditablePaymentStatus = 'UNPAID' | 'PENDING_CONFIRMATION' | 'PAID' | 'REJECTED';
 type EditablePaymentMethod = 'NONE' | 'CASH' | 'QR';
 
@@ -528,12 +531,37 @@ export async function submitInstallmentQrProof(
         return { code: 400, error: true, message: 'Installment is already paid' };
     }
 
+    let storedProofPath: string;
+    try {
+        const stored = await assertStoredUpload({
+            rawPathOrUrl: qrProofImageUrl,
+            companyId,
+            purpose: UPLOAD_PURPOSES.GROUP_PAYMENT_PROOF,
+            contextId: `INSTALLMENT:${enrollmentId}:${installmentId}`,
+        });
+        if (!(await StorageService.fileExists(stored.relativePath))) {
+            throw new UploadSecurityError('UPLOAD_INTENT_INVALID', 403);
+        }
+        storedProofPath = stored.relativePath;
+    } catch (error) {
+        if (error instanceof UploadSecurityError) {
+            return {
+                code: error.statusCode,
+                error: true,
+                message: error.message,
+                errorCode: error.errorCode,
+                reason: error.errorCode,
+            };
+        }
+        return { code: 403, error: true, message: 'No puedes adjuntar un comprobante que no te pertenece.' };
+    }
+
     const updated = await prisma.enrollmentInstallment.update({
         where: { id: installmentId },
         data: {
             payment_status: PaymentStatus.PENDING_CONFIRMATION,
             payment_method: PaymentMethod.QR,
-            qr_proof_image_url: qrProofImageUrl,
+            qr_proof_image_url: storedProofPath,
         },
     });
 

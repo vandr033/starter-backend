@@ -86,6 +86,7 @@ export const createEventBookingSchema = z.object({
     booked_spots: z.number().int().positive().optional(),
     payment_method: z.enum(['NONE', 'CASH', 'QR']),
     qr_proof_image_url: imageUrlOrPathSchema.nullable().optional(),
+    upload_intent: z.string().trim().min(1).max(4096).nullable().optional(),
     registration_question_answer: z.string().trim().max(5000).nullable().optional(),
     notes: z.string().max(10000).nullable().optional(),
     extra_attendees: z.array(
@@ -113,6 +114,7 @@ export const createClassEnrollmentSchema = z.object({
     group_class_session_id: z.number().int().positive().optional(),
     payment_method: z.enum(['NONE', 'CASH', 'QR']),
     qr_proof_image_url: imageUrlOrPathSchema.nullable().optional(),
+    upload_intent: z.string().trim().min(1).max(4096).nullable().optional(),
 });
 
 export const companyScopedActionSchema = z.object({

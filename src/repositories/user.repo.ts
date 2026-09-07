@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import { canonicalizePhoneParts, normalizePhoneDigits } from '../utils/phoneNormalization';
+import { BETTER_AUTH_CREDENTIAL_PROVIDER_ID } from '../config/auth-constants';
 
 export function buildPhoneLookupCandidates(phoneNumber: string, phonePrefix?: string) {
   const canonicalPhone = canonicalizePhoneParts({ phonePrefix, phoneNumber });
@@ -109,7 +110,7 @@ export const updateUserPassword = async (userId: string, hashedPassword: string)
   return prisma.account.updateMany({
     where: {
       userId,
-      providerId: "credential",
+      providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
     },
     data: {
       password: hashedPassword,

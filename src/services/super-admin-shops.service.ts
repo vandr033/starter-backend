@@ -30,6 +30,10 @@ import {
 } from './super-admin-shop-commercial.service';
 import { recordCompanyProductHistory } from './company-product-history.service';
 import {
+    BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+    BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from '../config/auth-constants';
+import {
     assignOwnerToCompany,
     createCompanyWithDefaults,
 } from './company-provisioning.service';
@@ -992,19 +996,19 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     const hashedOwnerPassword = await bcrypt.hash(ownerPassword, 10);
                     const ownerAccounts = await tx.account.findMany({
                         where: {
-                            providerId: { in: ['credential', 'credentials'] },
+                            providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                             accountId: ownerEmail
                         },
                         orderBy: { createdAt: 'asc' }
                     });
                     const ownerPrimaryAccount =
-                        ownerAccounts.find((a) => a.providerId === 'credential') || ownerAccounts[0] || null;
+                        ownerAccounts.find((a) => a.providerId === BETTER_AUTH_CREDENTIAL_PROVIDER_ID) || ownerAccounts[0] || null;
 
                     if (ownerPrimaryAccount) {
                         await tx.account.update({
                             where: { id: ownerPrimaryAccount.id },
                             data: {
-                                providerId: 'credential',
+                                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                                 accountId: ownerEmail,
                                 userId: ownerUserByEmail.id,
                                 password: hashedOwnerPassword
@@ -1014,7 +1018,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                         if (ownerAccounts.length > 1) {
                             await tx.account.deleteMany({
                                 where: {
-                                    providerId: { in: ['credential', 'credentials'] },
+                                    providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                                     accountId: ownerEmail,
                                     id: { not: ownerPrimaryAccount.id }
                                 }
@@ -1023,7 +1027,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                     } else {
                         await tx.account.create({
                             data: {
-                                providerId: 'credential',
+                                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                                 accountId: ownerEmail,
                                 userId: ownerUserByEmail.id,
                                 password: hashedOwnerPassword
@@ -1705,7 +1709,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
             await prisma.account.create({
                 data: {
                     userId: user.id,
-                    providerId: 'credential',
+                    providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                     accountId: normalizedEmail,
                     password: hashedPassword,
                 }
@@ -1717,7 +1721,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
             const existingCredentialAccount = await prisma.account.findFirst({
                 where: {
                     userId: user.id,
-                    providerId: { in: ['credential', 'credentials'] },
+                    providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                 },
                 orderBy: {
                     createdAt: 'asc',
@@ -1728,7 +1732,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
                 await prisma.account.update({
                     where: { id: existingCredentialAccount.id },
                     data: {
-                        providerId: 'credential',
+                        providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                         accountId: normalizedEmail,
                         password: hashedPassword,
                     },
@@ -1737,7 +1741,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
                 await prisma.account.create({
                     data: {
                         userId: user.id,
-                        providerId: 'credential',
+                        providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                         accountId: normalizedEmail,
                         password: hashedPassword,
                     },

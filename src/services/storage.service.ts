@@ -13,6 +13,15 @@ export class StorageService {
     return filename;
   }
 
+  private static safeFilenamePath(filename: string): string {
+    const normalized = filename.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+    const segments = normalized.split('/');
+    if (!normalized || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+      throw new Error('Invalid filename');
+    }
+    return segments.map((segment) => this.safeFilename(segment)).join('/');
+  }
+
   private static safeRelativePath(relativePath: string): { normalized: string; fullPath: string } {
     const normalized = relativePath.trim().replace(/\\/g, '/').replace(/^\/+/, '');
     if (!normalized || !normalized.startsWith('uploads/') || normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) throw new Error('Invalid storage path');
@@ -193,7 +202,8 @@ export class StorageService {
         throw new Error(`Invalid storage type: ${type}`);
     }
 
-    const filePath = path.join(directory, this.safeFilename(filename));
+    const safeFilename = this.safeFilenamePath(filename);
+    const filePath = path.join(directory, safeFilename);
     const resolvedDirectory = path.resolve(directory);
     const resolvedFilePath = path.resolve(filePath);
     if (!resolvedFilePath.startsWith(`${resolvedDirectory}${path.sep}`)) throw new Error('Invalid storage filename');

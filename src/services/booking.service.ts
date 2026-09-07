@@ -8,6 +8,9 @@ import { companyHasCapability } from './company-entitlements.service';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { resolveEffectiveServicePrice } from './service-pricing.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
+import { assertStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
+import { UploadSecurityError } from '../utils/upload-errors';
+import { StorageService } from './storage.service';
 
 interface GetSlotsParams {
     company_id: number;
@@ -656,17 +659,28 @@ interface CreateBookingParams {
     user_id: string; // From authenticated session
     booking_source?: BookingSource;
     qr_proof_image_url?: string | null;
+    upload_intent?: string | null;
 }
 
 interface CreateBookingResult extends MensajeApi {
     data?: any;
+    errorCode?: string;
+    reason?: string;
+}
+
+function bookingUploadError(error: unknown): CreateBookingResult {
+    if (error instanceof UploadSecurityError) {
+        return { code: error.statusCode, error: true, message: error.message, errorCode: error.errorCode, reason: error.errorCode };
+    }
+    return { code: 403, error: true, message: 'No puedes adjuntar un comprobante que no te pertenece.' };
 }
 
 /**
  * Create a new customer booking
  */
 export async function createBooking(params: CreateBookingParams): Promise<CreateBookingResult> {
-    const { company_id, staff_id, secondary_staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source, qr_proof_image_url } = params;
+    const { company_id, staff_id, secondary_staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source } = params;
+    let qr_proof_image_url = params.qr_proof_image_url?.trim() || null;
 
     try {
         // 1. Validate company exists and is active
@@ -677,6 +691,21 @@ export async function createBooking(params: CreateBookingParams): Promise<Create
                 message: 'Company not found or inactive',
                 error: true,
             };
+        }
+
+        if (qr_proof_image_url) {
+            try {
+                const stored = await assertStoredUpload({
+                    rawPathOrUrl: qr_proof_image_url,
+                    companyId: company_id,
+                    purpose: UPLOAD_PURPOSES.BOOKING_QR_PROOF,
+                    contextId: `BOOKING:${user_id}`,
+                });
+                if (!(await StorageService.fileExists(stored.relativePath))) return bookingUploadError(new UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
+                qr_proof_image_url = stored.relativePath;
+            } catch (error) {
+                return bookingUploadError(error);
+            }
         }
 
         // 1.5 Validate payment method is allowed
@@ -1045,6 +1074,8 @@ interface CreateCustomerBookingParams {
     payment_method: string;
     notes?: string | null;
     qr_proof_image_url?: string | null;
+    upload_intent?: string | null;
+    upload_context_id?: string | null;
     client_name: string;
     client_email: string | null;
     client_phone_prefix: string;
@@ -1109,6 +1140,8 @@ type CreateCheckoutBookingsParams = {
     payment_method: string;
     notes?: string | null;
     qr_proof_image_url?: string | null;
+    upload_intent?: string | null;
+    upload_context_id?: string | null;
     booking_source?: BookingSource;
     client_name: string;
     client_email: string | null;
@@ -1538,10 +1571,25 @@ function buildNotificationLine(params: {
 
 async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Promise<MensajeApi> {
     const bookingFlowSettings = await resolveBookingFlowSettings(params.company.id);
+    let qrProofImageUrl = params.qr_proof_image_url?.trim() || null;
+    if (qrProofImageUrl) {
+        try {
+            const stored = await assertStoredUpload({
+                rawPathOrUrl: qrProofImageUrl,
+                companyId: params.company.id,
+                purpose: UPLOAD_PURPOSES.BOOKING_QR_PROOF,
+                contextId: params.upload_context_id ?? null,
+            });
+            if (!(await StorageService.fileExists(stored.relativePath))) return bookingUploadError(new UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
+            qrProofImageUrl = stored.relativePath;
+        } catch (error) {
+            return bookingUploadError(error);
+        }
+    }
     if (
         params.payment_method === 'QR' &&
         shouldRequireQrProof(bookingFlowSettings) &&
-        !params.qr_proof_image_url
+        !qrProofImageUrl
     ) {
         return {
             code: 400,
@@ -1810,7 +1858,7 @@ async function createCheckoutBookings(params: CreateCheckoutBookingsParams): Pro
                             params.payment_method === 'NONE'
                                 ? PaymentStatus.UNPAID
                                 : PaymentStatus.PENDING_CONFIRMATION,
-                        qr_proof_image_url: params.qr_proof_image_url,
+                        qr_proof_image_url: qrProofImageUrl,
                         total_price_cents: perBookingTotals[slotIndex] ?? group.totalPriceCents,
                         notes: params.notes,
                         created_by_user_id: params.created_by_user_id ?? undefined,
@@ -2028,6 +2076,12 @@ export async function createCustomerBooking(params: CreateCustomerBookingParams)
             payment_method: params.payment_method,
             notes: params.notes,
             qr_proof_image_url: params.qr_proof_image_url,
+            upload_intent: params.upload_intent,
+            // Preserve a guest upload's signed flow context when a booking
+            // started before sign-in and is resumed through this route.
+            upload_context_id: params.upload_context_id !== undefined
+                ? params.upload_context_id
+                : `BOOKING:${params.created_by_user_id}`,
             booking_source: params.booking_source,
             client_name: params.client_name,
             client_email: params.client_email,
@@ -2068,6 +2122,8 @@ interface CreatePublicBookingParams {
     client_phone_prefix: string;
     client_phone_number?: string | null;
     qr_proof_image_url?: string | null;
+    upload_intent?: string | null;
+    upload_context_id?: string | null;
     booking_source?: BookingSource;
     booking_groups?: RequestedBookingGroupInput[];
 }
@@ -2118,6 +2174,8 @@ export async function createPublicBooking(params: CreatePublicBookingParams): Pr
             payment_method: params.payment_method,
             notes: params.notes,
             qr_proof_image_url: params.qr_proof_image_url,
+            upload_intent: params.upload_intent,
+            upload_context_id: params.upload_context_id !== undefined ? params.upload_context_id : null,
             booking_source: params.booking_source,
             client_name: params.client_name ?? 'Cliente',
             client_email: params.client_email ?? null,

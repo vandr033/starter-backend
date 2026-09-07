@@ -1,10 +1,12 @@
 import { logger } from '../config/logger';
 import { sendGenericEmail } from '../utils/sendEmail';
+import type { EmailDeliveryResult } from './notification-provider.service';
 import {
   WahaRequestError,
   type WahaSessionInfo,
   wahaClient,
 } from './waha.service';
+import { wakeWhatsappWorker } from './whatsapp-worker-signals';
 
 const DEFAULT_ALERT_EMAIL = 'sebastian.andradeg@outlook.com';
 const DEFAULT_MONITOR_INTERVAL_MS = 30_000;
@@ -25,7 +27,7 @@ interface WahaDisconnectMonitorOptions {
   env?: NodeJS.ProcessEnv;
   logger?: LoggerLike;
   now?: () => Date;
-  sendEmail?: (to: string, subject: string, html: string) => Promise<void>;
+  sendEmail?: (to: string, subject: string, html: string) => Promise<EmailDeliveryResult | void>;
 }
 
 function normalizeOptionalString(value?: string | null): string | null {
@@ -94,11 +96,15 @@ export function createWahaDisconnectMonitor(options: WahaDisconnectMonitorOption
 
   async function sendDisconnectAlert(status: string): Promise<void> {
     const detectedAt = now();
-    await emailSender(
+    const result = await emailSender(
       recipient,
       `Alert: WAHA disconnected (${session})`,
       buildAlertHtml({ session, status, detectedAt }),
     );
+
+    if (result?.status === 'FAILED') {
+      throw new Error(`Email delivery failed: ${result.reason}`);
+    }
 
     outageAlertSent = true;
     log.warn(
@@ -108,8 +114,12 @@ export function createWahaDisconnectMonitor(options: WahaDisconnectMonitorOption
         status,
         recipient: maskEmail(recipient),
         detectedAt: detectedAt.toISOString(),
+        deliveryStatus: result?.status ?? 'SENT',
+        deliveryReason: result?.reason ?? 'REMOTE_SUCCESS',
       },
-      'WAHA disconnect alert email sent',
+      result?.status === 'SKIPPED'
+        ? 'WAHA disconnect alert email skipped'
+        : 'WAHA disconnect alert email sent',
     );
   }
 
@@ -137,6 +147,10 @@ export function createWahaDisconnectMonitor(options: WahaDisconnectMonitorOption
 
     const previousStatus = lastObservedStatus;
     lastObservedStatus = status;
+    // The worker also polls independently, which is required when it runs in
+    // a separate process. In the web process this status transition wakes it
+    // immediately after a reconnect instead of waiting for the next poll.
+    if (previousStatus !== status) wakeWhatsappWorker();
 
     if (status === 'WORKING') {
       if (outageAlertSent) {

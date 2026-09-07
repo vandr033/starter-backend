@@ -120,6 +120,7 @@ export async function uploadCheckoutPaymentProof(req: Request, res: Response) {
         slug: getRouteParam(req.params.slug),
         authUserId: authReq.authUser?.id ?? null,
         file: req.file,
+        uploadIntent: typeof req.body?.uploadIntent === 'string' ? req.body.uploadIntent : null,
     });
     return res.status(result.code).json(result);
 }
@@ -132,6 +133,7 @@ export async function uploadPublicCommercePaymentProof(req: Request, res: Respon
         accessToken: getAccessToken(req),
         authUserId: authReq.authUser?.id ?? null,
         file: req.file,
+        uploadIntent: typeof req.body?.uploadIntent === 'string' ? req.body.uploadIntent : null,
     });
     return res.status(result.code).json(result);
 }
@@ -143,6 +145,7 @@ export async function deletePublicCommercePaymentProof(req: Request, res: Respon
         orderNumber: getRouteParam(req.params.orderNumber),
         accessToken: getAccessToken(req),
         authUserId: authReq.authUser?.id ?? null,
+        deleteToken: typeof req.body?.deleteToken === 'string' ? req.body.deleteToken.trim() : null,
     });
     return res.status(result.code).json(result);
 }

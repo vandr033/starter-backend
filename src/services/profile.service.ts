@@ -8,7 +8,7 @@ import {
 } from "../utils/verification";
 import { VerificationChannel, VerificationPurpose } from "../types/verification-enums";
 import bcrypt from "bcryptjs";
-import { sendWhatsappCode } from "../utils/whatsappSender";
+import { getWhatsappEnqueueLifecycleStatus, isWhatsappEnqueueAccepted, queueWhatsappCode } from "../utils/whatsappSender";
 import { sendEmailCode } from "../utils/sendEmail";
 import { prisma } from "../prisma/client";
 import { canonicalizePhoneParts } from "../utils/phoneNormalization";
@@ -366,7 +366,7 @@ export async function sendPhoneChangeOtp(
         const code_hash = await bcrypt.hash(code, 10);
         const expires_at = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
 
-        await VerificationRepo.createVerification({
+        const verification = await VerificationRepo.createVerification({
             channel: VerificationChannel.WHATSAPP,
             purpose: VerificationPurpose.PROFILE_UPDATE,
             identifier,
@@ -374,15 +374,28 @@ export async function sendPhoneChangeOtp(
             expires_at,
         });
 
-        const result = await sendWhatsappCode(fullPhone, code);
-        if (result === -1) {
+        const result = await queueWhatsappCode(fullPhone, code, {
+            sourceType: 'PROFILE_PHONE_OTP',
+            sourceId: String(verification.id),
+            expiresAt: expires_at,
+        });
+        if (!isWhatsappEnqueueAccepted(result)) {
             throw new Error("Failed to send WhatsApp verification");
         }
 
+        const deliveryStatus = getWhatsappEnqueueLifecycleStatus(result);
+
         return {
             code: 200,
-            message: "Verification code sent via WhatsApp",
+            message: deliveryStatus === 'SENT'
+                ? "Verification code already sent via WhatsApp"
+                : "Verification code queued for WhatsApp",
             error: false,
+            data: {
+                status: deliveryStatus,
+                queued: deliveryStatus === 'PENDING' || deliveryStatus === 'PROCESSING',
+                job_id: result.jobId ?? null,
+            },
         };
     } catch (error: any) {
         return {

@@ -2,6 +2,7 @@ import { CompanyUserRole } from '@prisma/client';
 import { logger } from '../config/logger';
 import { prisma } from '../prisma/client';
 import { sendGenericEmail } from './sendEmail';
+import { isEmailDeliverySuccessful } from '../services/notification-provider.service';
 
 export function buildWaitlistSpotOpenedTemplate(input: {
     eventTitle: string;
@@ -225,12 +226,18 @@ export async function notifyGroupBookingCreated(input: {
             createdAt: input.createdAt,
         });
 
-        await Promise.allSettled(
+        const deliveries = await Promise.allSettled(
             admins
                 .map((admin) => admin.user.email?.trim())
                 .filter((email): email is string => Boolean(email))
                 .map((email) => sendGenericEmail(email, subject, html, { companyId: input.companyId })),
         );
+        const failedCount = deliveries.filter(
+            (delivery) => delivery.status === 'rejected' || !isEmailDeliverySuccessful(delivery.value),
+        ).length;
+        if (failedCount > 0) {
+            logger.warn({ companyId: input.companyId, failedCount }, 'Some internal group booking emails were not delivered');
+        }
     } catch (error) {
         logger.error({ input, error }, 'Failed to send internal group booking notifications');
     }

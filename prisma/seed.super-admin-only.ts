@@ -1,6 +1,10 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { ensureBusinessPricingDefaults } from "../src/services/business-pricing.service";
+import {
+    BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+    BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from "../src/config/auth-constants";
 
 const prisma = new PrismaClient();
 
@@ -9,7 +13,6 @@ const SUPER_ADMIN_NAME = "Sebastian Andrade";
 const SUPER_ADMIN_FIRST_NAME = "Sebastian";
 const SUPER_ADMIN_LAST_NAME = "Andrade";
 const SUPER_ADMIN_PHONE_PREFIX = "591";
-const CREDENTIAL_PROVIDER_ID = "credential";
 
 const GLOBAL_COMPANY_TYPES = [
     {
@@ -136,20 +139,20 @@ async function main() {
     // Normalize credentials account for this email (avoid duplicates from repeated runs)
     const existingAccounts = await prisma.account.findMany({
         where: {
-            providerId: { in: [CREDENTIAL_PROVIDER_ID, "credentials"] },
+            providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
             accountId: normalizedEmail,
         },
         orderBy: { createdAt: "asc" },
     });
 
     const primaryAccount =
-        existingAccounts.find((a) => a.providerId === CREDENTIAL_PROVIDER_ID) || existingAccounts[0];
+        existingAccounts.find((a) => a.providerId === BETTER_AUTH_CREDENTIAL_PROVIDER_ID) || existingAccounts[0];
 
     if (primaryAccount) {
         await prisma.account.update({
             where: { id: primaryAccount.id },
             data: {
-                providerId: CREDENTIAL_PROVIDER_ID,
+                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                 accountId: normalizedEmail,
                 userId: user.id,
                 password: hashedPassword,
@@ -160,7 +163,7 @@ async function main() {
         if (existingAccounts.length > 1) {
             await prisma.account.deleteMany({
                 where: {
-                    providerId: { in: [CREDENTIAL_PROVIDER_ID, "credentials"] },
+                    providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                     accountId: normalizedEmail,
                     id: { not: primaryAccount.id },
                 },
@@ -170,7 +173,7 @@ async function main() {
         await prisma.account.create({
             data: {
                 accountId: normalizedEmail,
-                providerId: CREDENTIAL_PROVIDER_ID,
+                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                 userId: user.id,
                 password: hashedPassword,
                 accessToken: null,

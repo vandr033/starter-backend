@@ -50,6 +50,7 @@ starter-backend/
 |---------|-------------|
 | `npm run dev` | Start dev server with hot reload |
 | `npm start` | Start production server |
+| `npm run worker:whatsapp` | Start the durable WhatsApp outbox worker |
 | `npm run prisma:seed` | Run Prisma seed script |
 
 ### Prisma Commands
@@ -103,21 +104,51 @@ Uses [better-auth](https://github.com/better-auth/better-auth) for authenticatio
 DATABASE_URL="mysql://user:password@localhost:3306/database_name"
 PORT=3000
 NODE_ENV=development
-WAHA_BASE_URL="https://waha.priconpri.com"
+# Notifications are fail-closed by default.
+MAIL_ENABLED=false
+MAIL_TRANSPORT=disabled
+MAIL_HOST=""
+MAIL_PORT=587
+MAIL_SECURE=false
+MAIL_FROM=""
+MAIL_USER=""
+MAIL_PASS=""
+WAHA_ENABLED=false
+WAHA_TRANSPORT=disabled
+WAHA_BASE_URL=""
 WAHA_API_KEY=""
 WAHA_SESSION="default"
 WAHA_TIMEOUT_MS=15000
+WAHA_MIN_INTERVAL_MS=5000
 WAHA_DISCONNECT_ALERT_EMAIL="sebastian.andradeg@outlook.com"
 WAHA_MONITOR_INTERVAL_MS=30000
+WHATSAPP_WORKER_ENABLED=true
+WHATSAPP_WORKER_POLL_INTERVAL_MS=5000
+WHATSAPP_JOB_LEASE_MS=120000
+WHATSAPP_WORKER_SHUTDOWN_TIMEOUT_MS=20000
+WHATSAPP_MAX_ATTEMPTS=8
+# Public upload intent settings
+UPLOAD_INTENT_SECRET=""
+UPLOAD_INTENT_TTL_SECONDS=600
+UPLOAD_RATE_LIMIT_MAX_PER_MINUTE=30
+STORAGE_DELETE_TOKEN_TTL_SECONDS=3600
 ```
 
-`WAHA_BASE_URL` must point to the API origin, not the dashboard URL. If your WAHA instance does not require API auth, you can leave `WAHA_API_KEY` empty and the backend will omit `X-Api-Key`.
+Set `MAIL_ENABLED=true` only with an explicit `MAIL_TRANSPORT` (`remote`/SMTP requires
+`MAIL_HOST`, `MAIL_FROM`, `MAIL_USER`, and `MAIL_PASS`; `sink` captures mail locally for
+development). The backend never selects `smtp.gmail.com` implicitly. Set `WAHA_ENABLED=true`
+and `WAHA_TRANSPORT=remote` only when `WAHA_BASE_URL` points to the API origin; `sink` is a
+local/test transport and `disabled` performs no external request.
+
+If your WAHA instance does not require API auth, you can leave `WAHA_API_KEY` empty and the
+backend will omit `X-Api-Key`.
 
 The backend checks the configured WAHA session every 30 seconds. It sends one email to
 `WAHA_DISCONNECT_ALERT_EMAIL` when the session is stopped, failed, missing, or requires a
 new QR code. Repeated checks during the same outage do not send duplicate emails; the alert
-resets after the session returns to `WORKING`. Email delivery uses the existing `MAIL_*`
-configuration.
+resets after the session returns to `WORKING`. The durable worker independently polls more
+frequently, pauses while WAHA is not `WORKING`, and resumes pending jobs automatically.
+Email delivery uses the existing `MAIL_*` configuration.
 
 Quick WAHA smoke test:
 ```bash
@@ -128,6 +159,14 @@ curl -X POST https://waha.priconpri.com/api/sendText \
 ```
 
 See `.env.example` for all available options.
+
+WhatsApp messages are persisted in the MySQL outbox before delivery. The web
+server starts the worker automatically, or production can run the same image
+with `npm run worker:whatsapp` as a separate process. Pending jobs survive
+backend/worker restarts and pause while the configured WAHA session is not
+`WORKING`; they resume automatically after the next healthy poll. See
+`WHATSAPP_DELIVERY_REMEDIATION.md` for statuses, retry/expiration rules,
+batch-progress endpoints, and the exact meaning of `SENT`.
 
 ## 📲 Super Admin WAHA Dashboard
 

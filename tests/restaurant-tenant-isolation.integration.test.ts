@@ -25,7 +25,7 @@ import * as Deposits from '../src/services/restaurant-deposit.service';
 import * as Floor from '../src/services/restaurant-floor.service';
 import * as Menu from '../src/services/restaurant-menu.service';
 import { restaurantNotificationLogRepo } from '../src/repositories/restaurant-notification-log.repo';
-import { listRestaurantNotificationHistory } from '../src/services/restaurant-notification.service';
+import { listRestaurantNotificationHistory, notifyRestaurantReservation } from '../src/services/restaurant-notification.service';
 import * as Reservations from '../src/services/restaurant-reservation.service';
 import * as Restaurant from '../src/services/restaurant.service';
 import * as ShiftService from '../src/services/restaurant-shift.service';
@@ -319,4 +319,76 @@ test('real MySQL serializes reservation transitions and notification claims', { 
   const claim = { company_id: fixture.companyA.id, reservation_id: fixture.resourcesA.reservationId, event: RestaurantNotificationEvent.RESTAURANT_RESERVATION_CONFIRMED, channel: RestaurantNotificationChannel.EMAIL, status: RestaurantNotificationStatus.PENDING, trigger: RestaurantNotificationTrigger.AUTOMATIC, dedup_key: 'concurrent-claim', dedup_claim_key: `concurrent-claim-${Date.now()}` } as const;
   const claims = await Promise.all([restaurantNotificationLogRepo.claimAutomatic(claim), restaurantNotificationLogRepo.claimAutomatic(claim)]);
   assert.equal(claims.filter(Boolean).length, 1);
+});
+
+test('real MySQL preserves deposit persistence when the configured email provider is unavailable', { skip: skipReason }, async () => {
+  assert.ok(fixture);
+
+  const originalEnv = new Map<string, string | undefined>([
+    ['MAIL_ENABLED', process.env.MAIL_ENABLED],
+    ['MAIL_TRANSPORT', process.env.MAIL_TRANSPORT],
+    ['MAIL_HOST', process.env.MAIL_HOST],
+    ['MAIL_PORT', process.env.MAIL_PORT],
+    ['MAIL_FROM', process.env.MAIL_FROM],
+    ['MAIL_USER', process.env.MAIL_USER],
+    ['MAIL_PASS', process.env.MAIL_PASS],
+  ]);
+
+  try {
+    process.env.MAIL_ENABLED = 'true';
+    process.env.MAIL_TRANSPORT = 'remote';
+    process.env.MAIL_HOST = '';
+    process.env.MAIL_PORT = '587';
+    process.env.MAIL_FROM = '';
+    process.env.MAIL_USER = '';
+    process.env.MAIL_PASS = '';
+
+    await prisma.restaurantReservation.update({
+      where: { id: fixture.resourcesA.reservationId },
+      data: { customer_email: 'phase1-provider-failure@example.test' },
+    });
+
+    const response = await Deposits.reviewDeposit(
+      fixture.companyA.id,
+      fixture.resourcesA.depositId,
+      fixture.ownerA,
+      { action: 'REJECT', reason: 'Provider failure persistence regression' },
+    );
+
+    assert.equal(response.error, false);
+    const persistedDeposit = await prisma.restaurantReservationDeposit.findUnique({
+      where: { id: fixture.resourcesA.depositId },
+      select: { status: true, rejection_reason: true },
+    });
+    assert.equal(persistedDeposit?.status, 'REJECTED');
+    assert.equal(persistedDeposit?.rejection_reason, 'Provider failure persistence regression');
+
+    const notificationResults = await notifyRestaurantReservation({
+      companyId: fixture.companyA.id,
+      reservationId: fixture.resourcesA.reservationId,
+      event: RestaurantNotificationEvent.DEPOSIT_DEADLINE_REMINDER,
+    });
+    const emailResult = notificationResults.find((result) => result.channel === 'EMAIL');
+    assert.equal(emailResult?.status, 'FAILED');
+    assert.equal(emailResult?.reason, 'PROVIDER_NOT_CONFIGURED');
+
+    const persistedNotification = await prisma.restaurantNotificationLog.findFirst({
+      where: {
+        company_id: fixture.companyA.id,
+        reservation_id: fixture.resourcesA.reservationId,
+        event: RestaurantNotificationEvent.DEPOSIT_DEADLINE_REMINDER,
+        channel: RestaurantNotificationChannel.EMAIL,
+      },
+      orderBy: { id: 'desc' },
+      select: { status: true, error_code: true, error_message: true },
+    });
+    assert.equal(persistedNotification?.status, 'FAILED');
+    assert.equal(persistedNotification?.error_code, 'DELIVERY_FAILED');
+    assert.equal(persistedNotification?.error_message, 'PROVIDER_NOT_CONFIGURED');
+  } finally {
+    for (const [key, value] of originalEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

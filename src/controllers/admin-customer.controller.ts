@@ -202,10 +202,11 @@ export async function downloadImportTemplate(req: AuthenticatedRequest, res: Res
 export async function sendMassMessage(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
-        const { message, search, segment } = req.body as {
+        const { message, search, segment, idempotency_key } = req.body as {
             message?: string;
             search?: string;
             segment?: string;
+            idempotency_key?: string;
         };
 
         if (!companyId) {
@@ -220,6 +221,7 @@ export async function sendMassMessage(req: AuthenticatedRequest, res: Response) 
             message: message || '',
             search: search || '',
             segment: CustomerService.normalizeCustomerSegment(segment),
+            idempotencyKey: idempotency_key,
         });
 
         return res.status(result.code).json(result);

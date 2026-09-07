@@ -20,13 +20,34 @@ import {
 import { generateInstallmentsForEnrollment } from './enrollment-installment.service';
 import { buildWaitlistSpotOpenedTemplate, notifyGroupBookingCreated } from '../utils/groupNotifications';
 import { isTemporaryEmailAddress, sendCustomerMassMessageEmail, sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { queueWhatsappBatch, isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 import { buildCustomerKey } from '../repositories/customer.repo';
+import { assertStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
+import { UploadSecurityError } from '../utils/upload-errors';
+import { StorageService } from './storage.service';
 
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
+
+function groupUploadError(error: unknown): ServiceResult {
+    if (error instanceof UploadSecurityError) {
+        return {
+            code: error.statusCode,
+            error: true,
+            message: error.message,
+            errorCode: error.errorCode,
+            reason: error.errorCode,
+        } as ServiceResult;
+    }
+    return {
+        code: 403,
+        error: true,
+        message: 'No puedes adjuntar un comprobante que no te pertenece.',
+    } as ServiceResult;
+}
 export type EventMassMessageProgress = {
     total_recipients: number;
     processed: number;
@@ -36,6 +57,8 @@ export type EventMassMessageProgress = {
     skipped_no_contact: number;
     skipped_duplicates: number;
     failed: number;
+    queued_whatsapp?: number;
+    batch_id?: string;
 };
 
 type EventMassMessageFailedChannel = 'WHATSAPP' | 'EMAIL';
@@ -50,6 +73,7 @@ type EventMassMessageDeliveryMode = 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
 type EventMassMessagePayload = {
     message: string;
     delivery_mode?: EventMassMessageDeliveryMode;
+    idempotency_key?: string;
     selected_targets?: Array<{
         source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
         id: number;
@@ -59,6 +83,7 @@ type EventMassMessagePayload = {
 type ClassMassMessagePayload = {
     message: string;
     delivery_mode?: EventMassMessageDeliveryMode;
+    idempotency_key?: string;
     selected_targets?: Array<{
         id: number;
     }>;
@@ -300,6 +325,7 @@ export interface CreateEventBookingInput {
     booked_spots?: number;
     payment_method: 'NONE' | 'CASH' | 'QR';
     qr_proof_image_url?: string | null;
+    upload_intent?: string | null;
     registration_question_answer?: string | null;
     notes?: string | null;
     extra_attendees?: EventExtraAttendeeInput[];
@@ -322,6 +348,24 @@ export async function createEventBooking(
     const canUse = await isFeatureEnabledForCompany(companyId, 'GROUP_EVENTS');
     if (!canUse) {
         return { code: 403, error: true, message: 'Group events require Business plan or higher' };
+    }
+
+    let qrProofImageUrl = input.qr_proof_image_url?.trim() || null;
+    if (qrProofImageUrl) {
+        try {
+            const stored = await assertStoredUpload({
+                rawPathOrUrl: qrProofImageUrl,
+                companyId,
+                purpose: UPLOAD_PURPOSES.GROUP_PAYMENT_PROOF,
+                contextId: `EVENT:${input.group_event_id}`,
+            });
+            if (!(await StorageService.fileExists(stored.relativePath))) {
+                return groupUploadError(new UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
+            }
+            qrProofImageUrl = stored.relativePath;
+        } catch (error) {
+            return groupUploadError(error);
+        }
     }
 
     const spots = input.booked_spots ?? 1;
@@ -450,7 +494,7 @@ export async function createEventBooking(
         const requireComprobante = canCustomize ? (settings?.require_comprobante_for_qr ?? true) : true;
 
         // Validate QR proof if required
-        if (!event.is_free && input.payment_method === 'QR' && requireComprobante && !input.qr_proof_image_url) {
+        if (!event.is_free && input.payment_method === 'QR' && requireComprobante && !qrProofImageUrl) {
             return { code: 400, error: true, message: 'QR payment proof is required' } as ServiceResult;
         }
 
@@ -474,7 +518,7 @@ export async function createEventBooking(
                     booked_spots: spots,
                     payment_method: event.is_free ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                     payment_status: paymentStatus,
-                    qr_proof_image_url: input.qr_proof_image_url ?? null,
+                    qr_proof_image_url: qrProofImageUrl,
                     total_price_cents: event.is_free ? 0 : event.price_cents * spots,
                     extra_attendees_json: normalizedExtraAttendees as Prisma.InputJsonValue,
                     registration_question_answer: event.registration_question_text ? registrationQuestionAnswer : null,
@@ -492,7 +536,7 @@ export async function createEventBooking(
                     booked_spots: spots,
                     payment_method: event.is_free ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                     payment_status: paymentStatus,
-                    qr_proof_image_url: input.qr_proof_image_url ?? null,
+                    qr_proof_image_url: qrProofImageUrl,
                     total_price_cents: event.is_free ? 0 : event.price_cents * spots,
                     extra_attendees_json: normalizedExtraAttendees as Prisma.InputJsonValue,
                     registration_question_answer: event.registration_question_text ? registrationQuestionAnswer : null,
@@ -650,7 +694,7 @@ async function runEventMassMessage(
         }),
         prisma.groupEvent.findFirst({
             where: { id: eventId, company_id: companyId, deleted_at: null },
-            select: { id: true, title: true },
+            select: { id: true, title: true, start_at: true },
         }),
         prisma.configMessage.findUnique({
             where: {
@@ -771,17 +815,61 @@ async function runEventMassMessage(
             ? `${company.name} · ${event.title}\n\n${message}`
             : `${company.name} · ${event.title}\n\n${message}`;
 
+    const wantsWhatsapp = deliveryMode === 'AUTO' || deliveryMode === 'WHATSAPP' || deliveryMode === 'BOTH';
+    const whatsappItems = [] as Array<{
+        recipient: string;
+        text: string;
+        sourceType: string;
+        sourceId: string;
+        dedupeKey: string;
+        expiresAt: Date;
+    }>;
+    if (wantsWhatsapp) {
+        for (const recipient of recipients) {
+            const whatsappTarget = buildFullPhone(recipient.phonePrefix, recipient.phone);
+            if (!whatsappTarget) continue;
+            if (seenWhatsappTargets.has(whatsappTarget)) {
+                duplicatesSkipped += 1;
+                continue;
+            }
+            seenWhatsappTargets.add(whatsappTarget);
+            whatsappItems.push({
+                recipient: whatsappTarget,
+                text: whatsappText,
+                sourceType: 'GROUP_EVENT_MASS_MESSAGE',
+                sourceId: `${recipient.source}:${recipient.id}`,
+                dedupeKey: `${payload.idempotency_key ?? `event:${eventId}:${deliveryMode}:${message}`}:${recipient.source}:${recipient.id}`,
+                expiresAt: event.start_at,
+            });
+        }
+    }
+
+    const whatsappBatch = wantsWhatsapp
+        ? await queueWhatsappBatch(whatsappItems, {
+            companyId,
+            sourceType: 'GROUP_EVENT_MASS_MESSAGE',
+            sourceId: String(eventId),
+            idempotencyKey: payload.idempotency_key ?? `event:${eventId}:${deliveryMode}:${message}`,
+            metadata: { eventId, deliveryMode, recipientCount: recipients.length },
+        })
+        : null;
+    const queuedWhatsapp = whatsappBatch?.queued ?? 0;
+    failed += whatsappBatch?.rejected ?? 0;
+    duplicatesSkipped += whatsappBatch?.duplicates ?? 0;
+
     const emitProgress = async () => {
         if (!onProgress) return;
         await onProgress({
             total_recipients: recipients.length,
             processed,
-            sent_total: whatsappSent + emailSent,
+            sent_total: emailSent,
             sent_whatsapp: whatsappSent,
             sent_email: emailSent,
             skipped_no_contact: noContact,
             skipped_duplicates: duplicatesSkipped,
             failed,
+            queued_whatsapp: queuedWhatsapp,
+            batch_id: whatsappBatch?.batchId,
         });
     };
 
@@ -828,73 +916,10 @@ async function runEventMassMessage(
         const wantsEmail = deliveryMode === 'EMAIL' || deliveryMode === 'BOTH';
         let attemptedChannel = false;
         let hasSelectedContact = false;
-        let whatsappFailedInAuto = false;
 
         if (wantsWhatsapp && whatsappTarget) {
             hasSelectedContact = true;
-
-            if (seenWhatsappTargets.has(whatsappTarget)) {
-                duplicatesSkipped += 1;
-                logger.warn(
-                    {
-                        event: 'group_event_mass_message_duplicate_whatsapp',
-                        companyId,
-                        groupEventId: eventId,
-                        recipientSource: recipient.source,
-                        recipientId: recipient.id,
-                        whatsappTarget,
-                    },
-                    'Skipping duplicate WhatsApp recipient in group event mass message',
-                );
-            } else {
-                attemptedChannel = true;
-                const waResult = await sendWhatsappText(whatsappTarget, whatsappText, { companyId });
-                if (waResult !== -1) {
-                    whatsappSent += 1;
-                    seenWhatsappTargets.add(whatsappTarget);
-                    logger.info(
-                        {
-                            event: 'group_event_mass_message_whatsapp_sent',
-                            companyId,
-                            groupEventId: eventId,
-                            recipientSource: recipient.source,
-                            recipientId: recipient.id,
-                            whatsappTarget,
-                            deliveryMode,
-                            processed: processed + 1,
-                            totalRecipients: recipients.length,
-                        },
-                        'Group event mass message sent by WhatsApp',
-                    );
-                    if (deliveryMode === 'AUTO') {
-                        processed += 1;
-                        await emitProgress();
-                        continue;
-                    }
-                } else {
-                    if (deliveryMode === 'AUTO') {
-                        whatsappFailedInAuto = true;
-                    } else {
-                        failed += 1;
-                        markFailedTarget(recipient, 'WHATSAPP');
-                    }
-                    logger.error(
-                        {
-                            event: 'group_event_mass_message_whatsapp_failed',
-                            companyId,
-                            groupEventId: eventId,
-                            recipientSource: recipient.source,
-                            recipientId: recipient.id,
-                            whatsappTarget,
-                            emailTarget,
-                            deliveryMode,
-                            processed: processed + 1,
-                            totalRecipients: recipients.length,
-                        },
-                        'Group event mass message failed on WhatsApp send',
-                    );
-                }
-            }
+            attemptedChannel = true;
         }
 
         if (wantsEmail && emailTarget) {
@@ -962,14 +987,6 @@ async function runEventMassMessage(
             }
         }
 
-        if (deliveryMode === 'AUTO' && whatsappFailedInAuto) {
-            const emailSucceeded = emailTarget ? seenEmailTargets.has(emailTarget) : false;
-            if (!emailSucceeded) {
-                failed += 1;
-                markFailedTarget(recipient, 'WHATSAPP');
-            }
-        }
-
         if (!attemptedChannel && !hasSelectedContact) {
             noContact += 1;
             logger.warn(
@@ -989,7 +1006,7 @@ async function runEventMassMessage(
         await emitProgress();
     }
 
-    const totalSent = whatsappSent + emailSent;
+    const totalSent = emailSent;
     const failedTargetsList: EventMassMessageFailedTarget[] = Array.from(failedTargets.values()).map((target) => ({
         source: target.source,
         id: target.id,
@@ -1020,7 +1037,7 @@ async function runEventMassMessage(
     return {
         code: 200,
         error: false,
-        message: totalSent > 0 ? 'Mass message sent' : 'No messages sent',
+        message: queuedWhatsapp > 0 ? 'Mass message queued' : totalSent > 0 ? 'Mass message sent' : 'No messages sent',
         data: {
             total_customers: recipients.length,
             sent_total: totalSent,
@@ -1030,6 +1047,10 @@ async function runEventMassMessage(
             skipped_duplicates: duplicatesSkipped,
             failed,
             failed_targets: failedTargetsList,
+            batch_id: whatsappBatch?.batchId ?? null,
+            queued_whatsapp: queuedWhatsapp,
+            pending_whatsapp: whatsappBatch?.pending ?? queuedWhatsapp,
+            delivery_status: whatsappBatch?.status ?? null,
         },
     };
 }
@@ -1170,6 +1191,45 @@ export async function sendClassMassMessage(
             ? `${company.name} · ${groupClass.title}\n\n${message}`
             : `${company.name} · ${groupClass.title}\n\n${message}`;
 
+    const wantsWhatsapp = deliveryMode === 'AUTO' || deliveryMode === 'WHATSAPP' || deliveryMode === 'BOTH';
+    const whatsappItems = [] as Array<{
+        recipient: string;
+        text: string;
+        sourceType: string;
+        sourceId: string;
+        dedupeKey: string;
+    }>;
+    if (wantsWhatsapp) {
+        for (const recipient of recipients) {
+            const whatsappTarget = buildFullPhone(recipient.phonePrefix, recipient.phone);
+            if (!whatsappTarget) continue;
+            if (seenWhatsappTargets.has(whatsappTarget)) {
+                duplicatesSkipped += 1;
+                continue;
+            }
+            seenWhatsappTargets.add(whatsappTarget);
+            whatsappItems.push({
+                recipient: whatsappTarget,
+                text: whatsappText,
+                sourceType: 'GROUP_CLASS_MASS_MESSAGE',
+                sourceId: String(recipient.id),
+                dedupeKey: `${payload.idempotency_key ?? `class:${classId}:${deliveryMode}:${message}`}:${recipient.id}`,
+            });
+        }
+    }
+    const whatsappBatch = wantsWhatsapp
+        ? await queueWhatsappBatch(whatsappItems, {
+            companyId,
+            sourceType: 'GROUP_CLASS_MASS_MESSAGE',
+            sourceId: String(classId),
+            idempotencyKey: payload.idempotency_key ?? `class:${classId}:${deliveryMode}:${message}`,
+            metadata: { classId, deliveryMode, recipientCount: recipients.length },
+        })
+        : null;
+    const queuedWhatsapp = whatsappBatch?.queued ?? 0;
+    failed += whatsappBatch?.rejected ?? 0;
+    duplicatesSkipped += whatsappBatch?.duplicates ?? 0;
+
     logger.info(
         {
             event: 'group_class_mass_message_started',
@@ -1196,19 +1256,7 @@ export async function sendClassMassMessage(
 
         if (wantsWhatsapp && whatsappTarget) {
             hasSelectedContact = true;
-
-            if (seenWhatsappTargets.has(whatsappTarget)) {
-                duplicatesSkipped += 1;
-            } else {
-                attemptedChannel = true;
-                const waResult = await sendWhatsappText(whatsappTarget, whatsappText, { companyId });
-                if (waResult !== -1) {
-                    whatsappSent += 1;
-                    seenWhatsappTargets.add(whatsappTarget);
-                } else {
-                    failed += 1;
-                }
-            }
+            attemptedChannel = true;
         }
 
         if (wantsEmail && emailTarget) {
@@ -1240,7 +1288,7 @@ export async function sendClassMassMessage(
         }
     }
 
-    const totalSent = whatsappSent + emailSent;
+    const totalSent = emailSent;
     logger.info(
         {
             event: 'group_class_mass_message_completed',
@@ -1265,7 +1313,7 @@ export async function sendClassMassMessage(
     return {
         code: 200,
         error: false,
-        message: totalSent > 0 ? 'Mass message sent' : 'No messages sent',
+        message: queuedWhatsapp > 0 ? 'Mass message queued' : totalSent > 0 ? 'Mass message sent' : 'No messages sent',
         data: {
             total_customers: recipients.length,
             sent_total: totalSent,
@@ -1274,6 +1322,10 @@ export async function sendClassMassMessage(
             skipped_no_contact: noContact,
             skipped_duplicates: duplicatesSkipped,
             failed,
+            batch_id: whatsappBatch?.batchId ?? null,
+            queued_whatsapp: queuedWhatsapp,
+            pending_whatsapp: whatsappBatch?.pending ?? queuedWhatsapp,
+            delivery_status: whatsappBatch?.status ?? null,
         },
     };
 }
@@ -1701,27 +1753,37 @@ async function notifyWaitlistOfOpenSpot(companyId: number, eventId: number): Pro
         const deliveries = await Promise.allSettled(
             waitlisted.map(async (entry) => {
                 let delivered = false;
+                let queued = false;
 
                 if (sendEmail && entry.user.email && !isTemporaryEmailAddress(entry.user.email)) {
                     const html = `<p>${template.text.replace(/\n/g, '<br/>')}</p>`;
-                    await sendGenericEmail(entry.user.email, template.subject, html, { companyId });
-                    delivered = true;
+                    const result = await sendGenericEmail(entry.user.email, template.subject, html, { companyId });
+                    delivered = isEmailDeliverySuccessful(result);
                 }
 
                 const fullPhone = buildFullPhone(entry.user.phone_prefix, entry.user.phoneNumber);
                 if (sendWhatsapp && fullPhone) {
-                    const result = await sendWhatsappText(fullPhone, template.text, { companyId });
-                    if (result !== -1) {
-                        delivered = true;
+                    const result = await queueWhatsappText(fullPhone, template.text, {
+                        companyId,
+                        sourceType: 'EVENT_WAITLIST_NOTIFICATION',
+                        sourceId: String(entry.id),
+                        dedupeKey: `event-waitlist:${event.id}:${entry.id}:${template.text}`,
+                        expiresAt: event.start_at,
+                    });
+                    if (isWhatsappEnqueueAccepted(result)) {
+                        queued = true;
                     }
                 }
 
-                return delivered;
+                return { delivered, queued };
             }),
         );
 
         const deliveredCount = deliveries.filter(
-            (result) => result.status === 'fulfilled' && result.value === true,
+            (result) => result.status === 'fulfilled' && result.value.delivered,
+        ).length;
+        const queuedCount = deliveries.filter(
+            (result) => result.status === 'fulfilled' && result.value.queued,
         ).length;
         const failedCount = deliveries.filter((result) => result.status === 'rejected').length;
 
@@ -1731,6 +1793,7 @@ async function notifyWaitlistOfOpenSpot(companyId: number, eventId: number): Pro
                 eventId,
                 waitlistedCount: waitlisted.length,
                 deliveredCount,
+                queuedCount,
                 failedCount,
             },
             'Waitlist notification batch completed',
@@ -1906,6 +1969,7 @@ export interface CreateClassEnrollmentInput {
     group_class_session_id?: number;
     payment_method: 'NONE' | 'CASH' | 'QR';
     qr_proof_image_url?: string | null;
+    upload_intent?: string | null;
 }
 
 /**
@@ -1919,6 +1983,24 @@ export async function createClassEnrollment(
     const canUse = await isFeatureEnabledForCompany(companyId, 'GROUP_CLASSES');
     if (!canUse) {
         return { code: 403, error: true, message: 'Classes are not available for this business' };
+    }
+
+    let qrProofImageUrl = input.qr_proof_image_url?.trim() || null;
+    if (qrProofImageUrl) {
+        try {
+            const stored = await assertStoredUpload({
+                rawPathOrUrl: qrProofImageUrl,
+                companyId,
+                purpose: UPLOAD_PURPOSES.GROUP_PAYMENT_PROOF,
+                contextId: `CLASS:${input.group_class_id}`,
+            });
+            if (!(await StorageService.fileExists(stored.relativePath))) {
+                return groupUploadError(new UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
+            }
+            qrProofImageUrl = stored.relativePath;
+        } catch (error) {
+            return groupUploadError(error);
+        }
     }
 
     const canCustomize = await isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
@@ -2031,7 +2113,7 @@ export async function createClassEnrollment(
             if (gc.price_cents > 0 && input.payment_method === 'NONE') {
                 return { code: 400, error: true, message: 'Paid classes require a payment method' } as ServiceResult;
             }
-            if (input.payment_method === 'QR' && requireComprobante && !input.qr_proof_image_url) {
+            if (input.payment_method === 'QR' && requireComprobante && !qrProofImageUrl) {
                 return { code: 400, error: true, message: 'QR payment proof is required' } as ServiceResult;
             }
         }
@@ -2068,7 +2150,7 @@ export async function createClassEnrollment(
                 status,
                 payment_method: isFullCourse ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                 payment_status: paymentStatus,
-                qr_proof_image_url: isFullCourse ? null : (input.qr_proof_image_url ?? null),
+                qr_proof_image_url: isFullCourse ? null : qrProofImageUrl,
                 source: ClassEnrollmentSource.PUBLIC_CHECKOUT,
                 valid_from: validFrom,
                 valid_until: validUntil,

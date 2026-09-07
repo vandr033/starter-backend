@@ -10,6 +10,23 @@ POST /api/booking/public
 ### Description
 Create a new booking as a guest/customer without requiring authentication. This endpoint is designed for public-facing booking forms where customers may not have an account.
 
+### QR proof upload authorization
+
+Do not upload a proof by posting a caller-selected `company_id`. First request a
+short-lived intent from `POST /api/upload/intents/:shopSlug`:
+
+```json
+{
+  "purpose": "BOOKING_QR_PROOF",
+  "context": { "type": "BOOKING", "id": "guest-flow-0123456789" }
+}
+```
+
+Upload the file to `POST /api/upload/qr` with the returned `uploadIntent` and
+use the returned `url` plus `contextId` in this booking request. The server
+re-checks the tenant, purpose, signed context, expiry/replay state, file
+signature, and file existence before creating the booking.
+
 ### Request Body
 ```json
 {
@@ -23,7 +40,8 @@ Create a new booking as a guest/customer without requiring authentication. This 
   "client_email": "john@example.com",
   "client_phone_prefix": "591",
   "client_phone_number": "71234567",
-  "qr_proof_image_url": "/api/storage/uploads/1/qr/payment-proof.jpg"
+  "qr_proof_image_url": "/api/storage/uploads/1/qr/payment-proof.jpg",
+  "upload_context_id": "BOOKING:guest-flow-0123456789"
 }
 ```
 
@@ -52,11 +70,13 @@ Create a new booking as a guest/customer without requiring authentication. This 
 - **client_phone_prefix** (string): Phone country code (default: "591")
 - **client_phone_number** (string): Customer's phone number
 - **qr_proof_image_url** (string): URL to QR payment proof image (required if payment_method is "QR")
+- **upload_context_id** (string|null): The `contextId` returned by the upload intent/upload response for the proof URL
 
 ### Validation Rules
 - Email must be a valid email format (if provided)
 - Phone number must be a valid string (if provided)
 - If payment_method is "QR", qr_proof_image_url is required
+- Any proof URL must belong to a consumed, tenant- and purpose-bound upload intent; arbitrary storage URLs are rejected
 - All services must belong to the specified company
 - Staff must be able to perform the selected services
 - Time slot must be available

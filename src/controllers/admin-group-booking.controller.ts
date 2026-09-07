@@ -72,16 +72,19 @@ function parsePositiveInt(raw: unknown): number | undefined {
 function parseEventMassMessagePayload(body: unknown): {
     message: string;
     delivery_mode?: 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
+    idempotency_key?: string;
     selected_targets?: Array<{ source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number }>;
 } {
-    const { message, delivery_mode, selected_targets } = (body ?? {}) as {
+    const { message, delivery_mode, selected_targets, idempotency_key } = (body ?? {}) as {
         message?: string;
         delivery_mode?: string;
+        idempotency_key?: string;
         selected_targets?: Array<{ source?: string; id?: number }>;
     };
 
     return {
         message: message || '',
+        idempotency_key: typeof idempotency_key === 'string' ? idempotency_key.trim() || undefined : undefined,
         delivery_mode:
             delivery_mode === 'WHATSAPP'
             || delivery_mode === 'EMAIL'
@@ -107,16 +110,19 @@ function parseEventMassMessagePayload(body: unknown): {
 function parseClassMassMessagePayload(body: unknown): {
     message: string;
     delivery_mode?: 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
+    idempotency_key?: string;
     selected_targets?: Array<{ id: number }>;
 } {
-    const { message, delivery_mode, selected_targets } = (body ?? {}) as {
+    const { message, delivery_mode, selected_targets, idempotency_key } = (body ?? {}) as {
         message?: string;
         delivery_mode?: string;
+        idempotency_key?: string;
         selected_targets?: Array<{ id?: number }>;
     };
 
     return {
         message: message || '',
+        idempotency_key: typeof idempotency_key === 'string' ? idempotency_key.trim() || undefined : undefined,
         delivery_mode:
             delivery_mode === 'WHATSAPP'
             || delivery_mode === 'EMAIL'

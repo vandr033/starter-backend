@@ -5,7 +5,7 @@ import * as GroupEventService from '../services/group-event.service';
 import * as GroupBookingService from '../services/group-booking.service';
 import * as GroupAttendanceService from '../services/group-attendance.service';
 import { prisma } from '../prisma/client';
-import { createWhatsappGroup, sendWhatsappGroupMessage } from '../utils/whatsappSender';
+import { createWhatsappGroup, isWhatsappEnqueueAccepted, queueWhatsappGroupMessage } from '../utils/whatsappSender';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -224,6 +224,14 @@ export async function sendMessageToWhatsappGroup(req: AuthenticatedRequest, res:
     const { message } = req.body as { message?: string };
     if (!message?.trim()) return res.status(400).json({ message: 'Message is required' });
 
-    await sendWhatsappGroupMessage(group.group_jid, message.trim());
-    return res.json({ ok: true });
+    const result = await queueWhatsappGroupMessage(group.group_jid, message.trim(), {
+        companyId,
+        sourceType: 'EVENT_GROUP_MESSAGE',
+        sourceId: String(group.id),
+        dedupeKey: `event-group-message:${group.id}:${message.trim()}`,
+    });
+    if (!isWhatsappEnqueueAccepted(result)) {
+        return res.status(502).json({ ok: false, message: 'WhatsApp message could not be queued', reason: result.reason });
+    }
+    return res.json({ ok: true, queued: true, job_id: result.jobId, status: result.status });
 }

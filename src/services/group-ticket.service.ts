@@ -6,7 +6,8 @@ import { MensajeApi } from '../types/MensajeApi';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { buildGroupTicketQrImageUrl, buildGroupTicketQrToken } from './group-ticket-qr.service';
 import { isTemporaryEmailAddress, sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappImage, sendWhatsappText } from '../utils/whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappImage } from '../utils/whatsappSender';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
 
 type ServiceResult = MensajeApi & { data?: unknown };
 
@@ -67,7 +68,7 @@ function getCustomerPortalUrl(companySlug?: string | null): string {
 
 async function sendTicketNotification(companyId: number, ticketId: number, options?: {
     isResend?: boolean;
-}): Promise<{ sent: boolean; channels: string[] }> {
+}): Promise<{ sent: boolean; queued: boolean; channels: string[]; queuedChannels: string[] }> {
     const ticket = await prisma.groupTicket.findFirst({
         where: {
             id: ticketId,
@@ -118,7 +119,7 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
     });
 
     if (!ticket || ticket.status === TicketStatus.CANCELLED || ticket.status === TicketStatus.EXPIRED) {
-        return { sent: false, channels: [] };
+        return { sent: false, queued: false, channels: [], queuedChannels: [] };
     }
 
     const settings = await prisma.companySettings.findUnique({
@@ -136,7 +137,7 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
     const isClassTicket = Boolean(ticket.group_class_enrollment_id && ticket.class_enrollment);
 
     if (!isEventTicket && !isClassTicket) {
-        return { sent: false, channels: [] };
+        return { sent: false, queued: false, channels: [], queuedChannels: [] };
     }
 
     const company = isEventTicket ? ticket.event_booking!.group_event.company : ticket.class_enrollment!.group_class.company;
@@ -241,12 +242,20 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
 
     const whatsappFallbackText = `${whatsappCaption}\nQR image: ${qrImageUrl}`;
 
-    const successfulChannels: string[] = [];
+    const sentChannels: string[] = [];
+    const queuedChannels: string[] = [];
 
     if (sendEmail && user.email && !isTemporaryEmailAddress(user.email)) {
         try {
-            await sendGenericEmail(user.email, emailSubject, emailHtml, { companyId });
-            successfulChannels.push('EMAIL');
+            const result = await sendGenericEmail(user.email, emailSubject, emailHtml, { companyId });
+            if (isEmailDeliverySuccessful(result)) {
+                sentChannels.push('EMAIL');
+            } else {
+                logger.error(
+                    { companyId, ticketId, reason: result.reason },
+                    'Group ticket email was not delivered',
+                );
+            }
         } catch (error) {
             logger.error(
                 { companyId, ticketId, error },
@@ -257,36 +266,57 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
 
     const phoneTarget = buildFullPhone(user.phone_prefix, user.phoneNumber);
     if (sendWhatsapp && phoneTarget) {
-        const imageResult = await sendWhatsappImage(phoneTarget, qrImageUrl, whatsappCaption, { companyId });
-        if (imageResult !== -1) {
-            successfulChannels.push('WHATSAPP');
+        const deliveryKey = `${ticket.id}:${options?.isResend ? ticket.resend_count + 1 : ticket.resend_count}`;
+        const imageResult = await queueWhatsappImage(phoneTarget, qrImageUrl, whatsappCaption, {
+            companyId,
+            sourceType: 'GROUP_TICKET',
+            sourceId: String(ticket.id),
+            dedupeKey: `group-ticket:${deliveryKey}:image`,
+            expiresAt: ticket.valid_until,
+            fallbackText: whatsappFallbackText,
+            fallbackDedupeKey: `group-ticket:${deliveryKey}:text-fallback`,
+            groupTicketId: ticket.id,
+        });
+        if (isWhatsappEnqueueAccepted(imageResult)) {
+            queuedChannels.push('WHATSAPP');
         } else {
-            const textResult = await sendWhatsappText(phoneTarget, whatsappFallbackText, { companyId });
-            if (textResult !== -1) {
-                successfulChannels.push('WHATSAPP');
-            } else {
-                logger.error(
-                    { companyId, ticketId, phoneTarget },
-                    'Failed sending group ticket WhatsApp message',
-                );
-            }
+            logger.error(
+                { companyId, ticketId, phoneTarget, reason: imageResult.reason },
+                'Failed queueing group ticket WhatsApp message',
+            );
         }
     }
 
-    if (successfulChannels.length === 0) {
-        return { sent: false, channels: [] };
+    if (sentChannels.length === 0 && queuedChannels.length === 0) {
+        return { sent: false, queued: false, channels: [], queuedChannels: [] };
     }
 
-    await prisma.groupTicket.update({
-        where: { id: ticket.id },
-        data: {
-            last_sent_at: new Date(),
-            delivery_count: { increment: 1 },
-            ...(options?.isResend ? { resend_count: { increment: 1 } } : {}),
-        },
-    });
+    if (options?.isResend) {
+        await prisma.groupTicket.update({
+            where: { id: ticket.id },
+            data: { resend_count: { increment: 1 } },
+        });
+    }
 
-    return { sent: true, channels: successfulChannels };
+    // WhatsApp is durable but asynchronous. Only synchronous email delivery
+    // can update the provider-success counter at this point; the worker adds
+    // a WhatsApp delivery when it records the job as SENT.
+    if (sentChannels.length > 0) {
+        await prisma.groupTicket.update({
+            where: { id: ticket.id },
+            data: {
+                last_sent_at: new Date(),
+                delivery_count: { increment: 1 },
+            },
+        });
+    }
+
+    return {
+        sent: sentChannels.length > 0,
+        queued: queuedChannels.length > 0,
+        channels: [...sentChannels, ...queuedChannels],
+        queuedChannels,
+    };
 }
 
 function mapTicketWithQr<T extends { company_id: number; ticket_code: string; issued_at: Date }>(
@@ -599,17 +629,20 @@ export async function resendTicketByCode(companyId: number, ticketCode: string):
     }
 
     const delivery = await sendTicketNotification(companyId, ticket.id, { isResend: true });
-    if (!delivery.sent) {
+    if (!delivery.sent && !delivery.queued) {
         return { code: 400, error: true, message: 'Ticket could not be delivered. Verify customer contact info and notification settings.' };
     }
 
     return {
         code: 200,
         error: false,
-        message: 'Ticket re-sent',
+        message: delivery.queued && !delivery.sent ? 'Ticket queued' : 'Ticket re-sent',
         data: {
             ticket_code: ticket.ticket_code,
             channels: delivery.channels,
+            sent_channels: delivery.sent ? delivery.channels.filter((channel) => !delivery.queuedChannels.includes(channel)) : [],
+            queued_channels: delivery.queuedChannels,
+            status: delivery.queued && !delivery.sent ? 'PENDING' : 'SENT',
         },
     };
 }

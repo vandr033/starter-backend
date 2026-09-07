@@ -129,8 +129,8 @@ export async function getAvailability(slug: string, input: { date: string; party
   } catch (error: any) { return fail(error.status || 500, error.message || 'No pudimos consultar horarios disponibles.'); }
 }
 
-export async function uploadReservationDepositProof(slug: string, reservationCode: string, file: { buffer: Buffer; mimetype: string; originalname: string }): Promise<Result> {
-  return uploadPublicReservationProof(slug, reservationCode, file);
+export async function uploadReservationDepositProof(slug: string, reservationCode: string, file: { buffer: Buffer; mimetype: string; originalname: string } | undefined, uploadIntent: string | null = null): Promise<Result> {
+  return uploadPublicReservationProof(slug, reservationCode, file, uploadIntent);
 }
 
 export async function createPublicReservation(slug: string, input: any): Promise<Result> {

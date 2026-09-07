@@ -13,17 +13,14 @@ import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { StorageService } from './storage.service';
 import { notifyRestaurantReservation } from './restaurant-notification.service';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
+import { consumeUploadIntent, recordStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
+import { UploadSecurityError, UPLOAD_ERROR_CODES } from '../utils/upload-errors';
+import { validateUploadFile, PUBLIC_UPLOAD_MAX_BYTES, PUBLIC_UPLOAD_MIME_TYPES } from '../utils/upload-validation';
 
-type Result = { code: number; error: boolean; message: string; data?: unknown };
+type Result = { code: number; error: boolean; message: string; data?: unknown; errorCode?: string; reason?: string };
 const ok = (data: unknown, message = 'Operación realizada correctamente.', code = 200): Result => ({ code, error: false, message, data });
 const fail = (code: number, message: string): Result => ({ code, error: true, message });
 
-const proofMimes: Record<string, { extension: string; signature: (buffer: Buffer) => boolean }> = {
-  'image/jpeg': { extension: 'jpg', signature: (buffer) => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff },
-  'image/png': { extension: 'png', signature: (buffer) => buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
-  'image/webp': { extension: 'webp', signature: (buffer) => buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP' },
-  'application/pdf': { extension: 'pdf', signature: (buffer) => buffer.length >= 5 && buffer.subarray(0, 5).toString('ascii') === '%PDF-' },
-};
 const hasReservationStatus = (value: RestaurantReservationStatus, allowed: RestaurantReservationStatus[]) => allowed.includes(value);
 const hasDepositStatus = (value: RestaurantDepositStatus, allowed: RestaurantDepositStatus[]) => allowed.includes(value);
 
@@ -104,13 +101,32 @@ export async function publicDepositStatus(companyId: number, reservationId: numb
   return safeDeposit(deposit);
 }
 
-export async function uploadPublicReservationProof(slug: string, reservationCode: string, file: { buffer: Buffer; mimetype: string; originalname: string }): Promise<Result> {
+export async function uploadPublicReservationProof(slug: string, reservationCode: string, file: { buffer: Buffer; mimetype: string; originalname: string } | undefined, uploadIntent: string | null): Promise<Result> {
   const context = await publicCompany(slug);
   if (!context) return fail(404, 'No encontramos la reserva o el restaurante solicitado.');
-  const proofType = proofMimes[file.mimetype];
-  if (!proofType || file.buffer.length <= 0 || file.buffer.length > 5 * 1024 * 1024 || !proofType.signature(file.buffer)) return fail(400, 'El comprobante debe ser una imagen JPEG, PNG, WebP o un PDF válido de hasta 5 MB.');
+  let validated: { mimeType: string; extension: string; size: number };
+  try {
+    validated = validateUploadFile(file, { maxBytes: PUBLIC_UPLOAD_MAX_BYTES, allowedMimeTypes: PUBLIC_UPLOAD_MIME_TYPES });
+  } catch (error) {
+    if (error instanceof UploadSecurityError) return { code: error.statusCode, error: true, errorCode: error.errorCode, reason: error.errorCode, message: error.message };
+    return fail(400, 'No pudimos validar el comprobante.');
+  }
+  if (!file) return { code: 400, error: true, errorCode: UPLOAD_ERROR_CODES.FILE_REQUIRED, reason: UPLOAD_ERROR_CODES.FILE_REQUIRED, message: 'Debes seleccionar un archivo.' };
+  if (!uploadIntent) return { code: 400, error: true, errorCode: UPLOAD_ERROR_CODES.INTENT_INVALID, reason: UPLOAD_ERROR_CODES.INTENT_INVALID, message: 'La autorización de carga no es válida.' };
+
+  const reservationForIntent = await prisma.restaurantReservation.findFirst({ where: { company_id: context.id, reservation_code: reservationCode }, select: { id: true } });
+  if (!reservationForIntent) return { code: 404, error: true, errorCode: UPLOAD_ERROR_CODES.INTENT_INVALID, reason: UPLOAD_ERROR_CODES.INTENT_INVALID, message: 'No encontramos la reserva o el restaurante solicitado.' };
+
+  let intent;
+  try {
+    intent = await consumeUploadIntent(uploadIntent, { expectedPurpose: UPLOAD_PURPOSES.RESTAURANT_DEPOSIT_PROOF, companyId: context.id, contextId: `RESERVATION:${reservationForIntent.id}` });
+  } catch (error) {
+    if (error instanceof UploadSecurityError) return { code: error.statusCode, error: true, errorCode: error.errorCode, reason: error.errorCode, message: error.message };
+    return fail(400, 'La autorización de carga no es válida.');
+  }
   let relativePath: string | null = null;
   let oldPath: string | null = null;
+  let uploadRecorded = false;
   try {
     const result = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM restaurant_reservation WHERE company_id = ${context.id} AND reservation_code = ${reservationCode} FOR UPDATE`;
@@ -121,15 +137,17 @@ export async function uploadPublicReservationProof(slug: string, reservationCode
       if (!deposit) throw Object.assign(new Error('Esta reserva no requiere depósito.'), { status: 409 });
       if (hasDepositStatus(deposit.status, [RestaurantDepositStatus.APPROVED, RestaurantDepositStatus.WAIVED, RestaurantDepositStatus.REFUNDED, RestaurantDepositStatus.EXPIRED])) throw Object.assign(new Error('El depósito de esta reserva ya fue resuelto o venció.'), { status: 409 });
       oldPath = deposit.proof_path;
-      relativePath = await StorageService.saveFile(context.id, 'restaurant-deposit-proofs', `proof-${randomBytes(20).toString('hex')}.${proofType.extension}`, file.buffer);
+      relativePath = await StorageService.saveFile(context.id, 'restaurant-deposit-proofs', `proof-${randomBytes(20).toString('hex')}.${validated.extension}`, file.buffer);
+      await recordStoredUpload(intent, relativePath);
+      uploadRecorded = true;
       const updated = await tx.restaurantReservationDeposit.update({
         where: { id: deposit.id },
         data: {
           status: RestaurantDepositStatus.PROOF_SUBMITTED,
           proof_path: relativePath,
           proof_original_name: normalizeOriginalName(file.originalname),
-          proof_mime_type: file.mimetype,
-          proof_size_bytes: file.buffer.length,
+          proof_mime_type: validated.mimeType,
+          proof_size_bytes: validated.size,
           proof_sha256: createHash('sha256').update(file.buffer).digest('hex'),
           proof_submitted_at: new Date(),
           public_submission_id: randomBytes(18).toString('base64url'),
@@ -147,6 +165,8 @@ export async function uploadPublicReservationProof(slug: string, reservationCode
     return ok(result.deposit, 'Comprobante enviado para revisión.', 201);
   } catch (error: any) {
     if (relativePath) await StorageService.deleteFile(relativePath).catch(() => undefined);
+    if (uploadRecorded) await prisma.uploadIntent.updateMany({ where: { id: intent.databaseId, stored_path: relativePath }, data: { stored_path: null } }).catch(() => undefined);
+    if (error instanceof UploadSecurityError) return { code: error.statusCode, error: true, errorCode: error.errorCode, reason: error.errorCode, message: error.message };
     return fail(error?.status || 500, error?.message || 'No pudimos enviar el comprobante.');
   }
 }

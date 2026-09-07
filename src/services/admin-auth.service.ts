@@ -12,6 +12,10 @@ import {
 } from './company-entitlements.service';
 import type { CompanyEntitlementPayload } from '../config/product-entitlements';
 import { logger } from '../config/logger';
+import {
+    BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+    BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from '../config/auth-constants';
 
 export type AdminCompanyUserSummary = {
     id: number;
@@ -277,7 +281,7 @@ export async function signInAdmin(
                 emailVerified: true,
                 must_change_password: true,
                 accounts: {
-                    where: { providerId: { in: ['credential', 'credentials'] } },
+                    where: { providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] } },
                     select: {
                         id: true,
                         providerId: true,
@@ -716,7 +720,7 @@ export async function changeAdminPassword(
         const credentialAccount = await prisma.account.findFirst({
             where: {
                 userId,
-                providerId: { in: ['credential', 'credentials'] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
             },
             orderBy: {
                 createdAt: 'asc',
@@ -746,10 +750,10 @@ export async function changeAdminPassword(
             prisma.account.updateMany({
                 where: {
                     userId,
-                    providerId: { in: ['credential', 'credentials'] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                 },
                 data: {
-                    providerId: 'credential',
+                    providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                     password: hashedPassword,
                 },
             }),
@@ -816,7 +820,7 @@ export async function startAdminPasswordReset(email: string): Promise<AdminPassw
         const credentialAccount = await prisma.account.findFirst({
             where: {
                 userId: user.id,
-                providerId: { in: ['credential', 'credentials'] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
             },
             select: { id: true },
         });
@@ -895,7 +899,7 @@ export async function completeAdminPasswordReset(
         const credentialAccount = await prisma.account.findFirst({
             where: {
                 userId: user.id,
-                providerId: { in: ['credential', 'credentials'] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
             },
             select: { id: true },
         });
@@ -959,10 +963,10 @@ export async function completeAdminPasswordReset(
             prisma.account.updateMany({
                 where: {
                     userId: user.id,
-                    providerId: { in: ['credential', 'credentials'] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                 },
                 data: {
-                    providerId: 'credential',
+                    providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                     password: hashedPassword,
                 },
             }),

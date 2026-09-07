@@ -1,136 +1,97 @@
 import { logger } from '../config/logger';
-import { wahaClient } from '../services/waha.service';
+import { getWahaProviderState, wahaClient } from '../services/waha.service';
 import {
-  appendCompanyContactLine,
-  getCompanyNotificationBranding,
-  mergeBranding,
-  type NotificationBranding,
-} from './notificationBranding';
+  isWhatsappEnqueueAccepted,
+  getWhatsappEnqueueLifecycleStatus,
+  queueWhatsappBatch,
+  queueWhatsappCode,
+  queueWhatsappGroupMessage,
+  queueWhatsappImage,
+  queueWhatsappText,
+  type WhatsappEnqueueResult,
+  type WhatsappImageQueueOptions,
+  type WhatsappQueueOptions,
+} from '../services/outbound-message.service';
+import { type NotificationBranding } from './notificationBranding';
 
-function maskPhone(phone: string): string {
-  const trimmed = phone.trim();
-  if (trimmed.length <= 4) return trimmed;
-  return `${trimmed.slice(0, 3)}***${trimmed.slice(-2)}`;
-}
+/**
+ * Application-facing WhatsApp API.
+ *
+ * These names remain as compatibility aliases for older integrations, but
+ * they now persist an outbox job and return an enqueue result. The only code
+ * allowed to call WAHA's transport methods is whatsapp-worker.service.ts.
+ */
+export const sendWhatsappCode = (
+  phone: string,
+  code: string,
+  options?: WhatsappQueueOptions,
+): Promise<WhatsappEnqueueResult> => queueWhatsappCode(phone, code, options);
 
-function buildErrorLog(error: unknown) {
-  if (error instanceof Error) {
-    const errorWithCause = error as Error & {
-      cause?: unknown;
-      code?: string | number;
-      status?: number;
-    };
-
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-      code: errorWithCause.code,
-      status: errorWithCause.status,
-      cause: errorWithCause.cause,
-    };
-  }
-
-  return {
-    message: typeof error === 'string' ? error : 'Unknown WhatsApp sender error',
-    raw: error,
-  };
-}
-
-async function buildBrandedText(
-  text: string,
-  options?: { companyId?: number; branding?: NotificationBranding | null },
-): Promise<string> {
-  const trimmedText = text.trim();
-  if (!trimmedText) {
-    throw new Error('WhatsApp message text is required.');
-  }
-
-  const companyBranding = options?.companyId
-    ? await getCompanyNotificationBranding(options.companyId)
-    : null;
-  const branding = mergeBranding(companyBranding, options?.branding);
-
-  return branding
-    ? appendCompanyContactLine(trimmedText, branding)
-    : trimmedText.includes('Priconpri')
-      ? trimmedText
-      : `${trimmedText}\n\nPriconpri`;
-}
-
-export const sendWhatsappCode = async (phone: string, code: string) => {
-  return sendWhatsappText(phone, `Priconpri\n\nTu codigo de verificacion es: ${code}`);
-};
-
-export const sendWhatsappText = async (
+export const sendWhatsappText = (
   phone: string,
   text: string,
-  options?: { companyId?: number; branding?: NotificationBranding | null },
-) => {
-  try {
-    const brandedText = await buildBrandedText(text, options);
-    return await wahaClient.sendText(phone, brandedText);
-  } catch (error) {
-    logger.error(
-      {
-        event: 'whatsapp_text_send_failed',
-        phone: maskPhone(phone),
-        error: buildErrorLog(error),
-      },
-      'sendWhatsappText returned failure',
-    );
-    return -1;
-  }
+  options?: WhatsappQueueOptions,
+): Promise<WhatsappEnqueueResult> => queueWhatsappText(phone, text, options);
+
+export const sendWhatsappImage = (
+  phone: string,
+  imageUrl: string,
+  caption?: string,
+  options?: WhatsappImageQueueOptions,
+): Promise<WhatsappEnqueueResult> => queueWhatsappImage(phone, imageUrl, caption, options);
+
+export const sendWhatsappGroupMessage = (
+  groupJid: string,
+  text: string,
+  options?: WhatsappQueueOptions,
+): Promise<WhatsappEnqueueResult> => queueWhatsappGroupMessage(groupJid, text, options);
+
+export {
+  isWhatsappEnqueueAccepted,
+  getWhatsappEnqueueLifecycleStatus,
+  queueWhatsappBatch,
+  queueWhatsappCode,
+  queueWhatsappGroupMessage,
+  queueWhatsappImage,
+  queueWhatsappText,
 };
+
+// Deprecated name retained for source compatibility. It describes enqueue
+// acceptance now; actual provider submission is tracked on the outbox job.
+export function isWhatsappDeliverySuccessful(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const typedResult = result as { accepted?: unknown; status?: unknown; existingStatus?: unknown };
+  return typedResult.accepted === true
+    && typedResult.status === 'DUPLICATE'
+    && typedResult.existingStatus === 'SENT';
+}
 
 export const createWhatsappGroup = async (
   name: string,
   participantPhones: string[],
 ): Promise<{ jid: string; name: string } | null> => {
+  const providerState = getWahaProviderState();
+  if (providerState.mode !== 'remote' || !providerState.configured) {
+    logger.info(
+      { event: 'whatsapp_group_creation_skipped', reason: providerState.reason },
+      'WhatsApp group creation skipped',
+    );
+    return null;
+  }
+
   try {
     const group = await wahaClient.createGroup(name, participantPhones);
-    return {
-      jid: group.jid,
-      name: group.name,
-    };
+    return { jid: group.jid, name: group.name };
   } catch (error) {
     logger.error(
       {
         event: 'whatsapp_create_group_error',
-        error: buildErrorLog(error),
+        error: error instanceof Error ? error.message : 'Unknown WhatsApp group error',
       },
-      'createWhatsappGroup threw',
+      'createWhatsappGroup failed',
     );
     return null;
   }
 };
 
-export const sendWhatsappGroupMessage = async (groupJid: string, text: string) => {
-  return sendWhatsappText(groupJid, text);
-};
-
-export const sendWhatsappImage = async (
-  phone: string,
-  imageUrl: string,
-  caption?: string,
-  options?: { companyId?: number; branding?: NotificationBranding | null },
-) => {
-  try {
-    const brandedCaption = caption
-      ? await buildBrandedText(caption, options)
-      : undefined;
-
-    return await wahaClient.sendImage(phone, imageUrl, brandedCaption);
-  } catch (error) {
-    logger.error(
-      {
-        event: 'whatsapp_image_send_failed',
-        phone: maskPhone(phone),
-        imageUrl,
-        error: buildErrorLog(error),
-      },
-      'sendWhatsappImage returned failure',
-    );
-    return -1;
-  }
-};
+export type { NotificationBranding };

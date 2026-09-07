@@ -17,6 +17,7 @@ import {
 import bcrypt from "bcryptjs";
 import { seedAndBackfillProductSubscriptions } from "./product-subscriptions.seed";
 import { ensureBusinessPricingDefaults } from "../src/services/business-pricing.service";
+import { BETTER_AUTH_CREDENTIAL_PROVIDER_ID } from "../src/config/auth-constants";
 
 const prisma = new PrismaClient();
 
@@ -431,6 +432,8 @@ async function main() {
       booking_time_granularity_minutes: 15,
       cancel_limit_minutes: 120,
       reschedule_limit_minutes: 120,
+      require_comprobante_for_qr: true,
+      auto_confirm_bookings: true,
       allow_qr_payment: true,
       qr_image_url: "https://cdn.example.com/fade-factory/qr.png",
       allow_cash_payment: true,
@@ -446,6 +449,8 @@ async function main() {
       booking_time_granularity_minutes: 15,
       cancel_limit_minutes: 180,
       reschedule_limit_minutes: 180,
+      require_comprobante_for_qr: true,
+      auto_confirm_bookings: true,
       allow_qr_payment: true,
       qr_image_url: "https://cdn.example.com/glow-nails/qr.png",
       allow_cash_payment: true,
@@ -1189,35 +1194,35 @@ async function main() {
     {
       id: "account_super_admin",
       accountId: "superadmin@example.com",
-      providerId: "credentials",
+      providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
       userId: "user_super_admin",
       plainPassword: "SuperAdmin123!",
     },
     {
       id: "account_barber_owner",
       accountId: "diego@fadefactory.bo",
-      providerId: "credentials",
+      providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
       userId: "user_barber_owner",
       plainPassword: "Owner123!",
     },
     {
       id: "account_nails_admin",
       accountId: "ana@glownails.bo",
-      providerId: "credentials",
+      providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
       userId: "user_nails_admin",
       plainPassword: "Admin123!",
     },
     {
       id: "account_barber_staff",
       accountId: "carlos@fadefactory.bo",
-      providerId: "credentials",
+      providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
       userId: "user_barber_staff_1",
       plainPassword: "Staff123!",
     },
     {
       id: "account_barber_customer",
       accountId: "juan@example.com",
-      providerId: "credentials",
+      providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
       userId: "user_barber_customer",
       plainPassword: "Customer123!",
     },

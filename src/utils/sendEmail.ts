@@ -1,48 +1,33 @@
-// src/services/emailSender.ts
-import nodemailer from "nodemailer";
 import { User } from "better-auth/*";
 import { logger } from "../config/logger";
+import { deliverEmail, type EmailDeliveryResult, type EmailMessage } from "../services/notification-provider.service";
 import {
     getCompanyNotificationBranding,
     mergeBranding,
     renderBrandedEmail,
     type NotificationBranding,
 } from "./notificationBranding";
-export const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  requireTLS: true,
-  auth: {
-    user: process.env.MAIL_USER!,
-    pass: process.env.MAIL_PASS!,
-  },
-  connectionTimeout: 20000,
-  greetingTimeout: 20000,
-  socketTimeout: 30000,
-  logger: true,
-  debug: true,
-});
+type TransportMailOptions = EmailMessage;
 
-const originalSendMail = transporter.sendMail.bind(transporter);
-transporter.sendMail = ((mailOptions: Parameters<typeof transporter.sendMail>[0], callback?: any) => {
-  if (
-    mailOptions &&
-    typeof mailOptions === "object" &&
-    typeof mailOptions.html === "string" &&
-    !mailOptions.html.includes("Powered by Priconpri")
-  ) {
-    mailOptions = {
-      ...mailOptions,
-      html: renderBrandedEmail({
-        title: typeof mailOptions.subject === "string" ? mailOptions.subject : "Priconpri",
-        bodyHtml: mailOptions.html,
-      }),
-    };
-  }
-
-  return originalSendMail(mailOptions as any, callback as any);
-}) as typeof transporter.sendMail;
+// Kept as a small compatibility facade for legacy callers. It does not create
+// a transport at import time and never falls back to a guessed SMTP host.
+export const transporter = {
+    async sendMail(mailOptions: TransportMailOptions) {
+        const result = await deliverEmail(mailOptions);
+        if (result.status === 'FAILED') {
+            const error = new Error(`Email delivery failed: ${result.reason}`) as Error & { notificationResult?: typeof result };
+            error.notificationResult = result;
+            throw error;
+        }
+        return {
+            messageId: result.providerId,
+            accepted: result.status === 'SENT' ? [mailOptions.to] : [],
+            rejected: result.status === 'SENT' ? [] : [mailOptions.to],
+            response: result.reason,
+            notificationResult: result,
+        };
+    },
+};
 
 const maskEmail = (email: string) => {
     const [local, domain] = email.split("@");
@@ -55,6 +40,10 @@ export function isTemporaryEmailAddress(email?: string | null): boolean {
     const normalized = (email ?? "").trim().toLowerCase();
     if (!normalized) return false;
     return normalized.endsWith("@tmppriconpri.com") || normalized.endsWith("@temp.priconpri.com");
+}
+
+function temporaryEmailResult(): EmailDeliveryResult {
+    return { provider: 'email', status: 'SKIPPED', reason: 'TEMPORARY_ADDRESS' };
 }
 
 function escapeHtml(input: string): string {
@@ -114,13 +103,13 @@ export async function sendEmailCode(
         <p>Si no solicitaste este código, puedes ignorar este correo.</p>
       `,
     });
-    transporter.sendMail({
+    const info = await transporter.sendMail({
       to: email,
       from: process.env.MAIL_FROM!,
       subject: "Código de verificación",
       html,
     });  
-    return 1;
+    return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
       return -1;
     }
@@ -134,7 +123,7 @@ export async function sendStaffInviteEmail(
     companyName: string
 ) {
     try {
-        transporter.sendMail({
+        const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
             subject: `You've been invited to join ${companyName}`,
@@ -180,7 +169,7 @@ export async function sendStaffInviteEmail(
                 </html>
             `,
         });
-        return 1;
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
         console.error('Error sending staff invite email:', error);
         return -1;
@@ -232,7 +221,7 @@ export async function sendAdminTempPasswordInviteEmail(params: {
             },
             "Admin temp password invite email sent",
         );
-        return 1;
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
         logger.error(
             {
@@ -306,7 +295,7 @@ export async function sendCustomerPortalAccessEmail(params: {
             },
             "Customer portal access email sent",
         );
-        return 1;
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
         logger.error(
             {
@@ -329,7 +318,7 @@ export async function sendResetPasswordEmail(user: User, url: string){
         return;
     }
     try {
-        transporter.sendMail({
+        const info = await transporter.sendMail({
             to: user.email,
             from: process.env.MAIL_FROM!,
             subject: "Restablecimiento de contraseña",
@@ -426,8 +415,8 @@ export async function sendResetPasswordEmail(user: User, url: string){
               </body>
               </html>
             `
-          });  
-          return 1;
+          });
+          return info.notificationResult.status === 'SENT' ? 1 : -1;
           } catch (error) {
             return -1;
           }
@@ -464,7 +453,7 @@ export async function sendStaffTimeOffRequestEmail(params: {
     });
 
     try {
-        await transporter.sendMail({
+        const info = await transporter.sendMail({
             to: ownerEmail,
             from: process.env.MAIL_FROM!,
             subject: `Nueva solicitud de tiempo libre - ${companyName}`,
@@ -483,7 +472,7 @@ export async function sendStaffTimeOffRequestEmail(params: {
                 </div>
             `,
         });
-        return 1;
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
         console.error('Error sending staff time-off request email:', error);
         return -1;
@@ -495,13 +484,13 @@ export async function sendGenericEmail(
     subject: string,
     html: string,
     options?: EmailBrandingOptions,
-): Promise<void> {
+): Promise<EmailDeliveryResult> {
     if (isTemporaryEmailAddress(to)) {
         logger.info(
             { event: "email_skipped_temp_address", to: maskEmail(to), subject },
             "Skipping generic email delivery for temporary address",
         );
-        return;
+        return temporaryEmailResult();
     }
     try {
         const brandedHtml = await brandedEmailHtml({
@@ -509,7 +498,7 @@ export async function sendGenericEmail(
             bodyHtml: html,
             options,
         });
-        await transporter.sendMail({
+        return await deliverEmail({
             to,
             from: process.env.MAIL_FROM!,
             subject,
@@ -520,7 +509,7 @@ export async function sendGenericEmail(
             { event: 'generic_email_failed', to: maskEmail(to), subject, err: error },
             'Error sending generic email',
         );
-        throw error;
+        return { provider: 'email', status: 'FAILED', reason: 'TRANSPORT_FAILED' };
     }
 }
 
@@ -570,14 +559,14 @@ export async function sendCustomerMassMessageEmail(params: {
                 },
             },
         });
-        await transporter.sendMail({
+        const info = await transporter.sendMail({
             to: params.email,
             from: process.env.MAIL_FROM!,
             subject,
             html,
         });
 
-        return 1;
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
         logger.error(
             {

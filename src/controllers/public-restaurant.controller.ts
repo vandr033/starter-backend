@@ -1,16 +1,16 @@
 import type { Request, Response } from 'express';
-import multer from 'multer';
 import type { AuthenticatedRequest } from '../middlewares/requireAuth';
+import { uploadFileMiddleware } from './public-upload.controller';
 import * as PublicRestaurant from '../services/public-restaurant.service';
 import { cancelPublicRestaurantReservationSchema, createPublicRestaurantReservationSchema, publicRestaurantAvailabilitySchema, publicRestaurantCodeSchema, publicRestaurantSlugSchema } from '../schemas/public-restaurant.schema';
 
 function slug(req: Request, res: Response) { const parsed = publicRestaurantSlugSchema.safeParse(req.params.slug); if (!parsed.success) { res.status(404).json({ code: 404, error: true, message: 'No encontramos la reserva o el restaurante solicitado.' }); return null; } return parsed.data; }
 function code(req: Request, res: Response) { const parsed = publicRestaurantCodeSchema.safeParse(req.params.code); if (!parsed.success) { res.status(404).json({ code: 404, error: true, message: 'No encontramos la reserva o el restaurante solicitado.' }); return null; } return parsed.data; }
 async function respond(res: Response, result: Promise<any>) { const value = await result; return res.status(value.code).json(value); }
-export const restaurantDepositProofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }).single('file');
+export const restaurantDepositProofUpload = uploadFileMiddleware;
 export async function configuration(req: Request, res: Response) { const value = slug(req, res); if (value) return respond(res, PublicRestaurant.getConfiguration(value)); }
 export async function availability(req: Request, res: Response) { const value = slug(req, res); if (!value) return; const parsed = publicRestaurantAvailabilitySchema.safeParse(req.query); if (!parsed.success) return res.status(400).json({ code: 400, error: true, message: 'Parámetros de disponibilidad inválidos.' }); return respond(res, PublicRestaurant.getAvailability(value, parsed.data)); }
-export async function uploadReservationDepositProof(req: Request, res: Response) { const shop = slug(req, res); const reservationCode = code(req, res); if (!shop || !reservationCode) return; if (!req.file) return res.status(400).json({ code: 400, error: true, message: 'Seleccioná un comprobante de hasta 5 MB.' }); return respond(res, PublicRestaurant.uploadReservationDepositProof(shop, reservationCode, req.file)); }
+export async function uploadReservationDepositProof(req: Request, res: Response) { const shop = slug(req, res); const reservationCode = code(req, res); if (!shop || !reservationCode) return; return respond(res, PublicRestaurant.uploadReservationDepositProof(shop, reservationCode, req.file, typeof req.body?.uploadIntent === 'string' ? req.body.uploadIntent : null)); }
 export async function create(req: Request, res: Response) { const value = slug(req, res); if (!value) return; const parsed = createPublicRestaurantReservationSchema.safeParse(req.body); if (!parsed.success) return res.status(400).json({ code: 400, error: true, message: 'Datos de reserva inválidos.', errors: parsed.error.flatten() }); return respond(res, PublicRestaurant.createPublicReservation(value, parsed.data)); }
 export async function mine(req: AuthenticatedRequest, res: Response) { const value = slug(req, res); const userId = req.authUser?.id; if (!value || !userId) return; return respond(res, PublicRestaurant.getMyPublicReservations(value, userId)); }
 export async function detail(req: Request, res: Response) { const value = code(req, res); if (value) return respond(res, PublicRestaurant.getPublicReservation(value)); }

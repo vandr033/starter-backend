@@ -11,18 +11,29 @@ import crypto from 'crypto';
 import { prisma } from '../prisma/client';
 import * as CommerceRepo from '../repositories/commerce.repo';
 import { buildCommerceComponentSnapshots } from './commerce-combo.service';
-import { deductCommerceOrderStock, restoreCommerceOrderStock, shouldDeductCommerceStock } from './commerce-inventory.service';
+import {
+    CommerceInsufficientStockError,
+    CommerceInventoryStateError,
+    deductCommerceOrderStock,
+    restoreCommerceOrderStock,
+    shouldDeductCommerceStock,
+} from './commerce-inventory.service';
 import { resolveEffectiveCommercePrice } from './commerce-pricing.service';
 import { notifyCommerceOrderCustomer } from './commerce-notifications.service';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 import { isCompanyAvailableNow } from '../utils/company-availability';
 import { StorageService } from './storage.service';
-import { buildStorageDeleteToken } from '../utils/storageDeleteToken';
+import { buildStorageDeleteToken, verifyStorageDeleteToken } from '../utils/storageDeleteToken';
+import { assertStoredUpload, consumeUploadIntent, recordStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
+import { UploadSecurityError } from '../utils/upload-errors';
+import { PUBLIC_UPLOAD_MAX_BYTES, PUBLIC_UPLOAD_MIME_TYPES, validateUploadFile } from '../utils/upload-validation';
 
 type ServiceResult = {
     code: number;
     error: boolean;
     message: string;
+    errorCode?: string;
+    reason?: string;
     data?: any;
 };
 
@@ -37,7 +48,7 @@ function generateCommerceOrderPublicAccessToken(): string {
 }
 
 function buildCommercePaymentProofFileName(extension: string): string {
-    const version = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const version = `${Date.now()}-${crypto.randomBytes(12).toString('hex')}`;
     return `proof-${version}.${extension}`;
 }
 
@@ -104,6 +115,88 @@ function isCancellationLikeStatus(params: {
         params.fulfillmentStatus === CommerceFulfillmentStatus.REJECTED
     );
 }
+
+const PAYMENT_STATUS_TRANSITIONS: Record<CommercePaymentStatus, ReadonlySet<CommercePaymentStatus>> = {
+    [CommercePaymentStatus.PENDING_REVIEW]: new Set([
+        CommercePaymentStatus.PENDING_REVIEW,
+        CommercePaymentStatus.AWAITING_DELIVERY_COST,
+        CommercePaymentStatus.AWAITING_PAYMENT,
+        CommercePaymentStatus.PAYMENT_SUBMITTED,
+        CommercePaymentStatus.PAYMENT_CONFIRMED,
+        CommercePaymentStatus.PAYMENT_REJECTED,
+        CommercePaymentStatus.CANCELLED,
+    ]),
+    [CommercePaymentStatus.AWAITING_DELIVERY_COST]: new Set([
+        CommercePaymentStatus.AWAITING_DELIVERY_COST,
+        CommercePaymentStatus.AWAITING_PAYMENT,
+        CommercePaymentStatus.CANCELLED,
+    ]),
+    [CommercePaymentStatus.AWAITING_PAYMENT]: new Set([
+        CommercePaymentStatus.AWAITING_PAYMENT,
+        CommercePaymentStatus.PAYMENT_SUBMITTED,
+        CommercePaymentStatus.PAYMENT_CONFIRMED,
+        CommercePaymentStatus.PAYMENT_REJECTED,
+        CommercePaymentStatus.CANCELLED,
+    ]),
+    [CommercePaymentStatus.PAYMENT_SUBMITTED]: new Set([
+        CommercePaymentStatus.PAYMENT_SUBMITTED,
+        CommercePaymentStatus.PAYMENT_CONFIRMED,
+        CommercePaymentStatus.PAYMENT_REJECTED,
+        CommercePaymentStatus.CANCELLED,
+    ]),
+    [CommercePaymentStatus.PAYMENT_CONFIRMED]: new Set([
+        CommercePaymentStatus.PAYMENT_CONFIRMED,
+        CommercePaymentStatus.PAYMENT_REJECTED,
+        CommercePaymentStatus.REFUNDED,
+        CommercePaymentStatus.CANCELLED,
+    ]),
+    [CommercePaymentStatus.PAYMENT_REJECTED]: new Set([
+        CommercePaymentStatus.PAYMENT_REJECTED,
+        CommercePaymentStatus.PAYMENT_SUBMITTED,
+        CommercePaymentStatus.PAYMENT_CONFIRMED,
+        CommercePaymentStatus.CANCELLED,
+    ]),
+    [CommercePaymentStatus.REFUNDED]: new Set([CommercePaymentStatus.REFUNDED]),
+    [CommercePaymentStatus.CANCELLED]: new Set([CommercePaymentStatus.CANCELLED]),
+};
+
+const FULFILLMENT_STATUS_TRANSITIONS: Record<CommerceFulfillmentStatus, ReadonlySet<CommerceFulfillmentStatus>> = {
+    [CommerceFulfillmentStatus.NEW]: new Set([
+        CommerceFulfillmentStatus.NEW,
+        CommerceFulfillmentStatus.ACCEPTED,
+        CommerceFulfillmentStatus.PREPARING,
+        CommerceFulfillmentStatus.REJECTED,
+        CommerceFulfillmentStatus.CANCELLED,
+    ]),
+    [CommerceFulfillmentStatus.ACCEPTED]: new Set([
+        CommerceFulfillmentStatus.ACCEPTED,
+        CommerceFulfillmentStatus.PREPARING,
+        CommerceFulfillmentStatus.READY_FOR_PICKUP,
+        CommerceFulfillmentStatus.OUT_FOR_DELIVERY,
+        CommerceFulfillmentStatus.REJECTED,
+        CommerceFulfillmentStatus.CANCELLED,
+    ]),
+    [CommerceFulfillmentStatus.PREPARING]: new Set([
+        CommerceFulfillmentStatus.PREPARING,
+        CommerceFulfillmentStatus.READY_FOR_PICKUP,
+        CommerceFulfillmentStatus.OUT_FOR_DELIVERY,
+        CommerceFulfillmentStatus.REJECTED,
+        CommerceFulfillmentStatus.CANCELLED,
+    ]),
+    [CommerceFulfillmentStatus.READY_FOR_PICKUP]: new Set([
+        CommerceFulfillmentStatus.READY_FOR_PICKUP,
+        CommerceFulfillmentStatus.COMPLETED,
+        CommerceFulfillmentStatus.CANCELLED,
+    ]),
+    [CommerceFulfillmentStatus.OUT_FOR_DELIVERY]: new Set([
+        CommerceFulfillmentStatus.OUT_FOR_DELIVERY,
+        CommerceFulfillmentStatus.COMPLETED,
+        CommerceFulfillmentStatus.CANCELLED,
+    ]),
+    [CommerceFulfillmentStatus.COMPLETED]: new Set([CommerceFulfillmentStatus.COMPLETED]),
+    [CommerceFulfillmentStatus.REJECTED]: new Set([CommerceFulfillmentStatus.REJECTED]),
+    [CommerceFulfillmentStatus.CANCELLED]: new Set([CommerceFulfillmentStatus.CANCELLED]),
+};
 
 function serializeCommerceStore(store: any) {
     return {
@@ -413,23 +506,39 @@ async function resolveAuthenticatedCommerceCustomer(params: {
 }
 
 async function generateCommerceOrderNumber(tx: Tx, companyId: number): Promise<string> {
-    const count = await tx.commerceOrder.count({
-        where: { company_id: companyId },
-    });
+    // This is a transactional MySQL counter. INSERT ... ON DUPLICATE KEY
+    // UPDATE serializes writers on the company row, including the first order
+    // for a company whose sequence row was not present at migration time.
+    await tx.$executeRaw`
+        INSERT INTO \`commerce_order_sequence\`
+            (\`company_id\`, \`next_order_number\`, \`created_at\`, \`updated_at\`)
+        VALUES (${companyId}, 2, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+        ON DUPLICATE KEY UPDATE
+            \`next_order_number\` = \`next_order_number\` + 1,
+            \`updated_at\` = CURRENT_TIMESTAMP(3)
+    `;
 
-    for (let offset = 1; offset <= 20; offset += 1) {
-        const candidate = `TDA-${String(count + offset).padStart(6, '0')}`;
-        const existing = await tx.commerceOrder.findFirst({
-            where: {
-                company_id: companyId,
-                order_number: candidate,
-            },
-            select: { id: true },
-        });
-        if (!existing) return candidate;
+    const rows = await tx.$queryRaw<Array<{ next_order_number: number | bigint }>>`
+        SELECT \`next_order_number\`
+        FROM \`commerce_order_sequence\`
+        WHERE \`company_id\` = ${companyId}
+        FOR UPDATE
+    `;
+    const nextOrderNumber = Number(rows[0]?.next_order_number);
+    const allocatedNumber = nextOrderNumber - 1;
+    if (!Number.isSafeInteger(allocatedNumber) || allocatedNumber < 1) {
+        throw new Error('No pudimos asignar un número de pedido válido.');
     }
 
-    return `TDA-${Date.now()}`;
+    return `TDA-${String(allocatedNumber).padStart(6, '0')}`;
+}
+
+function isCommerceOrderNumberUniqueViolation(error: unknown): boolean {
+    const candidate = error as { code?: unknown; meta?: { target?: unknown }; message?: unknown };
+    if (candidate?.code !== 'P2002') return false;
+    const target = String(candidate.meta?.target ?? '').toLowerCase();
+    const message = String(candidate.message ?? '').toLowerCase();
+    return target.includes('order_number') || message.includes('commerce_order_company_order_number_key');
 }
 
 function parseTimeToMinutes(value?: string | null): number | null {
@@ -776,10 +885,11 @@ async function uploadCommercePaymentProofFile(params: {
     };
 }
 
-function isValidCommerceProofFile(file?: Express.Multer.File): file is Express.Multer.File {
-    if (!file) return false;
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
-    return allowedTypes.includes(file.mimetype) && file.size > 0 && file.size <= 5 * 1024 * 1024;
+function uploadServiceError(error: unknown): ServiceResult {
+    if (error instanceof UploadSecurityError) {
+        return { code: error.statusCode, error: true, errorCode: error.errorCode, reason: error.errorCode, message: error.message };
+    }
+    return { code: 400, error: true, message: 'No pudimos validar el comprobante.' };
 }
 
 function hasPublicOrderTokenAccess(order: { public_access_token: string | null | undefined }, accessToken?: string | null): boolean {
@@ -915,139 +1025,234 @@ export async function updateAdminCommerceOrderStatus(params: {
     fulfillmentStatus?: CommerceFulfillmentStatus | null;
     note?: string | null;
 }): Promise<ServiceResult> {
-    const order = await CommerceRepo.getAdminCommerceOrder(params.companyId, params.orderId);
-    if (!order) {
+    const accessScope = await resolveStaffScopedCommerceAccess(params);
+    if ('error' in accessScope && accessScope.error) {
+        return accessScope;
+    }
+
+    const scope = accessScope as { assignedStaffId?: number };
+    const initialOrder = await CommerceRepo.getAdminCommerceOrder(params.companyId, params.orderId, scope);
+    if (!initialOrder) {
         return { code: 404, error: true, message: 'No encontramos el pedido.' };
     }
 
-    const nextPaymentStatus = params.paymentStatus ?? order.payment_status;
-    const nextFulfillmentStatus = params.fulfillmentStatus ?? order.fulfillment_status;
+    type TransitionOutcome =
+        | { kind: 'not_found' }
+        | { kind: 'error'; result: ServiceResult }
+        | {
+              kind: 'ok';
+              order: any;
+              idempotent: boolean;
+              paymentConfirmedTransition: boolean;
+              readyForPickupTransition: boolean;
+              outForDeliveryTransition: boolean;
+          };
 
-    if (isOrderClosed(order)) {
-        return {
-            code: 400,
-            error: true,
-            message: 'El pedido ya está cerrado y no admite más cambios de estado.',
-        };
+    let transition: TransitionOutcome;
+    try {
+        transition = await prisma.$transaction(async (tx): Promise<TransitionOutcome> => {
+            // Lock and re-read the order before deriving either next status or
+            // inventory side effects. The request may have been built from a
+            // stale browser view.
+            await tx.$queryRaw`
+                SELECT id
+                FROM \`commerce_order\`
+                WHERE \`id\` = ${params.orderId}
+                  AND \`company_id\` = ${params.companyId}
+                FOR UPDATE
+            `;
+            const order = await CommerceRepo.getAdminCommerceOrder(params.companyId, params.orderId, scope, tx);
+            if (!order) return { kind: 'not_found' };
+
+            const nextPaymentStatus = params.paymentStatus ?? order.payment_status;
+            const nextFulfillmentStatus = params.fulfillmentStatus ?? order.fulfillment_status;
+            const paymentChanged = nextPaymentStatus !== order.payment_status;
+            const fulfillmentChanged = nextFulfillmentStatus !== order.fulfillment_status;
+            const hasNote = Boolean(params.note?.trim());
+
+            if (!paymentChanged && !fulfillmentChanged && !hasNote) {
+                return {
+                    kind: 'ok',
+                    order,
+                    idempotent: true,
+                    paymentConfirmedTransition: false,
+                    readyForPickupTransition: false,
+                    outForDeliveryTransition: false,
+                };
+            }
+
+            if (isOrderClosed(order) && (paymentChanged || fulfillmentChanged)) {
+                return {
+                    kind: 'error',
+                    result: {
+                        code: 409,
+                        error: true,
+                        errorCode: 'ORDER_STATE_CONFLICT',
+                        reason: 'ORDER_STATE_CONFLICT',
+                        message: 'El pedido ya está cerrado y no admite más cambios de estado.',
+                    },
+                };
+            }
+
+            if (!PAYMENT_STATUS_TRANSITIONS[order.payment_status].has(nextPaymentStatus)) {
+                return {
+                    kind: 'error',
+                    result: {
+                        code: 409,
+                        error: true,
+                        errorCode: 'ORDER_STATE_CONFLICT',
+                        reason: 'ORDER_STATE_CONFLICT',
+                        message: 'El estado de pago solicitado ya no es válido para este pedido.',
+                    },
+                };
+            }
+
+            if (!FULFILLMENT_STATUS_TRANSITIONS[order.fulfillment_status].has(nextFulfillmentStatus)) {
+                return {
+                    kind: 'error',
+                    result: {
+                        code: 409,
+                        error: true,
+                        errorCode: 'ORDER_STATE_CONFLICT',
+                        reason: 'ORDER_STATE_CONFLICT',
+                        message: 'El estado de preparación solicitado ya no es válido para este pedido.',
+                    },
+                };
+            }
+
+            if (shouldDeductCommerceStock({
+                previousPaymentStatus: order.payment_status,
+                newPaymentStatus: nextPaymentStatus,
+            })) {
+                await deductCommerceOrderStock(tx, order.id);
+            } else if (
+                order.stock_deducted_at &&
+                isCancellationLikeStatus({
+                    paymentStatus: nextPaymentStatus,
+                    fulfillmentStatus: nextFulfillmentStatus,
+                })
+            ) {
+                await restoreCommerceOrderStock(tx, order.id);
+            }
+
+            await tx.commerceOrder.update({
+                where: { id: order.id },
+                data: {
+                    payment_status: nextPaymentStatus,
+                    fulfillment_status: nextFulfillmentStatus,
+                    payment_confirmed_at:
+                        nextPaymentStatus === CommercePaymentStatus.PAYMENT_CONFIRMED
+                            ? order.payment_confirmed_at ?? new Date()
+                            : order.payment_confirmed_at,
+                    accepted_at:
+                        nextFulfillmentStatus === CommerceFulfillmentStatus.ACCEPTED
+                            ? order.accepted_at ?? new Date()
+                            : order.accepted_at,
+                    completed_at:
+                        nextFulfillmentStatus === CommerceFulfillmentStatus.COMPLETED
+                            ? order.completed_at ?? new Date()
+                            : order.completed_at,
+                    cancelled_at:
+                        nextFulfillmentStatus === CommerceFulfillmentStatus.CANCELLED ||
+                        nextFulfillmentStatus === CommerceFulfillmentStatus.REJECTED ||
+                        nextPaymentStatus === CommercePaymentStatus.CANCELLED
+                            ? order.cancelled_at ?? new Date()
+                            : order.cancelled_at,
+                },
+            });
+
+            await appendOrderStatusHistory({
+                tx,
+                orderId: order.id,
+                changedByUserId: params.changedByUserId,
+                previousPaymentStatus: order.payment_status,
+                newPaymentStatus: nextPaymentStatus,
+                previousFulfillmentStatus: order.fulfillment_status,
+                newFulfillmentStatus: nextFulfillmentStatus,
+                note: params.note,
+            });
+
+            const updated = await CommerceRepo.getAdminCommerceOrder(params.companyId, params.orderId, scope, tx);
+            if (!updated) return { kind: 'not_found' };
+
+            return {
+                kind: 'ok',
+                order: updated,
+                idempotent: false,
+                paymentConfirmedTransition:
+                    paymentChanged && nextPaymentStatus === CommercePaymentStatus.PAYMENT_CONFIRMED,
+                readyForPickupTransition:
+                    fulfillmentChanged && nextFulfillmentStatus === CommerceFulfillmentStatus.READY_FOR_PICKUP,
+                outForDeliveryTransition:
+                    fulfillmentChanged && nextFulfillmentStatus === CommerceFulfillmentStatus.OUT_FOR_DELIVERY,
+            };
+        });
+    } catch (error) {
+        if (error instanceof CommerceInsufficientStockError) {
+            return {
+                code: 409,
+                error: true,
+                errorCode: error.errorCode,
+                reason: error.errorCode,
+                message: error.message,
+            };
+        }
+        if (error instanceof CommerceInventoryStateError) {
+            return {
+                code: 409,
+                error: true,
+                errorCode: error.errorCode,
+                reason: error.errorCode,
+                message: error.message,
+            };
+        }
+        if ((error as { code?: unknown })?.code === 'P2034') {
+            return {
+                code: 409,
+                error: true,
+                errorCode: 'ORDER_STATE_CONFLICT',
+                reason: 'ORDER_STATE_CONFLICT',
+                message: 'El pedido cambió mientras lo actualizabas. Actualiza el detalle e inténtalo nuevamente.',
+            };
+        }
+        throw error;
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-        if (shouldDeductCommerceStock({
-            previousPaymentStatus: order.payment_status,
-            newPaymentStatus: nextPaymentStatus,
-        })) {
-            await deductCommerceOrderStock(tx, order.id);
-        } else if (
-            order.stock_deducted_at &&
-            isCancellationLikeStatus({
-                paymentStatus: nextPaymentStatus,
-                fulfillmentStatus: nextFulfillmentStatus,
-            })
-        ) {
-            await restoreCommerceOrderStock(tx, order.id);
-        }
+    if (transition.kind === 'not_found') {
+        return { code: 404, error: true, message: 'No encontramos el pedido.' };
+    }
+    if (transition.kind === 'error') {
+        return transition.result;
+    }
 
-        const next = await tx.commerceOrder.update({
-            where: { id: order.id },
-            data: {
-                payment_status: nextPaymentStatus,
-                fulfillment_status: nextFulfillmentStatus,
-                payment_confirmed_at:
-                    nextPaymentStatus === CommercePaymentStatus.PAYMENT_CONFIRMED
-                        ? order.payment_confirmed_at ?? new Date()
-                        : order.payment_confirmed_at,
-                accepted_at:
-                    nextFulfillmentStatus === CommerceFulfillmentStatus.ACCEPTED
-                        ? order.accepted_at ?? new Date()
-                        : order.accepted_at,
-                completed_at:
-                    nextFulfillmentStatus === CommerceFulfillmentStatus.COMPLETED
-                        ? order.completed_at ?? new Date()
-                        : order.completed_at,
-                cancelled_at:
-                    nextFulfillmentStatus === CommerceFulfillmentStatus.CANCELLED ||
-                    nextFulfillmentStatus === CommerceFulfillmentStatus.REJECTED ||
-                    nextPaymentStatus === CommercePaymentStatus.CANCELLED
-                        ? order.cancelled_at ?? new Date()
-                        : order.cancelled_at,
-            },
-        });
-
-        await appendOrderStatusHistory({
-            tx,
-            orderId: order.id,
-            changedByUserId: params.changedByUserId,
-            previousPaymentStatus: order.payment_status,
-            newPaymentStatus: nextPaymentStatus,
-            previousFulfillmentStatus: order.fulfillment_status,
-            newFulfillmentStatus: nextFulfillmentStatus,
-            note: params.note,
-        });
-
-        return tx.commerceOrder.findUniqueOrThrow({
-            where: { id: next.id },
-            include: {
-                customer_profile: {
-                    include: {
-                        user: {
-                            select: {
-                                id: true,
-                                name: true,
-                                email: true,
-                                phoneNumber: true,
-                                phone_prefix: true,
-                            },
-                        },
-                    },
-                },
-                assigned_staff: {
-                    select: {
-                        id: true,
-                        display_name: true,
-                        image_url: true,
-                    },
-                },
-                pickup_point: true,
-                items: {
-                    include: {
-                        component_snapshots: true,
-                    },
-                },
-                status_history: {
-                    orderBy: [{ created_at: 'desc' }],
-                },
-            },
-        });
-    });
-
-    if (params.paymentStatus === CommercePaymentStatus.PAYMENT_CONFIRMED) {
+    if (transition.paymentConfirmedTransition) {
         void notifyCommerceOrderCustomer({
             companyId: params.companyId,
-            orderId: order.id,
-            emailSubject: `Pago confirmado para tu pedido ${order.order_number}`,
-            message: `Confirmamos el pago de tu pedido ${order.order_number}. Ya estamos avanzando con la preparación.`,
+            orderId: transition.order.id,
+            emailSubject: `Pago confirmado para tu pedido ${transition.order.order_number}`,
+            message: `Confirmamos el pago de tu pedido ${transition.order.order_number}. Ya estamos avanzando con la preparación.`,
         });
-    } else if (params.fulfillmentStatus === CommerceFulfillmentStatus.READY_FOR_PICKUP) {
+    } else if (transition.readyForPickupTransition) {
         void notifyCommerceOrderCustomer({
             companyId: params.companyId,
-            orderId: order.id,
-            emailSubject: `Tu pedido ${order.order_number} está listo`,
-            message: `Tu pedido ${order.order_number} ya está listo para recoger.`,
+            orderId: transition.order.id,
+            emailSubject: `Tu pedido ${transition.order.order_number} está listo`,
+            message: `Tu pedido ${transition.order.order_number} ya está listo para recoger.`,
         });
-    } else if (params.fulfillmentStatus === CommerceFulfillmentStatus.OUT_FOR_DELIVERY) {
+    } else if (transition.outForDeliveryTransition) {
         void notifyCommerceOrderCustomer({
             companyId: params.companyId,
-            orderId: order.id,
-            emailSubject: `Tu pedido ${order.order_number} va en camino`,
-            message: `Tu pedido ${order.order_number} salió para delivery.`,
+            orderId: transition.order.id,
+            emailSubject: `Tu pedido ${transition.order.order_number} va en camino`,
+            message: `Tu pedido ${transition.order.order_number} salió para delivery.`,
         });
     }
 
     return {
         code: 200,
         error: false,
-        message: 'Estado del pedido actualizado.',
-        data: serializeCommerceOrder(updated, { admin: true, paymentProofViewer: 'admin' }),
+        message: transition.idempotent ? 'El pedido ya estaba en ese estado.' : 'Estado del pedido actualizado.',
+        data: serializeCommerceOrder(transition.order, { admin: true, paymentProofViewer: 'admin' }),
     };
 }
 
@@ -1502,7 +1707,7 @@ export async function createPublicCommerceOrder(
         }
     }
 
-    const paymentProofUrl = input.paymentProofUrl?.trim() || null;
+    let paymentProofUrl = input.paymentProofUrl?.trim() || null;
     const totalKnownAtCheckout = !usesDeferredDeliveryCost({
         fulfillmentType: input.fulfillmentType,
         deliveryCostMode: store.delivery_cost_mode,
@@ -1678,19 +1883,31 @@ export async function createPublicCommerceOrder(
     });
 
     if (paymentProofUrl) {
-        const relativePath = await ensureCommercePaymentProofExists(paymentProofUrl, company.id);
-        if (!relativePath || !relativePath.startsWith(getCommercePaymentProofCheckoutPrefix(company.id, authenticatedUserId))) {
-            return {
-                code: 403,
-                error: true,
-                message: 'No puedes adjuntar un comprobante que no te pertenece.',
-            };
+        try {
+            const stored = await assertStoredUpload({
+                rawPathOrUrl: paymentProofUrl,
+                companyId: company.id,
+                purpose: UPLOAD_PURPOSES.ORDER_PAYMENT_PROOF,
+                contextId: `CHECKOUT:${authenticatedUserId}`,
+            });
+            if (!stored.relativePath.startsWith(getCommercePaymentProofCheckoutPrefix(company.id, authenticatedUserId)) || !(await StorageService.fileExists(stored.relativePath))) {
+                return {
+                    code: 403,
+                    error: true,
+                    message: 'No puedes adjuntar un comprobante que no te pertenece.',
+                };
+            }
+            paymentProofUrl = stored.relativePath;
+        } catch (error) {
+            return uploadServiceError(error);
         }
     }
 
-    const created = await prisma.$transaction(async (tx) => {
-        const orderNumber = await generateCommerceOrderNumber(tx, company.id);
-        const order = await tx.commerceOrder.create({
+    let created: any;
+    try {
+        created = await prisma.$transaction(async (tx) => {
+            const orderNumber = await generateCommerceOrderNumber(tx, company.id);
+            const order = await tx.commerceOrder.create({
             data: {
                 company_id: company.id,
                 store_id: store.id,
@@ -1743,59 +1960,80 @@ export async function createPublicCommerceOrder(
                         : null,
                 customer_notes: input.customerNotes?.trim() || null,
             },
-        });
-
-        for (const row of itemRows) {
-            const orderItem = await tx.commerceOrderItem.create({
-                data: {
-                    order_id: order.id,
-                    product_id: row.productId,
-                    product_name_snapshot: row.productNameSnapshot,
-                    product_type_snapshot: row.productTypeSnapshot as any,
-                    unit_price_snapshot: row.unitPriceSnapshot,
-                    regular_price_snapshot: row.regularPriceSnapshot,
-                    promo_applied_snapshot: row.promoAppliedSnapshot,
-                    promo_label_snapshot: row.promoLabelSnapshot,
-                    quantity: row.quantity,
-                    total: row.total,
-                },
             });
 
-            if (row.componentSnapshots.length > 0) {
-                await tx.commerceOrderItemComponentSnapshot.createMany({
-                    data: row.componentSnapshots.map((snapshot) => ({
-                        order_item_id: orderItem.id,
-                        component_product_id: snapshot.component_product_id,
-                        component_name_snapshot: snapshot.component_name_snapshot,
-                        component_quantity_per_combo: snapshot.component_quantity_per_combo,
-                        total_component_quantity: snapshot.total_component_quantity,
-                    })),
+            for (const row of itemRows) {
+                const orderItem = await tx.commerceOrderItem.create({
+                    data: {
+                        order_id: order.id,
+                        product_id: row.productId,
+                        product_name_snapshot: row.productNameSnapshot,
+                        product_type_snapshot: row.productTypeSnapshot as any,
+                        unit_price_snapshot: row.unitPriceSnapshot,
+                        regular_price_snapshot: row.regularPriceSnapshot,
+                        promo_applied_snapshot: row.promoAppliedSnapshot,
+                        promo_label_snapshot: row.promoLabelSnapshot,
+                        quantity: row.quantity,
+                        total: row.total,
+                    },
                 });
+
+                if (row.componentSnapshots.length > 0) {
+                    await tx.commerceOrderItemComponentSnapshot.createMany({
+                        data: row.componentSnapshots.map((snapshot) => ({
+                            order_item_id: orderItem.id,
+                            component_product_id: snapshot.component_product_id,
+                            component_name_snapshot: snapshot.component_name_snapshot,
+                            component_quantity_per_combo: snapshot.component_quantity_per_combo,
+                            total_component_quantity: snapshot.total_component_quantity,
+                        })),
+                    });
+                }
             }
-        }
 
-        await appendOrderStatusHistory({
-            tx,
-            orderId: order.id,
-            previousPaymentStatus: null,
-            newPaymentStatus: paymentStatus,
-            previousFulfillmentStatus: null,
-            newFulfillmentStatus: CommerceFulfillmentStatus.NEW,
-            note: 'Pedido creado',
-        });
+            await appendOrderStatusHistory({
+                tx,
+                orderId: order.id,
+                previousPaymentStatus: null,
+                newPaymentStatus: paymentStatus,
+                previousFulfillmentStatus: null,
+                newFulfillmentStatus: CommerceFulfillmentStatus.NEW,
+                note: 'Pedido creado',
+            });
 
-        return tx.commerceOrder.findUniqueOrThrow({
-            where: { id: order.id },
-            include: {
-                pickup_point: true,
-                items: {
-                    include: {
-                        component_snapshots: true,
+            return tx.commerceOrder.findUniqueOrThrow({
+                where: { id: order.id },
+                include: {
+                    pickup_point: true,
+                    items: {
+                        include: {
+                            component_snapshots: true,
+                        },
                     },
                 },
-            },
+            });
         });
-    });
+    } catch (error) {
+        if (isCommerceOrderNumberUniqueViolation(error)) {
+            return {
+                code: 409,
+                error: true,
+                errorCode: 'ORDER_NUMBER_CONFLICT',
+                reason: 'ORDER_NUMBER_CONFLICT',
+                message: 'No pudimos asignar un número de pedido. Intenta nuevamente.',
+            };
+        }
+        if ((error as { code?: unknown })?.code === 'P2034') {
+            return {
+                code: 409,
+                error: true,
+                errorCode: 'ORDER_CREATE_CONFLICT',
+                reason: 'ORDER_CREATE_CONFLICT',
+                message: 'El pedido cambió mientras lo creábamos. Intenta nuevamente.',
+            };
+        }
+        throw error;
+    }
 
     void notifyCommerceOrderCustomer({
         companyId: company.id,
@@ -1896,13 +2134,24 @@ export async function submitPublicCommercePaymentProof(
         };
     }
 
-    const relativePath = await ensureCommercePaymentProofExists(paymentProofUrl, resolved.company.id);
-    if (!relativePath || !relativePath.startsWith(getCommercePaymentProofOrderPrefix(resolved.company.id, order.id))) {
-        return {
-            code: 403,
-            error: true,
-            message: 'No puedes subir un comprobante para otro pedido.',
-        };
+    let relativePath: string;
+    try {
+        const stored = await assertStoredUpload({
+            rawPathOrUrl: paymentProofUrl,
+            companyId: resolved.company.id,
+            purpose: UPLOAD_PURPOSES.ORDER_PAYMENT_PROOF,
+            contextId: `ORDER:${order.id}`,
+        });
+        if (!stored.relativePath.startsWith(getCommercePaymentProofOrderPrefix(resolved.company.id, order.id)) || !(await StorageService.fileExists(stored.relativePath))) {
+            return {
+                code: 403,
+                error: true,
+                message: 'No puedes subir un comprobante para otro pedido.',
+            };
+        }
+        relativePath = stored.relativePath;
+    } catch (error) {
+        return uploadServiceError(error);
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -1953,6 +2202,7 @@ export async function uploadCheckoutPaymentProof(params: {
     slug: string;
     authUserId: string | null;
     file?: Express.Multer.File;
+    uploadIntent?: string | null;
 }): Promise<ServiceResult> {
     if (!params.authUserId) {
         return { code: 401, error: true, message: 'Unauthorized' };
@@ -1963,30 +2213,43 @@ export async function uploadCheckoutPaymentProof(params: {
         return { code: 404, error: true, message: 'No encontramos la tienda.' };
     }
 
-    if (!isValidCommerceProofFile(params.file)) {
-        return {
-            code: 400,
-            error: true,
-            message: 'Debes subir un archivo JPG, PNG, WebP o PDF de hasta 5MB.',
-        };
+    if (!params.uploadIntent) return uploadServiceError(new UploadSecurityError('UPLOAD_INTENT_INVALID'));
+    if (!params.file) return uploadServiceError(new UploadSecurityError('UPLOAD_FILE_REQUIRED'));
+
+    let validated: { extension: string };
+    try {
+        validated = validateUploadFile(params.file, { maxBytes: PUBLIC_UPLOAD_MAX_BYTES, allowedMimeTypes: PUBLIC_UPLOAD_MIME_TYPES });
+    } catch (error) {
+        return uploadServiceError(error);
     }
 
-    const extension = params.file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
-    const stored = await uploadCommercePaymentProofFile({
-        companyId: company.id,
-        filename: `customers/${buildCommercePaymentProofUserSegment(params.authUserId)}/${buildCommercePaymentProofFileName(extension)}`,
-        file: params.file,
-    });
+    let relativePath: string | null = null;
+    let uploadRecorded = false;
+    try {
+        const intent = await consumeUploadIntent(params.uploadIntent, {
+            expectedPurpose: UPLOAD_PURPOSES.ORDER_PAYMENT_PROOF,
+            companyId: company.id,
+            contextId: `CHECKOUT:${params.authUserId}`,
+        });
+        relativePath = (await uploadCommercePaymentProofFile({
+            companyId: company.id,
+            filename: `customers/${buildCommercePaymentProofUserSegment(params.authUserId)}/${buildCommercePaymentProofFileName(validated.extension)}`,
+            file: params.file,
+        })).relativePath;
+        await recordStoredUpload(intent, relativePath);
+        uploadRecorded = true;
 
-    return {
-        code: 200,
-        error: false,
-        message: 'Comprobante subido correctamente.',
-        data: {
-            url: stored.relativePath,
-            deleteToken: stored.publicDeleteToken,
-        },
-    };
+        return {
+            code: 200,
+            error: false,
+            message: 'Comprobante subido correctamente.',
+            data: { url: relativePath, deleteToken: buildStorageDeleteToken(relativePath) },
+        };
+    } catch (error) {
+        if (relativePath) await StorageService.deleteFile(relativePath).catch(() => undefined);
+        if (uploadRecorded) await prisma.uploadIntent.updateMany({ where: { stored_path: relativePath }, data: { stored_path: null } }).catch(() => undefined);
+        return uploadServiceError(error);
+    }
 }
 
 export async function uploadPublicCommercePaymentProof(params: {
@@ -1995,6 +2258,7 @@ export async function uploadPublicCommercePaymentProof(params: {
     accessToken?: string | null;
     authUserId?: string | null;
     file?: Express.Multer.File;
+    uploadIntent?: string | null;
 }): Promise<ServiceResult> {
     const resolved = await getPublicCommerceOrderWithAccess({
         slug: params.slug,
@@ -2008,30 +2272,43 @@ export async function uploadPublicCommercePaymentProof(params: {
         return resolved.result;
     }
 
-    if (!isValidCommerceProofFile(params.file)) {
-        return {
-            code: 400,
-            error: true,
-            message: 'Debes subir un archivo JPG, PNG, WebP o PDF de hasta 5MB.',
-        };
+    if (!params.uploadIntent) return uploadServiceError(new UploadSecurityError('UPLOAD_INTENT_INVALID'));
+    if (!params.file) return uploadServiceError(new UploadSecurityError('UPLOAD_FILE_REQUIRED'));
+
+    let validated: { extension: string };
+    try {
+        validated = validateUploadFile(params.file, { maxBytes: PUBLIC_UPLOAD_MAX_BYTES, allowedMimeTypes: PUBLIC_UPLOAD_MIME_TYPES });
+    } catch (error) {
+        return uploadServiceError(error);
     }
 
-    const extension = params.file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
-    const stored = await uploadCommercePaymentProofFile({
-        companyId: resolved.company.id,
-        filename: `orders/${resolved.order!.id}/${buildCommercePaymentProofFileName(extension)}`,
-        file: params.file,
-    });
+    let relativePath: string | null = null;
+    let uploadRecorded = false;
+    try {
+        const intent = await consumeUploadIntent(params.uploadIntent, {
+            expectedPurpose: UPLOAD_PURPOSES.ORDER_PAYMENT_PROOF,
+            companyId: resolved.company.id,
+            contextId: `ORDER:${resolved.order!.id}`,
+        });
+        relativePath = (await uploadCommercePaymentProofFile({
+            companyId: resolved.company.id,
+            filename: `orders/${resolved.order!.id}/${buildCommercePaymentProofFileName(validated.extension)}`,
+            file: params.file,
+        })).relativePath;
+        await recordStoredUpload(intent, relativePath);
+        uploadRecorded = true;
 
-    return {
-        code: 200,
-        error: false,
-        message: 'Comprobante subido correctamente.',
-        data: {
-            url: stored.relativePath,
-            deleteToken: stored.publicDeleteToken,
-        },
-    };
+        return {
+            code: 200,
+            error: false,
+            message: 'Comprobante subido correctamente.',
+            data: { url: relativePath, deleteToken: buildStorageDeleteToken(relativePath) },
+        };
+    } catch (error) {
+        if (relativePath) await StorageService.deleteFile(relativePath).catch(() => undefined);
+        if (uploadRecorded) await prisma.uploadIntent.updateMany({ where: { stored_path: relativePath }, data: { stored_path: null } }).catch(() => undefined);
+        return uploadServiceError(error);
+    }
 }
 
 export async function deletePublicCommercePaymentProof(params: {
@@ -2039,6 +2316,7 @@ export async function deletePublicCommercePaymentProof(params: {
     orderNumber: string;
     accessToken?: string | null;
     authUserId?: string | null;
+    deleteToken?: string | null;
 }): Promise<ServiceResult> {
     const resolved = await getPublicCommerceOrderWithAccess({
         slug: params.slug,
@@ -2064,6 +2342,10 @@ export async function deletePublicCommercePaymentProof(params: {
             error: true,
             message: 'Este comprobante no se puede borrar desde este flujo.',
         };
+    }
+
+    if (!params.deleteToken || !verifyStorageDeleteToken(params.deleteToken, relativePath)) {
+        return uploadServiceError(new UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
     }
 
     await prisma.commerceOrder.update({

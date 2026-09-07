@@ -108,3 +108,38 @@ This map classifies the notification and messaging flows currently present in Pr
 
 - No customer-facing messaging flow was confidently marked as dead during this pass.
 - `super-admin-notifications.service.ts` is not dead code, but it is operational tooling and should stay outside the Mensajeria packaging rules.
+
+## Phase 1 provider contract
+
+Email and WhatsApp delivery are explicit, fail-closed side effects shared by
+the capabilities above:
+
+- Email requires `MAIL_ENABLED=true`. `MAIL_TRANSPORT=disabled` returns
+  `SKIPPED/PROVIDER_DISABLED`; `MAIL_TRANSPORT=sink` captures messages locally;
+  remote delivery requires `MAIL_HOST`, `MAIL_FROM`, `MAIL_USER`, and
+  `MAIL_PASS`. Missing remote configuration returns
+  `FAILED/PROVIDER_NOT_CONFIGURED` and never selects a default SMTP host.
+- WhatsApp requires `WAHA_ENABLED=true`. `WAHA_TRANSPORT=disabled` skips
+  without an upstream request; `sink` returns a local successful delivery;
+  remote delivery requires a valid `WAHA_BASE_URL`. Missing configuration is a
+  deterministic `FAILED/PROVIDER_NOT_CONFIGURED` result.
+- Consumers use the explicit delivery status before marking notifications,
+  reminders, invitations, or diagnostics as delivered. Best-effort
+  notifications run after the relevant business persistence where applicable,
+  so provider failure does not roll back the business transaction.
+
+## Durable WhatsApp delivery
+
+All WhatsApp message-producing flows listed above now enqueue through
+`src/services/outbound-message.service.ts`. Jobs and mass-send batches are
+persisted in MySQL by the `20260905150000_durable_whatsapp_delivery` forward
+migration; `src/services/whatsapp-worker.service.ts` is the only message path
+that calls the WAHA transport. The worker uses leases/atomic claims,
+backoff/retry, expiry, provider-state pause/resume, and batch progress APIs, so
+WAHA disconnects or backend restarts preserve still-valid pending messages.
+
+The enqueue result is deliberately distinct from provider delivery: `QUEUED`
+means persisted for asynchronous delivery, and the outbox `SENT` state means
+WAHA accepted the submission. No device-delivery/read receipt is currently
+persisted. Full operational details and the caller inventory are in
+`WHATSAPP_DELIVERY_REMEDIATION.md`.

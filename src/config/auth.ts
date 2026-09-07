@@ -1,5 +1,5 @@
 import { prisma } from "../prisma/client";
-import { sendWhatsappCode } from "../utils/whatsappSender";
+import { isWhatsappEnqueueAccepted, queueWhatsappCode } from "../utils/whatsappSender";
 import { sendResetPasswordEmail } from "../utils/sendEmail";
 import { importEsm } from "../utils/importEsm";
 import { webcrypto as nodeWebCrypto } from "crypto";
@@ -125,7 +125,14 @@ async function createAuth() {
         expiresIn: 300,
         allowedAttempts: 3,
         sendOTP: async ({ phoneNumber, code }: { phoneNumber: string; code: string }) => {
-          await sendWhatsappCode(phoneNumber, code);
+          const result = await queueWhatsappCode(phoneNumber, code, {
+            sourceType: 'BETTER_AUTH_PHONE_OTP',
+            sourceId: phoneNumber,
+            expiresAt: new Date(Date.now() + 300_000),
+          });
+          if (!isWhatsappEnqueueAccepted(result)) {
+            throw new Error('WhatsApp OTP delivery is unavailable');
+          }
         },
         signUpOnVerification: {
           getTempEmail: (phoneNumber: string) => {

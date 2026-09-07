@@ -7,7 +7,8 @@ import { getAuth } from '../config/auth';
 import { OTP_RESEND_COOLDOWN_SECONDS, OTP_TTL_MINUTES, generateNumericCode } from '../utils/verification';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 import { sendEmailCode } from '../utils/sendEmail';
-import { sendWhatsappCode } from '../utils/whatsappSender';
+import { getWhatsappEnqueueLifecycleStatus, queueWhatsappCode } from '../utils/whatsappSender';
+import { syncWhatsappOtpSessionDelivery } from './outbound-message.repository';
 import { ensureCustomerProfileWithAccount } from './customer-account.service';
 import * as UserRepo from '../repositories/user.repo';
 import { MensajeApi } from '../types/MensajeApi';
@@ -247,20 +248,37 @@ async function dispatchSharedCode(params: {
     email: string;
     phoneFull: string;
     code: string;
+    expiresAt?: Date;
+    sourceId?: string;
 }): Promise<{
     emailSent: boolean;
     phoneSent: boolean;
+    phoneQueued: boolean;
+    phoneStatus: string;
+    phoneJobId: number | null;
     maskedEmail: string | null;
     maskedPhone: string | null;
 }> {
     const [emailResult, phoneResult] = await Promise.all([
         sendEmailCode(params.email, params.code).catch(() => -1),
-        sendWhatsappCode(params.phoneFull, params.code).catch(() => -1),
+        queueWhatsappCode(params.phoneFull, params.code, {
+            sourceType: 'PAID_EVENT_GUEST_CHECKOUT_OTP',
+            sourceId: params.sourceId ?? params.phoneFull,
+            expiresAt: params.expiresAt ?? new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
+        }).catch(() => null),
     ]);
 
+    const phoneStatus = phoneResult
+        ? getWhatsappEnqueueLifecycleStatus(phoneResult)
+        : 'FAILED';
+    const phoneSent = phoneStatus === 'SENT';
+    const phoneQueued = phoneStatus === 'PENDING' || phoneStatus === 'PROCESSING';
     return {
         emailSent: emailResult !== -1,
-        phoneSent: phoneResult !== -1,
+        phoneSent,
+        phoneQueued,
+        phoneStatus,
+        phoneJobId: phoneResult?.jobId ?? null,
         maskedEmail: maskEmail(params.email),
         maskedPhone: maskPhone(params.phoneFull),
     };
@@ -271,6 +289,9 @@ function buildGuestCheckoutStartPayload(params: {
     accountOutcome: GuestCheckoutAccountOutcome;
     emailSent: boolean;
     phoneSent: boolean;
+    phoneQueued: boolean;
+    phoneStatus: string;
+    phoneJobId: number | null;
     maskedEmail: string | null;
     maskedPhone: string | null;
     expiresAt: Date | null;
@@ -288,12 +309,15 @@ function buildGuestCheckoutStartPayload(params: {
             otpDelivery: {
                 emailSent: params.emailSent,
                 phoneSent: params.phoneSent,
+                phoneQueued: params.phoneQueued,
+                phoneStatus: params.phoneStatus,
+                phoneJobId: params.phoneJobId,
                 maskedEmail: params.maskedEmail,
                 maskedPhone: params.maskedPhone,
             },
             expiresAt: params.expiresAt?.toISOString() ?? null,
             resendCooldownSeconds,
-            canVerify: params.emailSent || params.phoneSent,
+            canVerify: params.emailSent || params.phoneSent || params.phoneQueued,
         },
     };
 }
@@ -429,6 +453,9 @@ export async function startPaidEventGuestCheckout(
             accountOutcome: account.outcome,
             emailSent: false,
             phoneSent: false,
+            phoneQueued: false,
+            phoneStatus: 'FAILED',
+            phoneJobId: null,
             maskedEmail: maskEmail(email),
             maskedPhone: maskPhone(canonicalPhone.fullPhone ?? canonicalPhone.phoneNumber),
             expiresAt: null,
@@ -438,13 +465,14 @@ export async function startPaidEventGuestCheckout(
     const sharedCode = generateNumericCode();
     const otpHash = await bcrypt.hash(sharedCode, 10);
     const phoneFull = canonicalPhone.fullPhone ?? `${canonicalPhone.phonePrefix}${canonicalPhone.phoneNumber}`;
+    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
     const delivery = await dispatchSharedCode({
         email,
         phoneFull,
         code: sharedCode,
+        expiresAt,
+        sourceId: `start:${phoneFull}`,
     });
-
-    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
     const resendAvailableAt = new Date(Date.now() + getResendCooldownSeconds() * 1000);
 
     const session = await prisma.paidEventGuestCheckoutSession.create({
@@ -467,8 +495,14 @@ export async function startPaidEventGuestCheckout(
             resend_available_at: resendAvailableAt,
             email_delivery_succeeded: delivery.emailSent,
             phone_delivery_succeeded: delivery.phoneSent,
+            phone_delivery_status: delivery.phoneStatus,
+            phone_delivery_job_id: delivery.phoneJobId,
             delivery_attempted_at: new Date(),
         },
+    });
+    await syncWhatsappOtpSessionDelivery(delivery.phoneJobId, {
+        kind: 'PAID_EVENT_GUEST_CHECKOUT',
+        sessionId: session.id,
     });
 
     return buildGuestCheckoutStartPayload({
@@ -476,6 +510,9 @@ export async function startPaidEventGuestCheckout(
         accountOutcome: account.outcome,
         emailSent: delivery.emailSent,
         phoneSent: delivery.phoneSent,
+        phoneQueued: delivery.phoneQueued,
+        phoneStatus: delivery.phoneStatus,
+        phoneJobId: delivery.phoneJobId,
         maskedEmail: delivery.maskedEmail,
         maskedPhone: delivery.maskedPhone,
         expiresAt,
@@ -510,12 +547,14 @@ export async function resendPaidEventGuestCheckoutCode(
     const sharedCode = generateNumericCode();
     const otpHash = await bcrypt.hash(sharedCode, 10);
     const phoneFull = `${session.phone_prefix}${session.phone_number}`;
+    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
     const delivery = await dispatchSharedCode({
         email: session.email,
         phoneFull,
         code: sharedCode,
+        expiresAt,
+        sourceId: `resend:${session.id}`,
     });
-    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
     const resendAvailableAt = new Date(Date.now() + getResendCooldownSeconds() * 1000);
 
     await prisma.paidEventGuestCheckoutSession.update({
@@ -527,8 +566,14 @@ export async function resendPaidEventGuestCheckoutCode(
             resend_available_at: resendAvailableAt,
             email_delivery_succeeded: delivery.emailSent,
             phone_delivery_succeeded: delivery.phoneSent,
+            phone_delivery_status: delivery.phoneStatus,
+            phone_delivery_job_id: delivery.phoneJobId,
             delivery_attempted_at: new Date(),
         },
+    });
+    await syncWhatsappOtpSessionDelivery(delivery.phoneJobId, {
+        kind: 'PAID_EVENT_GUEST_CHECKOUT',
+        sessionId: session.id,
     });
 
     return buildGuestCheckoutStartPayload({
@@ -536,6 +581,9 @@ export async function resendPaidEventGuestCheckoutCode(
         accountOutcome: session.account_outcome as GuestCheckoutAccountOutcome,
         emailSent: delivery.emailSent,
         phoneSent: delivery.phoneSent,
+        phoneQueued: delivery.phoneQueued,
+        phoneStatus: delivery.phoneStatus,
+        phoneJobId: delivery.phoneJobId,
         maskedEmail: delivery.maskedEmail,
         maskedPhone: delivery.maskedPhone,
         expiresAt,

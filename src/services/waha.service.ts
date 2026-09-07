@@ -25,6 +25,73 @@ export interface WahaSendResult<T = unknown> {
   contentType?: string | null;
 }
 
+export type WahaProviderMode = 'disabled' | 'sink' | 'remote';
+export type WahaDeliveryStatus = 'SENT' | 'SKIPPED' | 'FAILED';
+export type WahaDeliveryReason = 'LOCAL_SINK' | 'PROVIDER_DISABLED' | 'PROVIDER_NOT_CONFIGURED' | 'TRANSPORT_FAILED';
+
+export interface WahaProviderState {
+  enabled: boolean;
+  mode: WahaProviderMode;
+  configured: boolean;
+  reason: WahaDeliveryReason | null;
+}
+
+export interface WahaDeliveryMeta {
+  deliveryStatus: WahaDeliveryStatus;
+  reason: WahaDeliveryReason;
+}
+
+function isExplicitTrue(value?: string | null): boolean {
+  return normalizeOptionalString(value)?.toLowerCase() === 'true';
+}
+
+export function getWahaProviderState(env: NodeJS.ProcessEnv = process.env): WahaProviderState {
+  const enabled = isExplicitTrue(env.WAHA_ENABLED);
+  const configuredTransport = normalizeOptionalString(env.WAHA_TRANSPORT)?.toLowerCase();
+  const mode: WahaProviderMode = !enabled
+    ? 'disabled'
+    : configuredTransport === 'disabled'
+      ? 'disabled'
+      : configuredTransport === 'sink'
+        ? 'sink'
+        : 'remote';
+
+  if (!enabled || mode === 'disabled') {
+    return { enabled, mode: 'disabled', configured: false, reason: 'PROVIDER_DISABLED' };
+  }
+
+  if (mode === 'sink') {
+    return { enabled, mode, configured: true, reason: null };
+  }
+
+  const baseUrl = normalizeBaseUrl(env.WAHA_BASE_URL);
+  if (!baseUrl) {
+    return { enabled, mode, configured: false, reason: 'PROVIDER_NOT_CONFIGURED' };
+  }
+  try {
+    new URL(baseUrl);
+  } catch {
+    return { enabled, mode, configured: false, reason: 'PROVIDER_NOT_CONFIGURED' };
+  }
+
+  return { enabled, mode, configured: true, reason: null };
+}
+
+export function isWahaDeliverySuccessful(result: unknown): boolean {
+  if (result === -1 || !result || typeof result !== 'object') return false;
+  const response = result as WahaSendResult<unknown>;
+  if (typeof response.status !== 'number' || response.status < 200 || response.status >= 300) return false;
+  const data = response.data;
+  if (data && typeof data === 'object' && 'deliveryStatus' in data) {
+    return (data as WahaDeliveryMeta).deliveryStatus === 'SENT';
+  }
+  return true;
+}
+
+export function createWahaProviderResult(status: number, deliveryStatus: WahaDeliveryStatus, reason: WahaDeliveryReason): WahaSendResult<WahaDeliveryMeta> {
+  return { status, data: { deliveryStatus, reason } };
+}
+
 export interface WahaHealthCheckResult {
   ok: boolean;
   session: string;
@@ -344,26 +411,6 @@ export function createWahaClient(options?: {
   const log = options?.logger ?? logger;
 
   let apiKeyWarningLogged = false;
-  let lastSendAt = 0;
-  let sendQueue: Promise<unknown> = Promise.resolve();
-  let sendSequence = 0;
-
-  async function waitForRateLimitWindow(config: WahaConfig) {
-    const elapsed = Date.now() - lastSendAt;
-    const waitMs = Math.max(0, config.minIntervalMs - elapsed);
-    if (waitMs <= 0) return;
-
-    log.debug(
-      {
-        event: 'whatsapp_send_waiting_for_rate_limit',
-        waitMs,
-        minIntervalMs: config.minIntervalMs,
-      },
-      'Waiting before next WhatsApp send',
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-  }
 
   async function request<T>(
     path: string,
@@ -483,101 +530,41 @@ export function createWahaClient(options?: {
     }
   }
 
-  function enqueueWhatsappSend<T>(
-    task: (config: WahaConfig) => Promise<T>,
-    meta: { destination: string; messageType: 'text' | 'image' },
-  ): Promise<T> {
-    const sendId = ++sendSequence;
-    const nextTask = sendQueue.then(async () => {
-      const config = resolveWahaConfig(env);
-
-      log.info(
-        {
-          event: 'whatsapp_send_started',
-          sendId,
-          destination: maskDestination(meta.destination),
-          messageType: meta.messageType,
-          session: config.session,
-        },
-        'Starting WhatsApp send',
-      );
-
-      await waitForRateLimitWindow(config);
-      const startedAt = Date.now();
-
-      try {
-        const result = await task(config);
-        lastSendAt = Date.now();
-
-        log.info(
-          {
-            event: 'whatsapp_send_succeeded',
-            sendId,
-            destination: maskDestination(meta.destination),
-            messageType: meta.messageType,
-            elapsedMs: lastSendAt - startedAt,
-            minIntervalMs: config.minIntervalMs,
-          },
-          'WhatsApp send succeeded',
-        );
-
-        return result;
-      } catch (error) {
-        lastSendAt = Date.now();
-
-        log.error(
-          {
-            event: 'whatsapp_send_failed',
-            sendId,
-            destination: maskDestination(meta.destination),
-            messageType: meta.messageType,
-            elapsedMs: lastSendAt - startedAt,
-            minIntervalMs: config.minIntervalMs,
-            error: formatErrorLog(error),
-          },
-          'WhatsApp send failed',
-        );
-
-        throw error;
-      }
-    });
-
-    sendQueue = nextTask.catch(() => undefined);
-    return nextTask;
-  }
-
-  async function sendText(to: string, message: string) {
+  /**
+   * Send one message immediately through WAHA.
+   *
+   * Delivery orchestration (durability, rate limiting, retries and leases)
+   * deliberately lives in whatsapp-worker.service.ts. Keeping this client
+   * transport-only prevents an in-memory promise chain from being mistaken
+   * for a durable queue and makes multiple worker instances safe.
+   */
+  async function sendTextNow(to: string, message: string) {
     const text = normalizeOptionalString(message);
     if (!text) {
       throw new Error('WhatsApp message text is required.');
     }
 
     const chatId = buildWahaChatId(to, { env });
-    return enqueueWhatsappSend(
-      async (config) => request(
-        '/api/sendText',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            session: config.session,
-            chatId,
-            text,
-          }),
-        },
-        {
-          operation: 'sending a WhatsApp text message',
-          destination: chatId,
-        },
-        config,
-      ),
+    const config = resolveWahaConfig(env);
+    return request(
+      '/api/sendText',
       {
-        destination: chatId,
-        messageType: 'text',
+        method: 'POST',
+        body: JSON.stringify({
+          session: config.session,
+          chatId,
+          text,
+        }),
       },
+      {
+        operation: 'sending a WhatsApp text message',
+        destination: chatId,
+      },
+      config,
     );
   }
 
-  async function sendImage(to: string, imageUrl: string, caption?: string) {
+  async function sendImageNow(to: string, imageUrl: string, caption?: string) {
     const normalizedImageUrl = normalizeOptionalString(imageUrl);
     if (!normalizedImageUrl) {
       throw new Error('WhatsApp image URL is required.');
@@ -585,33 +572,28 @@ export function createWahaClient(options?: {
 
     const chatId = buildWahaChatId(to, { env });
     const trimmedCaption = normalizeOptionalString(caption);
+    const config = resolveWahaConfig(env);
 
-    return enqueueWhatsappSend(
-      async (config) => request(
-        '/api/sendImage',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            session: config.session,
-            chatId,
-            file: {
-              mimetype: inferImageMimeType(normalizedImageUrl),
-              url: normalizedImageUrl,
-              filename: inferImageFilename(normalizedImageUrl),
-            },
-            ...(trimmedCaption ? { caption: trimmedCaption } : {}),
-          }),
-        },
-        {
-          operation: 'sending a WhatsApp image message',
-          destination: chatId,
-        },
-        config,
-      ),
+    return request(
+      '/api/sendImage',
       {
-        destination: chatId,
-        messageType: 'image',
+        method: 'POST',
+        body: JSON.stringify({
+          session: config.session,
+          chatId,
+          file: {
+            mimetype: inferImageMimeType(normalizedImageUrl),
+            url: normalizedImageUrl,
+            filename: inferImageFilename(normalizedImageUrl),
+          },
+          ...(trimmedCaption ? { caption: trimmedCaption } : {}),
+        }),
       },
+      {
+        operation: 'sending a WhatsApp image message',
+        destination: chatId,
+      },
+      config,
     );
   }
 
@@ -832,8 +814,12 @@ export function createWahaClient(options?: {
   }
 
   return {
-    sendText,
-    sendImage,
+    sendTextNow,
+    sendImageNow,
+    // Deprecated transport aliases retained for existing low-level tests and
+    // integrations. Application code must use the outbox queue APIs.
+    sendText: sendTextNow,
+    sendImage: sendImageNow,
     createGroup,
     listSessions,
     getSessionInfo,

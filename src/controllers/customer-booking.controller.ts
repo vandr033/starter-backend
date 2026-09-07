@@ -35,6 +35,8 @@ export async function createCustomerBooking(req: AuthenticatedRequest, res: Resp
             payment_method,
             notes,
             qr_proof_image_url,
+            upload_intent,
+            upload_context_id,
             booking_source,
         } = req.body;
 
@@ -146,6 +148,12 @@ export async function createCustomerBooking(req: AuthenticatedRequest, res: Resp
             payment_method,
             notes: notes || null,
             qr_proof_image_url: qr_proof_image_url || null,
+            upload_intent: typeof upload_intent === 'string' ? upload_intent : null,
+            upload_context_id: upload_context_id === null
+                ? null
+                : typeof upload_context_id === 'string'
+                    ? upload_context_id
+                    : undefined,
             booking_source: booking_source as BookingSource | undefined,
             ...clientData,
         });

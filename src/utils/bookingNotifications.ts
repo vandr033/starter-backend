@@ -1,4 +1,3 @@
-import nodemailer from "nodemailer";
 import { prisma } from "../prisma/client";
 import { logger } from "../config/logger";
 import { CompanyUserRole } from "@prisma/client";
@@ -9,27 +8,9 @@ import {
     renderBrandedEmail,
     type NotificationBranding,
 } from "./notificationBranding";
-import { wahaClient } from "../services/waha.service";
 import { companyHasCapability } from "../services/company-entitlements.service";
-
-const smtpHost = process.env.MAIL_HOST || "smtp.gmail.com";
-const smtpPort = Number(process.env.MAIL_PORT || 587);
-const smtpSecure =
-    (process.env.MAIL_SECURE || "").toLowerCase() === "true" || smtpPort === 465;
-
-const emailTransporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpSecure,
-    requireTLS: !smtpSecure,
-    auth: {
-        user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS,
-    },
-    connectionTimeout: Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 15000),
-    greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 15000),
-    socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000),
-});
+import { sendGenericEmail } from "./sendEmail";
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from "./whatsappSender";
 
 interface BookingNotificationData {
     companyId: number;
@@ -627,40 +608,59 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
 // ─── SEND HELPERS (fire-and-forget, never throw) ─────────
 
 async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
-    if (!process.env.MAIL_USER || !process.env.MAIL_PASS || !process.env.MAIL_FROM) {
-        logger.warn(
-            { to },
-            "Booking email skipped: MAIL_USER/MAIL_PASS/MAIL_FROM are not fully configured"
-        );
-        return false;
-    }
-
     try {
-        await emailTransporter.sendMail({
-            to,
-            from: process.env.MAIL_FROM!,
-            subject,
-            html,
-        });
-        return true;
+        const result = await sendGenericEmail(to, subject, html);
+        return result.status === 'SENT';
     } catch (err) {
-        const code = (err as { code?: string })?.code;
-        if (code === "ETIMEDOUT" || code === "ECONNECTION") {
-            logger.warn({ err, to }, "Booking notification email timed out");
-        } else {
-            logger.error({ err, to }, "Failed to send booking notification email");
-        }
+        logger.error({ err, to }, "Failed to send booking notification email");
         return false;
     }
 }
 
-async function sendWhatsapp(phone: string, text: string): Promise<boolean> {
+type BookingWhatsappStatus = 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+
+type BookingWhatsappResult = {
+    accepted: boolean;
+    status: BookingWhatsappStatus;
+    jobId?: number;
+    reason?: string;
+};
+
+function mapWhatsappResultStatus(result: { status?: string; existingStatus?: string }): BookingWhatsappStatus {
+    const status = result.status === 'DUPLICATE' ? result.existingStatus : result.status;
+    if (status === 'PROCESSING') return 'PROCESSING';
+    if (status === 'SENT') return 'SENT';
+    if (status === 'EXPIRED') return 'EXPIRED';
+    if (status === 'CANCELLED') return 'CANCELLED';
+    return 'PENDING';
+}
+
+async function sendWhatsapp(
+    phone: string,
+    text: string,
+    data: BookingNotificationData,
+    sourceType: string,
+    recipientKey = "customer",
+    options?: { expiresAt?: Date | null },
+): Promise<BookingWhatsappResult> {
     try {
-        const result = await wahaClient.sendText(phone, text);
-        return result.status >= 200 && result.status < 300;
+        const result = await queueWhatsappText(phone, text, {
+            companyId: data.companyId,
+            branding: data.branding,
+            sourceType,
+            sourceId: `${data.bookingId}:${recipientKey}`,
+            dedupeKey: `${sourceType}:${data.bookingId}:${recipientKey}:${phone}:${text}`,
+            expiresAt: options?.expiresAt,
+        });
+        return {
+            accepted: isWhatsappEnqueueAccepted(result),
+            status: isWhatsappEnqueueAccepted(result) ? mapWhatsappResultStatus(result) : 'FAILED',
+            jobId: result.jobId,
+            reason: result.reason,
+        };
     } catch (err) {
-        logger.error({ err, phone }, "Failed to send booking WhatsApp notification");
-        return false;
+        logger.error({ err, bookingId: data.bookingId, phone }, "Failed to queue booking WhatsApp notification");
+        return { accepted: false, status: 'FAILED', reason: 'WHATSAPP_ENQUEUE_FAILED' };
     }
 }
 
@@ -858,7 +858,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
                 data,
                 `✅ Hola ${data.customerName || ""}, tu reserva en ${data.companyName} ha sido confirmada.`
             );
-            void sendWhatsapp(phone, brandWhatsapp(data, text));
+            void sendWhatsapp(phone, brandWhatsapp(data, text), data, "BOOKING_CREATED");
         }
     }
 
@@ -888,7 +888,13 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
 
                 if (doWa && recipient.phone) {
                     const text = buildInternalWhatsappText(data, recipient.role);
-                    void sendWhatsapp(recipient.phone, brandWhatsapp(data, text));
+                    void sendWhatsapp(
+                        recipient.phone,
+                        brandWhatsapp(data, text),
+                        data,
+                        "BOOKING_CREATED_INTERNAL",
+                        recipient.userId,
+                    );
                 }
             }
         } catch (err) {
@@ -918,7 +924,13 @@ export async function notifyBookingPendingForManagement(data: BookingNotificatio
             if (!recipientMatchesAudience(recipient, "management") || !recipient.phone) {
                 continue;
             }
-            void sendWhatsapp(recipient.phone, brandWhatsapp(data, text));
+            void sendWhatsapp(
+                recipient.phone,
+                brandWhatsapp(data, text),
+                data,
+                "BOOKING_PENDING_MANAGEMENT",
+                recipient.userId,
+            );
         }
     } catch (err) {
         logger.error(
@@ -958,7 +970,13 @@ export async function notifyBookingConfirmedForStaff(data: BookingNotificationDa
 
             if (doWa && recipient.phone) {
                 const text = buildStaffConfirmedWhatsappText(data);
-                void sendWhatsapp(recipient.phone, brandWhatsapp(data, text));
+                void sendWhatsapp(
+                    recipient.phone,
+                    brandWhatsapp(data, text),
+                    data,
+                    "BOOKING_CONFIRMED_STAFF",
+                    recipient.userId,
+                );
             }
         }
     } catch (err) {
@@ -993,7 +1011,7 @@ export async function notifyBookingUpdated(data: BookingNotificationData): Promi
                 data,
                 `📝 Hola ${data.customerName || ""}, tu reserva en ${data.companyName} ha sido actualizada.`
             );
-            void sendWhatsapp(phone, brandWhatsapp(data, text));
+            void sendWhatsapp(phone, brandWhatsapp(data, text), data, "BOOKING_UPDATED");
         }
     }
 }
@@ -1022,7 +1040,7 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
                 data,
                 `❌ Hola ${data.customerName || ""}, tu reserva en ${data.companyName} ha sido cancelada.`
             );
-            void sendWhatsapp(phone, brandWhatsapp(data, text));
+            void sendWhatsapp(phone, brandWhatsapp(data, text), data, "BOOKING_CANCELLED");
         }
     }
 }
@@ -1033,7 +1051,7 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
  */
 export async function notifyBookingTodayReminder(
     data: BookingReminderData,
-): Promise<{ sent: boolean; channel?: ReminderChannel; reason?: string }> {
+): Promise<{ sent: boolean; queued?: boolean; channel?: ReminderChannel; status?: BookingWhatsappStatus | 'SENT' | 'FAILED'; jobId?: number; reason?: string }> {
     data = await withCompanyTimeZone(data);
     const customerPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
     const customerEmail = normalizeEmail(data.customerEmail);
@@ -1041,10 +1059,17 @@ export async function notifyBookingTodayReminder(
 
     if (customerPhone) {
         const text = buildTodayReminderWhatsappText(data);
-        const ok = await sendWhatsapp(customerPhone, brandWhatsapp(data, text));
-        return ok
-            ? { sent: true, channel: "WHATSAPP" }
-            : { sent: false, reason: "WHATSAPP_SEND_FAILED" };
+        const result = await sendWhatsapp(
+            customerPhone,
+            brandWhatsapp(data, text),
+            data,
+            "BOOKING_TODAY_REMINDER",
+            "customer",
+            { expiresAt: data.startAt },
+        );
+        if (!result.accepted) return { sent: false, status: 'FAILED', reason: result.reason || "WHATSAPP_SEND_FAILED" };
+        if (result.status === 'SENT') return { sent: true, channel: "WHATSAPP", status: 'SENT', jobId: result.jobId };
+        return { sent: false, queued: true, channel: "WHATSAPP", status: result.status, jobId: result.jobId, reason: result.reason || 'QUEUED' };
     }
 
     if (customerEmail) {
@@ -1055,11 +1080,11 @@ export async function notifyBookingTodayReminder(
                 : `Recordatorio de cita de hoy – ${data.companyName}`;
         const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
         return ok
-            ? { sent: true, channel: "EMAIL" }
-            : { sent: false, reason: "EMAIL_SEND_FAILED" };
+            ? { sent: true, channel: "EMAIL", status: 'SENT' }
+            : { sent: false, status: 'FAILED', reason: "EMAIL_SEND_FAILED" };
     }
 
-    return { sent: false, reason: "NO_CONTACT" };
+    return { sent: false, status: 'FAILED', reason: "NO_CONTACT" };
 }
 
 /**
@@ -1068,7 +1093,7 @@ export async function notifyBookingTodayReminder(
  */
 export async function notifyBookingNoShow(
     data: BookingNoShowNotificationData,
-): Promise<{ sent: boolean; channel?: ReminderChannel; reason?: string }> {
+): Promise<{ sent: boolean; queued?: boolean; channel?: ReminderChannel; status?: BookingWhatsappStatus | 'SENT' | 'FAILED'; jobId?: number; reason?: string }> {
     data = await withCompanyTimeZone(data);
     const locale: SupportedLocale = data.locale === "en" ? "en" : "es";
     const customerPhone = buildFullPhone(data.customerPhonePrefix, data.customerPhone);
@@ -1078,8 +1103,10 @@ export async function notifyBookingNoShow(
 
     if (preferred === "WHATSAPP") {
         if (!customerPhone) return { sent: false, reason: "NO_WHATSAPP_CONTACT" };
-        const ok = await sendWhatsapp(customerPhone, brandWhatsapp(data, message));
-        return ok ? { sent: true, channel: "WHATSAPP" } : { sent: false, reason: "WHATSAPP_SEND_FAILED" };
+        const result = await sendWhatsapp(customerPhone, brandWhatsapp(data, message), data, "BOOKING_NO_SHOW");
+        if (!result.accepted) return { sent: false, status: 'FAILED', reason: result.reason || "WHATSAPP_SEND_FAILED" };
+        if (result.status === 'SENT') return { sent: true, channel: "WHATSAPP", status: 'SENT', jobId: result.jobId };
+        return { sent: false, queued: true, channel: "WHATSAPP", status: result.status, jobId: result.jobId, reason: result.reason || 'QUEUED' };
     }
 
     if (preferred === "EMAIL") {
@@ -1090,12 +1117,15 @@ export async function notifyBookingNoShow(
                 : `Aviso de no asistencia – ${data.companyName}`;
         const html = bookingNoShowEmailHtml(data, message);
         const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
-        return ok ? { sent: true, channel: "EMAIL" } : { sent: false, reason: "EMAIL_SEND_FAILED" };
+        return ok ? { sent: true, channel: "EMAIL", status: 'SENT' } : { sent: false, status: 'FAILED', reason: "EMAIL_SEND_FAILED" };
     }
 
     if (customerPhone) {
-        const ok = await sendWhatsapp(customerPhone, brandWhatsapp(data, message));
-        if (ok) return { sent: true, channel: "WHATSAPP" };
+        const result = await sendWhatsapp(customerPhone, brandWhatsapp(data, message), data, "BOOKING_NO_SHOW");
+        if (result.accepted) {
+            if (result.status === 'SENT') return { sent: true, channel: "WHATSAPP", status: 'SENT', jobId: result.jobId };
+            return { sent: false, queued: true, channel: "WHATSAPP", status: result.status, jobId: result.jobId, reason: result.reason || 'QUEUED' };
+        }
     }
 
     if (customerEmail) {
@@ -1105,8 +1135,8 @@ export async function notifyBookingNoShow(
                 : `Aviso de no asistencia – ${data.companyName}`;
         const html = bookingNoShowEmailHtml(data, message);
         const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
-        return ok ? { sent: true, channel: "EMAIL" } : { sent: false, reason: "EMAIL_SEND_FAILED" };
+        return ok ? { sent: true, channel: "EMAIL", status: 'SENT' } : { sent: false, status: 'FAILED', reason: "EMAIL_SEND_FAILED" };
     }
 
-    return { sent: false, reason: "NO_CONTACT" };
+    return { sent: false, status: 'FAILED', reason: "NO_CONTACT" };
 }

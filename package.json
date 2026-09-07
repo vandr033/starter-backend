@@ -7,13 +7,17 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test -r ts-node/register tests/*.test.ts",
     "test:free-event": "node --test -r ts-node/register tests/*.test.ts",
+    "test:mysql": "RUN_MYSQL_INTEGRATION=1 node --test -r ts-node/register tests/phase-0.seed-auth.integration.test.ts tests/phase-1.upload-notification.integration.test.ts tests/restaurant-tenant-isolation.integration.test.ts tests/phase-2.commerce-concurrency.integration.test.ts",
+    "typecheck": "tsc --noEmit",
     "start": "ts-node src/server.ts",
+    "worker:whatsapp": "ts-node src/whatsapp-worker.ts",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "prisma:seed": "prisma db seed",
     "prisma:seed:super-admin": "ts-node prisma/seed.super-admin-only.ts",
-    "prisma:seed:super-admin-priconpri": "ts-node prisma/seed.super-admin-priconpri.ts"
+    "prisma:seed:super-admin-priconpri": "ts-node prisma/seed.super-admin-priconpri.ts",
+    "verify:phase0": "ts-node scripts/verify-phase0.ts"
   },
   "keywords": [],
   "author": "",

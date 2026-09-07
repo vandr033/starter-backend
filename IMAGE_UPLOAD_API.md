@@ -146,6 +146,17 @@ Based on the upload type, files are stored in:
 | about_3 | /storage/uploads/{company_id}/about/ | image3.{ext} | company.about_image_3_url |
 | staff | /storage/uploads/{company_id}/staff/ | {staff_id}.{ext} | staff_profile.image_url |
 
+### Phase 1 validation and company QR
+
+`company_qr` is also a supported authenticated OWNER/ADMIN upload type and is
+stored in the company's QR directory. All admin image uploads use the shared
+content validator: the declared MIME type, safe filename extension, and file
+signature must agree. JPEG, PNG, WebP, and GIF files are limited to 5 MB.
+
+Public payment-proof uploads do not use this admin endpoint. They use the
+scoped upload-intent flow documented in `QR_UPLOAD_API.md` and never accept a
+caller-selected tenant identifier.
+
 ## Example Usage
 
 ### Upload Example

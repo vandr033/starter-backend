@@ -1,8 +1,10 @@
 import { prisma } from '../prisma/client';
 import { sendGenericEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
 import crypto from 'crypto';
 import { buildFullPhone } from '../utils/notificationBranding';
+import { logger } from '../config/logger';
+import { isEmailDeliverySuccessful } from './notification-provider.service';
 
 function buildOrderPublicUrl(companySlug: string, orderNumber: string, accessToken: string): string {
     const base =
@@ -50,7 +52,7 @@ export async function notifyCommerceOrderCustomer(params: {
     const text = `${params.message.trim()}\n\nSeguimiento: ${orderUrl}`;
 
     if (order.customer_email) {
-        await sendGenericEmail(
+        const result = await sendGenericEmail(
             order.customer_email,
             params.emailSubject ?? `Actualización de tu pedido ${order.order_number}`,
             `
@@ -61,14 +63,23 @@ export async function notifyCommerceOrderCustomer(params: {
                 companyId: params.companyId,
                 branding: { companyName: order.company.name },
             },
-        ).catch(() => undefined);
+        );
+        if (!isEmailDeliverySuccessful(result)) {
+            logger.warn({ orderId: order.id, reason: result.reason }, 'Commerce order email was not delivered');
+        }
     }
 
     const fullCustomerPhone = buildFullPhone(order.customer_phone_prefix, order.customer_phone);
     if (fullCustomerPhone) {
-        await sendWhatsappText(fullCustomerPhone, text, {
+        const result = await queueWhatsappText(fullCustomerPhone, text, {
             companyId: params.companyId,
             branding: { companyName: order.company.name },
-        }).catch(() => undefined);
+            sourceType: 'COMMERCE_ORDER_NOTIFICATION',
+            sourceId: order.id,
+            dedupeKey: `commerce-order:${order.id}:${params.emailSubject ?? params.message}`,
+        });
+        if (!isWhatsappEnqueueAccepted(result)) {
+            logger.warn({ orderId: order.id, reason: result.reason ?? 'WHATSAPP_ENQUEUE_FAILED' }, 'Commerce order WhatsApp was not queued');
+        }
     }
 }

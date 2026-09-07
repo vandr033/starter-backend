@@ -4,6 +4,7 @@ import {
   type WahaMeInfo,
   type WahaQRCodeRawValue,
   type WahaSessionInfo,
+  getWahaProviderState,
   wahaClient,
 } from './waha.service';
 
@@ -286,8 +287,35 @@ function buildErrorResponse(
 }
 
 export function createWahaAdminService(client: WahaAdminClient = wahaClient) {
+  const enforceProviderState = client === wahaClient;
+
+  function unavailableResponse(session: string): MensajeApi | null {
+    if (!enforceProviderState) return null;
+    const state = getWahaProviderState();
+    if (state.mode === 'remote' && state.configured) return null;
+    const disabled = state.reason === 'PROVIDER_DISABLED';
+    const message = disabled
+      ? 'WAHA provider is disabled.'
+      : 'WAHA provider is not configured.';
+    return new MensajeApi({
+      code: disabled ? 200 : 503,
+      error: !disabled,
+      message,
+      data: {
+        ...buildState(session, {
+          status: 'DISCONNECTED',
+          message,
+        }),
+        deliveryStatus: disabled ? 'SKIPPED' : 'FAILED',
+        reason: state.reason,
+      },
+    });
+  }
+
   async function getSessionStatus(): Promise<MensajeApi> {
     const session = getConfiguredSession();
+    const unavailable = unavailableResponse(session);
+    if (unavailable) return unavailable;
 
     try {
       const state = await inspectSession(client, session, { includeQr: false });
@@ -299,6 +327,8 @@ export function createWahaAdminService(client: WahaAdminClient = wahaClient) {
 
   async function getQRCode(): Promise<MensajeApi> {
     const session = getConfiguredSession();
+    const unavailable = unavailableResponse(session);
+    if (unavailable) return unavailable;
 
     try {
       const state = await inspectSession(client, session, { includeQr: true });
@@ -310,6 +340,8 @@ export function createWahaAdminService(client: WahaAdminClient = wahaClient) {
 
   async function startSession(): Promise<MensajeApi> {
     const session = getConfiguredSession();
+    const unavailable = unavailableResponse(session);
+    if (unavailable) return unavailable;
 
     try {
       try {
@@ -331,6 +363,8 @@ export function createWahaAdminService(client: WahaAdminClient = wahaClient) {
 
   async function restartSession(): Promise<MensajeApi> {
     const session = getConfiguredSession();
+    const unavailable = unavailableResponse(session);
+    if (unavailable) return unavailable;
 
     try {
       await client.restartSession(session);
@@ -343,6 +377,8 @@ export function createWahaAdminService(client: WahaAdminClient = wahaClient) {
 
   async function logoutSession(): Promise<MensajeApi> {
     const session = getConfiguredSession();
+    const unavailable = unavailableResponse(session);
+    if (unavailable) return unavailable;
 
     try {
       await client.logoutSession(session);

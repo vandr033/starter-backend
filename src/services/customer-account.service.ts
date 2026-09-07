@@ -4,6 +4,10 @@ import { prisma } from '../prisma/client';
 import { hash } from '../utils/password';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 import { isTemporaryEmailAddress, sendCustomerPortalAccessEmail } from '../utils/sendEmail';
+import {
+    BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+    BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from '../config/auth-constants';
 
 type ServiceFailure = {
     error: true;
@@ -287,7 +291,7 @@ export async function ensureCustomerProfileWithAccount(params: {
         await prisma.account.create({
             data: {
                 userId: user.id,
-                providerId: 'credential',
+                providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                 accountId: resolvedEmail,
                 password: passwordHash,
             },
@@ -345,7 +349,7 @@ export async function ensureCustomerProfileWithAccount(params: {
         let credentialAccount = await prisma.account.findFirst({
             where: {
                 userId: user.id,
-                providerId: { in: ['credential', 'credentials'] },
+                providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
             },
             orderBy: { createdAt: 'asc' },
             select: {
@@ -359,7 +363,7 @@ export async function ensureCustomerProfileWithAccount(params: {
             credentialAccount = await prisma.account.update({
                 where: { id: credentialAccount.id },
                 data: {
-                    providerId: 'credential',
+                    providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                     accountId: currentEmail,
                 },
                 select: {
@@ -376,7 +380,7 @@ export async function ensureCustomerProfileWithAccount(params: {
             await prisma.account.create({
                 data: {
                     userId: user.id,
-                    providerId: 'credential',
+                    providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                     accountId: currentEmail || normalizedEmail || user.email,
                     password: passwordHash,
                 },

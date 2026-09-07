@@ -7,11 +7,15 @@ import {
 } from '../repositories/customer.repo';
 import * as UserRepo from '../repositories/user.repo';
 import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
-import { sendWhatsappText } from '../utils/whatsappSender';
+import { queueWhatsappBatch } from '../utils/whatsappSender';
 import { logger } from '../config/logger';
 import axios from 'axios';
 import * as GroupPaymentsService from './group-payments.service';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
+import {
+    BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
+    BETTER_AUTH_CREDENTIAL_PROVIDER_IDS,
+} from '../config/auth-constants';
 
 // Runtime import to avoid compile-time type dependency in environments without installed typings.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -45,6 +49,7 @@ interface SendMassCustomerMessageInput {
     message: string;
     search?: string;
     segment?: CustomerSegmentKey;
+    idempotencyKey?: string;
 }
 
 interface CustomerExportOptions {
@@ -61,7 +66,6 @@ export type CustomerSegmentKey =
     | 'HIGH_VALUE';
 
 const DEFAULT_LANGUAGE_KEY = 'default_language';
-const WHATSAPP_MIN_INTERVAL_MS = 350;
 const N8N_CUSTOMER_EXPORT_WEBHOOK_URL = (process.env.N8N_CUSTOMER_EXPORT_WEBHOOK_URL || '').trim();
 const N8N_CUSTOMER_EXPORT_TIMEOUT_MS = Number(process.env.N8N_CUSTOMER_EXPORT_TIMEOUT_MS || '10000');
 
@@ -103,10 +107,6 @@ function buildFullPhone(prefix?: string | null, phone?: string | null): string |
     if (!cleanPhone) return null;
     const cleanPrefix = normalizePrefix(prefix || '591');
     return `${cleanPrefix}${cleanPhone}`;
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function normalizeCustomerSegment(value?: string | null): CustomerSegmentKey {
@@ -758,7 +758,7 @@ export async function updateCustomerByKey(
             const credentialAccount = await tx.account.findFirst({
                 where: {
                     userId: existingProfile.user.id,
-                    providerId: { in: ['credential', 'credentials'] },
+                    providerId: { in: [...BETTER_AUTH_CREDENTIAL_PROVIDER_IDS] },
                 },
                 orderBy: { createdAt: 'asc' },
                 select: { id: true, accountId: true },
@@ -768,7 +768,7 @@ export async function updateCustomerByKey(
                 await tx.account.update({
                     where: { id: credentialAccount.id },
                     data: {
-                        providerId: 'credential',
+                        providerId: BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
                         accountId: finalEmail,
                     },
                 });
@@ -912,40 +912,59 @@ export async function sendMassCustomerMessage(
     let noContact = 0;
     let failed = 0;
     let duplicatesSkipped = 0;
-    let lastWhatsappAt = 0;
 
     const whatsappText =
         locale === 'en'
             ? `${company.name}\n\n${message}`
             : `${company.name}\n\n${message}`;
 
+    const whatsappItems = [] as Array<{
+        recipient: string;
+        text: string;
+        sourceType: string;
+        sourceId: string;
+        dedupeKey: string;
+    }>;
+
+    // Persist WhatsApp work before any synchronous email work. A large CRM
+    // campaign therefore acknowledges WhatsApp recipients immediately.
     for (const customer of customers) {
         const whatsappTarget = buildFullPhone(customer.phonePrefix, customer.phone);
-        const emailTarget = normalizeEmail(customer.email);
-
         if (whatsappTarget) {
             if (seenWhatsappTargets.has(whatsappTarget)) {
                 duplicatesSkipped += 1;
                 continue;
             }
-
-            const elapsed = Date.now() - lastWhatsappAt;
-            const waitMs = Math.max(0, WHATSAPP_MIN_INTERVAL_MS - elapsed);
-            if (waitMs > 0) {
-                await sleep(waitMs);
-            }
-
-            const waResult = await sendWhatsappText(whatsappTarget, whatsappText, { companyId });
-            if (waResult !== -1) {
-                whatsappSent += 1;
-                seenWhatsappTargets.add(whatsappTarget);
-                lastWhatsappAt = Date.now();
-                continue;
-            }
-            failed += 1;
-            continue;
+            seenWhatsappTargets.add(whatsappTarget);
+            whatsappItems.push({
+                recipient: whatsappTarget,
+                text: whatsappText,
+                sourceType: 'CUSTOMER_MASS_MESSAGE',
+                sourceId: String(customer.id),
+                dedupeKey: `${payload.idempotencyKey ?? `customer-mass:${companyId}:${message}`}:${customer.id}`,
+            });
         }
+    }
 
+    const whatsappBatch = await queueWhatsappBatch(whatsappItems, {
+        companyId,
+        sourceType: 'CUSTOMER_MASS_MESSAGE',
+        sourceId: String(companyId),
+        idempotencyKey: payload.idempotencyKey ?? `customer-mass:${companyId}:${message}`,
+        metadata: { segment, search: search || null, recipientCount: customers.length },
+    });
+    const queuedWhatsapp = whatsappBatch.queued;
+    failed += whatsappBatch.rejected;
+    duplicatesSkipped += whatsappBatch.duplicates;
+
+    // Email remains an explicitly separate channel. Customers with a phone
+    // keep the existing phone-first behavior and are not silently converted
+    // to email when WhatsApp is temporarily unavailable.
+    for (const customer of customers) {
+        const whatsappTarget = buildFullPhone(customer.phonePrefix, customer.phone);
+        if (whatsappTarget) continue;
+
+        const emailTarget = normalizeEmail(customer.email);
         if (emailTarget) {
             if (seenEmailTargets.has(emailTarget)) {
                 duplicatesSkipped += 1;
@@ -966,11 +985,10 @@ export async function sendMassCustomerMessage(
             }
             continue;
         }
-
         noContact += 1;
     }
 
-    const totalSent = whatsappSent + emailSent;
+    const totalSent = emailSent;
     logger.info(
         {
             event: 'customer_mass_message_completed',
@@ -982,6 +1000,7 @@ export async function sendMassCustomerMessage(
             totalCustomers: customers.length,
             totalSent,
             whatsappSent,
+            queuedWhatsapp,
             emailSent,
             noContact,
             failed,
@@ -995,8 +1014,10 @@ export async function sendMassCustomerMessage(
         code: 200,
         error: false,
         message:
-            totalSent > 0
-                ? 'Mass message sent'
+            queuedWhatsapp > 0
+                ? 'Mass message queued'
+                : totalSent > 0
+                    ? 'Mass message sent'
                 : 'No messages sent',
         data: {
             total_customers: customers.length,
@@ -1006,6 +1027,10 @@ export async function sendMassCustomerMessage(
             skipped_no_contact: noContact,
             skipped_duplicates: duplicatesSkipped,
             failed,
+            batch_id: whatsappBatch.batchId ?? null,
+            queued_whatsapp: queuedWhatsapp,
+            pending_whatsapp: whatsappBatch.pending ?? queuedWhatsapp,
+            delivery_status: whatsappBatch.status,
         },
     };
 }
