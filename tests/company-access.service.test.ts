@@ -79,12 +79,13 @@ function createDb(params: {
       findFirst: async () => params.shift ?? null,
     },
     companyUser: {
-      findFirst: async () => params.membership === false ? null : ({
+      findMany: async () => params.membership === false ? [] : [{
         id: 701,
         company_id: 41,
         user_id: 'user-41',
         role: CompanyUserRole.STAFF,
         is_primary_contact: false,
+        updated_at: NOW,
         company: {
           id: 41,
           name: 'Test company',
@@ -97,7 +98,7 @@ function createDb(params: {
           currency: 'Bs.',
           timezone: 'America/La_Paz',
         },
-      }),
+      }],
     },
   } as any;
 }
@@ -234,4 +235,28 @@ test('company context resolver returns no access for a user outside the selected
   );
 
   assert.equal(context, null);
+});
+
+test('company context resolver prefers the strongest active role over a newer customer row', async () => {
+  const db = createDb({}) as any;
+  const membership = (await db.companyUser.findMany())[0];
+  db.companyUser.findMany = async () => [
+    {
+      ...membership,
+      id: 702,
+      role: CompanyUserRole.CUSTOMER,
+      updated_at: new Date('2026-09-07T12:05:00.000Z'),
+    },
+    {
+      ...membership,
+      id: 701,
+      role: CompanyUserRole.OWNER,
+      updated_at: new Date('2026-09-07T12:00:00.000Z'),
+    },
+  ];
+
+  const context = await resolveCompanyContextForUser('user-41', 41, { db, now: NOW });
+
+  assert.equal(context?.membership.id, 701);
+  assert.equal(context?.membership.role, CompanyUserRole.OWNER);
 });

@@ -293,7 +293,7 @@ export async function resolveCompanyContextForUser(
     access: EffectiveCompanyAccess;
 } | null> {
     const db = options.db ?? prisma;
-    const membership = await db.companyUser.findFirst({
+    const memberships = await db.companyUser.findMany({
         where: {
             user_id: userId,
             company_id: companyId,
@@ -306,6 +306,7 @@ export async function resolveCompanyContextForUser(
             user_id: true,
             role: true,
             is_primary_contact: true,
+            updated_at: true,
             company: {
                 select: {
                     id: true,
@@ -322,6 +323,18 @@ export async function resolveCompanyContextForUser(
             },
         },
     });
+
+    const rolePriority: Record<CompanyUserRole, number> = {
+        [CompanyUserRole.OWNER]: 0,
+        [CompanyUserRole.ADMIN]: 1,
+        [CompanyUserRole.STAFF]: 2,
+        [CompanyUserRole.CUSTOMER]: 3,
+    };
+    const membership = memberships.sort((left, right) =>
+        rolePriority[left.role] - rolePriority[right.role]
+        || right.updated_at.getTime() - left.updated_at.getTime()
+        || right.id - left.id
+    )[0];
 
     if (!membership) return null;
 

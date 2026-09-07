@@ -104,10 +104,24 @@ async function validatePeriod(companyId: number, input: any, excludeId?: number)
   } });
   return overlaps ? fail(409, 'El período se superpone con otro período activo de este día.') : null;
 }
+
+async function companyHoursOverrideWarning(companyId: number, dayOfWeek: number): Promise<string | null> {
+  const hours = await prisma.hours.findMany({ where: { company_id: companyId, day_of_week: dayOfWeek } });
+  if (hours.length === 0) return null;
+  const hasOpenCompanyHours = hours.some((hour) => {
+    if (hour.is_closed || !hour.open_time || !hour.close_time) return false;
+    return hour.open_time < hour.close_time;
+  });
+  return hasOpenCompanyHours
+    ? null
+    : 'El período de servicio queda fuera del horario general del negocio; el restaurante lo publicará y lo usará para reservas.';
+}
 export async function listPeriods(companyId: number, dayOfWeek?: number): Promise<Result> { return ok(await restaurantRepo.listPeriods(companyId, dayOfWeek)); }
 export async function createPeriod(companyId: number, input: any): Promise<Result> {
   const validation = await validatePeriod(companyId, input); if (validation) return validation;
-  return ok(await prisma.restaurantServicePeriod.create({ data: { company_id: companyId, ...input } }), 'Período creado.', 201);
+  const period = await prisma.restaurantServicePeriod.create({ data: { company_id: companyId, ...input } });
+  const warning = input.is_active === false ? null : await companyHoursOverrideWarning(companyId, input.day_of_week);
+  return ok(period, warning ? `Período creado. ${warning}` : 'Período creado.', 201);
 }
 export async function updatePeriod(companyId: number, id: number, input: any): Promise<Result> {
   const period = await restaurantRepo.findPeriod(companyId, id);
@@ -116,7 +130,8 @@ export async function updatePeriod(companyId: number, id: number, input: any): P
   const validation = await validatePeriod(companyId, next, id); if (validation) return validation;
   const changed = await prisma.restaurantServicePeriod.updateMany({ where: { id: period.id, company_id: companyId }, data: input });
   if (!changed.count) return fail(409, 'El período cambió de empresa o ya no está disponible.');
-  return ok(await restaurantRepo.findPeriod(companyId, period.id), 'Período actualizado.');
+  const warning = next.is_active === false ? null : await companyHoursOverrideWarning(companyId, next.day_of_week);
+  return ok(await restaurantRepo.findPeriod(companyId, period.id), warning ? `Período actualizado. ${warning}` : 'Período actualizado.');
 }
 export async function deletePeriod(companyId: number, id: number): Promise<Result> {
   const period = await restaurantRepo.findPeriod(companyId, id);

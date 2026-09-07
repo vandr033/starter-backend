@@ -15,6 +15,13 @@ import {
 } from '../utils/public-storefront';
 import * as CommerceRepo from '../repositories/commerce.repo';
 import { resolveEffectiveServicePrice } from './service-pricing.service';
+import { getValidCoordinates } from '../utils/coordinates';
+import {
+  getRestaurantPublicHours,
+  isServicePeriodOpenAt,
+  listActiveRestaurantServicePeriods,
+  localDayOfWeek,
+} from './restaurant-schedule.service';
 import * as ServiceRepo from '../repositories/service.repo';
 let mensaje: MensajeApi;
 const DEFAULT_LANGUAGE_KEY = 'default_language';
@@ -154,12 +161,13 @@ function serializeCommerceStore(store: any) {
 }
 
 function serializeCommercePointOfSale(pointOfSale: any) {
+  const coordinates = getValidCoordinates(pointOfSale.latitude, pointOfSale.longitude);
   return {
     ...pointOfSale,
     opening_time: pointOfSale.opening_time,
     closing_time: pointOfSale.closing_time,
-    latitude: Number(pointOfSale.latitude),
-    longitude: Number(pointOfSale.longitude),
+    latitude: coordinates?.latitude ?? null,
+    longitude: coordinates?.longitude ?? null,
   };
 }
 
@@ -295,6 +303,14 @@ export const getCompanyPublicPage = async (slug: string) => {
         staff_label: 'Staff',
       };
 
+    // Restaurant reservations and the restaurant storefront publish the same
+    // service-period schedule. Generic company hours remain available for
+    // non-restaurant booking and commerce flows, but never contradict the
+    // restaurant schedule shown to guests.
+    const restaurantHours = company.restaurant_enabled
+      ? await getRestaurantPublicHours(company.id)
+      : [];
+
     // Apply theme defaults if no config exists
     const rawTheme = theme_config
       ? {
@@ -360,6 +376,7 @@ export const getCompanyPublicPage = async (slug: string) => {
       commerceCategories: exposeCommerceContent ? commerceCategories : [],
       commerceProducts: exposeCommerceContent ? commerceProducts.map(serializeCommerceProduct) : [],
       settings,
+      restaurantHours,
       theme,
       reviewStats: {
         average: Math.round(reviewAverage * 10) / 10, // Round to 1 decimal
@@ -428,11 +445,25 @@ export const getCompanyStatus = async (slug: string) => {
     const currentMinutes = currentTimeInTimezone.getHours() * 60 + currentTimeInTimezone.getMinutes();
     const currentTimeString = `${currentTimeInTimezone.getHours().toString().padStart(2, '0')}:${currentTimeInTimezone.getMinutes().toString().padStart(2, '0')}`;
 
-    // Get today's day of week (0 = Sunday, 6 = Saturday)
-    const dayOfWeek = currentTimeInTimezone.getDay();
-
-    // Get today's hours
-    const todayHours = await CompanyRepo.getCompanyHoursForDay(company.id, dayOfWeek);
+    // Restaurant service periods are the public schedule source of truth. The
+    // generic company hours remain the schedule for non-restaurant modules.
+    const localDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+    const dayOfWeek = localDayOfWeek(localDate);
+    const restaurantPeriods = company.restaurant_enabled
+      ? await listActiveRestaurantServicePeriods(company.id, dayOfWeek)
+      : null;
+    const allTodayHours = restaurantPeriods
+      ? restaurantPeriods.map((period) => ({
+        open_time: period.start_time,
+        close_time: period.end_time,
+        is_closed: false,
+      }))
+      : await CompanyRepo.getAllHoursForDay(company.id, dayOfWeek);
 
     // Initialize response
     const response = {
@@ -443,20 +474,6 @@ export const getCompanyStatus = async (slug: string) => {
       next_open_today: false,
       is_closed_today: true,
     };
-
-    if (!todayHours || todayHours.is_closed) {
-      // Company is closed today
-      response.is_closed_today = true;
-      return {
-        code: 200,
-        message: 'Company status retrieved',
-        error: false,
-        data: response,
-      };
-    }
-
-    // Get all hours for today (supporting multiple windows)
-    const allTodayHours = await CompanyRepo.getAllHoursForDay(company.id, dayOfWeek);
 
     if (allTodayHours.length === 0) {
       // No hours configured for today
@@ -489,8 +506,11 @@ export const getCompanyStatus = async (slug: string) => {
         close_time: hourWindow.close_time,
       });
 
-      // Check if current time is within this window
-      if (currentMinutes >= openMinutes && currentMinutes < closeMinutes) {
+      // Check the restaurant schedule with the same shared period resolver used
+      // by public slots and reservation validation.
+      if (restaurantPeriods
+        ? restaurantPeriods.some((period) => isServicePeriodOpenAt(period, currentTimeString))
+        : currentMinutes >= openMinutes && currentMinutes < closeMinutes) {
         isOpenNow = true;
       }
 

@@ -7,6 +7,11 @@ import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { generateRestaurantReservationCode, resolveRestaurantCustomer, selectRestaurantTable } from './restaurant-reservation.service';
 import { notifyRestaurantReservation, notifyRestaurantReservationGuests } from './restaurant-notification.service';
 import { ensureReservationDeposit, publicDepositStatus, uploadPublicReservationProof } from './restaurant-deposit.service';
+import {
+  listActiveRestaurantServicePeriods,
+  localDayOfWeek,
+  timeToMinutes,
+} from './restaurant-schedule.service';
 
 type Result = { code: number; error: boolean; message: string; data?: unknown };
 const ok = (data: unknown, message = 'Operación realizada correctamente.', code = 200): Result => ({ code, error: false, message, data });
@@ -22,7 +27,6 @@ type PublicContext = PublicRestaurantContext | null;
 
 function localDate(date: Date, timezone: string) { return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); }
 function localTime(date: Date, timezone: string) { return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date); }
-function localDay(date: string) { return new Date(`${date}T12:00:00Z`).getUTCDay(); }
 function addLocalDays(date: string, days: number) { const value = new Date(`${date}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }
 function validDate(date: string) { return /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(new Date(`${date}T12:00:00Z`).getTime()) && new Date(`${date}T12:00:00Z`).toISOString().slice(0, 10) === date; }
 function normalizeText(value?: string | null) { const result = value?.trim(); return result || null; }
@@ -57,8 +61,7 @@ function validateDateAndParty(context: NonNullable<PublicContext>, date: string,
 
 function slotTimes(context: NonNullable<PublicContext>, date: string, db: DbClient = prisma) {
   const settings = context.restaurant_settings;
-  const day = localDay(date);
-  return db.restaurantServicePeriod.findMany({ where: { company_id: context.id, day_of_week: day, is_active: true }, orderBy: [{ start_time: 'asc' }, { sort_order: 'asc' }] }).then((periods) => {
+  return listActiveRestaurantServicePeriods(context.id, localDayOfWeek(date), db).then((periods) => {
     const candidates = new Set<string>();
     for (const period of periods) {
       const [startHour, startMinute] = period.start_time.split(':').map(Number);
@@ -68,7 +71,7 @@ function slotTimes(context: NonNullable<PublicContext>, date: string, db: DbClie
         candidates.add(`${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`);
       }
     }
-    return [...candidates].sort();
+    return [...candidates].sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
   });
 }
 

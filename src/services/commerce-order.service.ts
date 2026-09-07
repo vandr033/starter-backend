@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import crypto from 'crypto';
 import { prisma } from '../prisma/client';
+import { getValidCoordinates } from '../utils/coordinates';
 import * as CommerceRepo from '../repositories/commerce.repo';
 import { buildCommerceComponentSnapshots } from './commerce-combo.service';
 import {
@@ -211,12 +212,13 @@ function serializeCommerceStore(store: any) {
 }
 
 function serializeCommercePointOfSale(pointOfSale: any) {
+    const coordinates = getValidCoordinates(pointOfSale.latitude, pointOfSale.longitude);
     return {
         ...pointOfSale,
         opening_time: pointOfSale.opening_time,
         closing_time: pointOfSale.closing_time,
-        latitude: Number(pointOfSale.latitude),
-        longitude: Number(pointOfSale.longitude),
+        latitude: coordinates?.latitude ?? null,
+        longitude: coordinates?.longitude ?? null,
     };
 }
 

@@ -9,6 +9,7 @@ import {
   type MarketplaceMatchClassification,
   type MarketplaceMatchType,
 } from '../utils/marketplaceMatch';
+import { getValidCoordinates } from '../utils/coordinates';
 
 const PRIMARY_CANDIDATE_EVALUATION_CAP = 60;
 const SIMILAR_CANDIDATE_EVALUATION_CAP = 30;
@@ -170,8 +171,9 @@ function buildDistanceKm(
   latitude: number | null,
   longitude: number | null,
 ): number | null {
-  if (!center || latitude == null || longitude == null) return null;
-  return haversineDistanceKm(center.lat, center.lng, latitude, longitude);
+  const coordinates = getValidCoordinates(latitude, longitude);
+  if (!center || !coordinates) return null;
+  return haversineDistanceKm(center.lat, center.lng, coordinates.latitude, coordinates.longitude);
 }
 
 async function evaluateCompany(
@@ -531,12 +533,13 @@ function toApiResult(item: EvaluatedCandidate, serviceTypeId: number, requestedT
 }
 
 function toMapPin(item: EvaluatedCandidate, isPrimaryMatch: boolean) {
-  if (item.latitude == null || item.longitude == null) return null;
+  const coordinates = getValidCoordinates(item.latitude, item.longitude);
+  if (!coordinates) return null;
 
   return {
     companyId: item.companyId,
-    lat: item.latitude,
-    lng: item.longitude,
+    lat: coordinates.latitude,
+    lng: coordinates.longitude,
     title: item.name,
     slug: item.slug,
     matchType: item.matchType,

@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import * as CommerceRepo from '../repositories/commerce.repo';
+import { getValidCoordinates } from '../utils/coordinates';
 
 type ServiceResult = {
     code: number;
@@ -9,10 +10,11 @@ type ServiceResult = {
 };
 
 function serializePointOfSale(pointOfSale: any) {
+    const coordinates = getValidCoordinates(pointOfSale.latitude, pointOfSale.longitude);
     return {
         ...pointOfSale,
-        latitude: Number(pointOfSale.latitude),
-        longitude: Number(pointOfSale.longitude),
+        latitude: coordinates?.latitude ?? null,
+        longitude: coordinates?.longitude ?? null,
     };
 }
 

@@ -7,6 +7,7 @@ import { blockingReservationStatuses, reservationInclude, restaurantReservationR
 import { notifyRestaurantReservation } from './restaurant-notification.service';
 import type { RestaurantNotificationChanges } from './restaurant-notification-template.service';
 import { ensureReservationDeposit } from './restaurant-deposit.service';
+import { listActiveRestaurantServicePeriods, localDayOfWeek, servicePeriodCovers } from './restaurant-schedule.service';
 
 type Result = { code: number; error: boolean; message: string; data?: unknown };
 const ok = (data: unknown, message = 'Operación realizada correctamente.', code = 200): Result => ({ code, error: false, message, data });
@@ -19,7 +20,6 @@ const transitions: Record<RestaurantReservationStatus, RestaurantReservationStat
 
 function localDate(date: Date, timezone: string) { return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); }
 function localTime(date: Date, timezone: string) { return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date); }
-function localDay(date: Date, timezone: string) { const day = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' }).format(date); return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(day); }
 function normalizeText(value?: string | null) { const result = value?.trim(); return result || null; }
 export function generateRestaurantReservationCode() { return randomBytes(18).toString('base64url'); }
 
@@ -39,10 +39,11 @@ async function validateTime(tx: Prisma.TransactionClient, companyId: number, inp
   const max = new Date(now.getTime() + settings.maximum_advance_days * 86400000);
   if (start > max) throw Object.assign(new Error('La reserva excede la anticipación máxima permitida.'), { status: 400 });
   if (!Number.isInteger(input.party_size) || input.party_size < settings.minimum_party_size || input.party_size > settings.maximum_party_size) throw Object.assign(new Error('El tamaño del grupo no cumple la configuración del restaurante.'), { status: 400 });
-  const time = localTime(start, company.timezone), day = localDay(start, company.timezone);
+  const time = localTime(start, company.timezone), day = localDayOfWeek(input.reservation_date);
   const end = new Date(start.getTime() + settings.average_dining_minutes * 60000);
   const endTime = localTime(end, company.timezone);
-  const period = await tx.restaurantServicePeriod.findFirst({ where: { company_id: companyId, day_of_week: day, is_active: true, start_time: { lte: time }, end_time: { gte: endTime } } });
+  const periods = await listActiveRestaurantServicePeriods(companyId, day, tx);
+  const period = periods.find((candidate) => servicePeriodCovers(candidate, time, endTime));
   if (!period) throw Object.assign(new Error('La reserva debe completar su duración dentro de un período de servicio activo.'), { status: 409 });
   return { company, settings, start, end, reservationDate: parseDateTimeInTimeZone(`${input.reservation_date}T00:00:00`, company.timezone) };
 }

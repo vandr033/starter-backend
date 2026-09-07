@@ -11,6 +11,7 @@ import {
 import { companyHasCapability } from "../services/company-entitlements.service";
 import { sendGenericEmail } from "./sendEmail";
 import { isWhatsappEnqueueAccepted, queueWhatsappText } from "./whatsappSender";
+import { getSafeMapUrl, getValidCoordinates } from "./coordinates";
 
 interface BookingNotificationData {
     companyId: number;
@@ -206,14 +207,12 @@ function normalizeEmail(email?: string | null): string | null {
 }
 
 function getCompanyDirectionsUrl(data: BookingNotificationData): string | null {
-    const latitude = Number(data.companyLatitude);
-    const longitude = Number(data.companyLongitude);
-    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${latitude},${longitude}`)}`;
+    const coordinates = getValidCoordinates(data.companyLatitude, data.companyLongitude);
+    if (coordinates) {
+        return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${coordinates.latitude},${coordinates.longitude}`)}`;
     }
 
-    const mapsUrl = data.companyGoogleMapsUrl?.trim();
-    return mapsUrl || null;
+    return getSafeMapUrl(data.companyGoogleMapsUrl);
 }
 
 function buildMapsLine(data: BookingNotificationData, label = "Mapa"): string | null {
