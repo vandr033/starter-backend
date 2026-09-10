@@ -130,6 +130,28 @@ export type WhatsappOtpSessionLink =
   | { kind: 'GROUP_CLASS_GUEST_ENROLLMENT'; sessionId: string }
   | { kind: 'COMMERCE_GUEST_CHECKOUT'; sessionId: string };
 
+export class OutboundMessageValidationError extends Error {
+  readonly code = 'INVALID_EXPIRY';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'OutboundMessageValidationError';
+  }
+}
+
+export function validateOutboundMessageExpiry(
+  expiresAt: Date | null | undefined,
+  now = new Date(),
+): void {
+  if (expiresAt == null) return;
+  if (!(expiresAt instanceof Date) || Number.isNaN(expiresAt.getTime())) {
+    throw new OutboundMessageValidationError('Outbound message expiry must be a valid date.');
+  }
+  if (expiresAt.getTime() <= now.getTime()) {
+    throw new OutboundMessageValidationError('Outbound message expiry must be in the future.');
+  }
+}
+
 function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
@@ -329,6 +351,7 @@ function scopedBatchIdempotencyKey(companyId: number | null | undefined, idempot
 export function createOutboundMessageRepository(client: PrismaClient = prisma): OutboundMessageRepository {
   return {
     async createJob(input) {
+      validateOutboundMessageExpiry(input.expiresAt);
       try {
         return await client.$transaction(async (tx) => {
           const existing = await tx.outboundMessageJob.findUnique({
@@ -390,6 +413,9 @@ export function createOutboundMessageRepository(client: PrismaClient = prisma): 
     },
 
     async createBatchAndJobs(input) {
+      for (const job of input.jobs) {
+        validateOutboundMessageExpiry(job.expiresAt);
+      }
       const idempotencyKey = scopedBatchIdempotencyKey(input.companyId, input.idempotencyKey);
       const existingBatch = await client.outboundMessageBatch.findUnique({
         where: { idempotency_key: idempotencyKey },
@@ -751,6 +777,14 @@ export function createOutboundMessageRepository(client: PrismaClient = prisma): 
     async retryJob(id, companyId) {
       const retried = await client.$transaction(async (tx) => {
         const nextAttemptAt = new Date();
+        const existing = await tx.outboundMessageJob.findFirst({
+          where: {
+            ...buildJobWhere(id, companyId),
+            status: OutboundMessageStatus.FAILED,
+          },
+          select: { source_type: true },
+        });
+        if (!existing) return null;
         const result = await tx.outboundMessageJob.updateMany({
           where: {
             ...buildJobWhere(id, companyId),
@@ -765,6 +799,7 @@ export function createOutboundMessageRepository(client: PrismaClient = prisma): 
             last_error_code: null,
             last_error_message: null,
             sent_at: null,
+            ...(existing.source_type === 'GROUP_EVENT_MASS_MESSAGE' ? { expires_at: null } : {}),
           },
         });
         if (result.count !== 1) return null;
@@ -788,6 +823,13 @@ export function createOutboundMessageRepository(client: PrismaClient = prisma): 
     async retryBatch(batchId, companyId) {
       return client.$transaction(async (tx) => {
         const nextAttemptAt = new Date();
+        const batch = await tx.outboundMessageBatch.findFirst({
+          where: {
+            id: batchId,
+            ...(companyId === undefined ? {} : { company_id: companyId }),
+          },
+          select: { source_type: true },
+        });
         const failedJobs = await tx.outboundMessageJob.findMany({
           where: {
             batch_id: batchId,
@@ -812,6 +854,7 @@ export function createOutboundMessageRepository(client: PrismaClient = prisma): 
             last_error_code: null,
             last_error_message: null,
             sent_at: null,
+            ...(batch?.source_type === 'GROUP_EVENT_MASS_MESSAGE' ? { expires_at: null } : {}),
           },
         });
         for (const failedJob of failedJobs) {

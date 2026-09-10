@@ -694,7 +694,7 @@ async function runEventMassMessage(
         }),
         prisma.groupEvent.findFirst({
             where: { id: eventId, company_id: companyId, deleted_at: null },
-            select: { id: true, title: true, start_at: true },
+            select: { id: true, title: true },
         }),
         prisma.configMessage.findUnique({
             where: {
@@ -822,7 +822,6 @@ async function runEventMassMessage(
         sourceType: string;
         sourceId: string;
         dedupeKey: string;
-        expiresAt: Date;
     }>;
     if (wantsWhatsapp) {
         for (const recipient of recipients) {
@@ -839,7 +838,6 @@ async function runEventMassMessage(
                 sourceType: 'GROUP_EVENT_MASS_MESSAGE',
                 sourceId: `${recipient.source}:${recipient.id}`,
                 dedupeKey: `${payload.idempotency_key ?? `event:${eventId}:${deliveryMode}:${message}`}:${recipient.source}:${recipient.id}`,
-                expiresAt: event.start_at,
             });
         }
     }

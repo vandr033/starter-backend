@@ -103,6 +103,25 @@ confirmation/invite, ticket, restaurant reminder, and appointment reminder
 jobs use the relevant event/ticket/appointment time where available. Expired
 jobs are never submitted and become `EXPIRED`.
 
+Expiration is selected by message purpose, not merely by the parent entity:
+
+| Message purpose | Repository `source_type` values | Default expiration |
+| --- | --- | --- |
+| OTP | `AUTH_SIGNUP_OTP`, `PROFILE_PHONE_OTP`, `CLASS_GUEST_ENROLLMENT_OTP`, `COMMERCE_GUEST_CHECKOUT_OTP`, `PAID_EVENT_GUEST_CHECKOUT_OTP`, `PUBLIC_CLASS_ATTENDANCE_OTP` | Verification-code expiry |
+| Automated booking reminder | `BOOKING_TODAY_REMINDER` | Booking start |
+| Booking reschedule notification | `BOOKING_RESCHEDULE` | None unless the caller supplies a future expiry |
+| Automated event confirmation/invitation/waitlist | `FREE_EVENT_CONFIRMATION`, `FREE_EVENT_INVITATION`, `EVENT_WAITLIST_NOTIFICATION` | Event start |
+| Ticket delivery | `GROUP_TICKET` | Ticket `valid_until` |
+| Manual event mass message | `GROUP_EVENT_MASS_MESSAGE` | None (`expires_at = NULL`) |
+| Manual class/CRM mass message | `GROUP_CLASS_MASS_MESSAGE`, `CUSTOMER_MASS_MESSAGE` | None (`expires_at = NULL`) |
+
+An event date is not an expiration signal for `GROUP_EVENT_MASS_MESSAGE`:
+admins can send those messages before, during, or any time after the event.
+The enqueue boundary rejects a caller-supplied expiry that is not in the
+future; expiry regression tests backdate a persisted test row instead of
+weakening that boundary, so expired OTPs and reminders are not silently
+converted into non-expiring messages.
+
 Operator retry endpoints retry only terminal `FAILED` jobs. `SENT`,
 `CANCELLED`, and `EXPIRED` jobs are not silently resurrected by a retry action.
 
@@ -149,10 +168,12 @@ Authenticated owner/admin endpoints:
 - `POST /api/admin/outbound-messages/jobs/:jobId/retry`
 - `POST /api/admin/outbound-messages/jobs/:jobId/cancel`
 
-The event and class admin screens use stable client-generated idempotency keys,
-poll batch progress, show pending/processing/sent/failed counts, and retry
-failed persisted batch jobs. CRM mass messaging also sends an idempotency key;
-the batch API can be used to inspect its durable result.
+The event admin screen uses a stable client-generated idempotency key, persists
+the latest batch id per event, polls batch progress while jobs are non-terminal,
+shows pending/processing/sent/failed/expired/cancelled counts, and retries
+failed persisted batch jobs. The class screen uses the same durable batch API;
+CRM mass messaging also sends an idempotency key and its batch can be inspected
+through that API.
 
 Logical sends use source-aware dedupe keys. Batch idempotency keys are scoped by
 company before storage, so the database's global unique index cannot join two
@@ -200,7 +221,7 @@ still intentionally created after the surrounding business operation.
 
 ## Verification
 
-The final backend test run passed 153 tests (138 passed, 0 failed, 15 skipped
+The final backend test run passed 155 tests (155 passed, 0 failed, 16 skipped
 because they require the MySQL integration environment). `npm run typecheck`,
 the frontend `npx tsc --noEmit`, and the frontend production build also pass;
 the build retains only the repository's existing Browserslist and lint-style

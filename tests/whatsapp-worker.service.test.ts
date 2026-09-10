@@ -523,6 +523,57 @@ test('queue APIs return durable acceptance and dedupe results without touching W
   assert.equal(created[0].recipient, '59171234567@c.us');
 });
 
+test('enqueue rejects a stale caller-supplied expiry before creating a job', async () => {
+  let createCalls = 0;
+  const result = await queueWhatsappText('71234567', 'stale expiry', {
+    sourceType: 'GROUP_EVENT_MASS_MESSAGE',
+    expiresAt: new Date('2025-12-31T23:59:59.000Z'),
+  }, {
+    repository: repository({
+      async createJob() {
+        createCalls += 1;
+        return { job: job({ status: OutboundMessageStatus.PENDING }), duplicate: false };
+      },
+    }),
+    providerState: {
+      enabled: true,
+      mode: 'remote',
+      configured: true,
+      reason: null,
+    },
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.status, 'REJECTED');
+  assert.equal(result.reason, 'INVALID_EXPIRY');
+  assert.equal(createCalls, 0);
+
+  let batchCreateCalls = 0;
+  const batchResult = await queueWhatsappBatch([
+    { recipient: '71234567', text: 'stale expiry', expiresAt: new Date('2025-12-31T23:59:59.000Z') },
+  ], {
+    sourceType: 'GROUP_EVENT_MASS_MESSAGE',
+    idempotencyKey: 'stale-batch-expiry',
+  }, {
+    repository: repository({
+      async createBatchAndJobs() {
+        batchCreateCalls += 1;
+        throw new Error('should not create a stale batch');
+      },
+    }),
+    providerState: {
+      enabled: true,
+      mode: 'remote',
+      configured: true,
+      reason: null,
+    },
+  });
+
+  assert.equal(batchResult.accepted, false);
+  assert.equal(batchResult.reason, 'INVALID_EXPIRY');
+  assert.equal(batchCreateCalls, 0);
+});
+
 test('late-linked OTP sessions mirror terminal outbox status without false success', async () => {
   const updates: Array<{ where: unknown; data: unknown }> = [];
   const client = {

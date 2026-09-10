@@ -19,6 +19,8 @@ import {
   type CreateOutboundJobInput,
   type OutboundBatchProgress,
   type OutboundMessageRepository,
+  OutboundMessageValidationError,
+  validateOutboundMessageExpiry,
 } from './outbound-message.repository';
 import { wakeWhatsappWorker } from './whatsapp-worker-signals';
 import {
@@ -155,23 +157,26 @@ function resolveRecipient(recipient: string): string {
 
 function rejection(error: unknown, reason = 'QUEUE_REJECTED'): WhatsappEnqueueResult {
   const message = error instanceof Error ? error.message : reason;
+  const resolvedReason = error instanceof OutboundMessageValidationError ? error.code : reason;
   logger.error(
     {
       event: 'whatsapp_enqueue_rejected',
-      reason,
+      reason: resolvedReason,
       error: message.slice(0, 300),
     },
     'WhatsApp message could not be persisted to the outbox',
   );
-  return { accepted: false, status: 'REJECTED', reason };
+  return { accepted: false, status: 'REJECTED', reason: resolvedReason };
 }
 
 function batchRejection(error: unknown, total: number): WhatsappBatchEnqueueResult {
   const reason = error instanceof Error ? error.message : 'QUEUE_REJECTED';
+  const resolvedReason = error instanceof OutboundMessageValidationError ? error.code : 'QUEUE_REJECTED';
   logger.error(
     {
       event: 'whatsapp_batch_enqueue_rejected',
-      reason: reason.slice(0, 300),
+      reason: resolvedReason,
+      error: reason.slice(0, 300),
     },
     'WhatsApp batch could not be persisted to the outbox',
   );
@@ -183,7 +188,7 @@ function batchRejection(error: unknown, total: number): WhatsappBatchEnqueueResu
     duplicates: 0,
     rejected: total,
     skipped: 0,
-    reason: 'QUEUE_REJECTED',
+    reason: resolvedReason,
   };
 }
 
@@ -214,6 +219,7 @@ export async function queueWhatsappText(
   }
 
   try {
+    validateOutboundMessageExpiry(options.expiresAt);
     const chatId = resolveRecipient(recipient);
     const brandedText = await buildBrandedText(text, options);
     const sourceType = safeSourceType(options.sourceType);
@@ -291,6 +297,7 @@ export async function queueWhatsappImage(
   }
 
   try {
+    validateOutboundMessageExpiry(options.expiresAt);
     const chatId = resolveRecipient(recipient);
     const normalizedImageUrl = imageUrl.trim();
     if (!normalizedImageUrl) throw new Error('WhatsApp image URL is required.');
@@ -395,6 +402,15 @@ export async function queueWhatsappBatch(
       skipped: 0,
       reason: providerState.reason ?? 'PROVIDER_NOT_CONFIGURED',
     };
+  }
+
+  for (const item of items) {
+    try {
+      validateOutboundMessageExpiry(item.expiresAt);
+    } catch (error) {
+      if (error instanceof OutboundMessageValidationError) return batchRejection(error, total);
+      throw error;
+    }
   }
 
   const jobs: CreateOutboundJobInput[] = [];
