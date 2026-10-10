@@ -50,3 +50,23 @@ jobs:
           cache-from: type=gha,scope=priconpri-backend
           cache-to: type=gha,mode=max,scope=priconpri-backend
 
+	
+      - name: Trigger Coolify deployment
+        if: ${{ vars.ENABLE_COOLIFY_DEPLOY == 'true' }}
+        env:
+          COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [ -z "$COOLIFY_WEBHOOK" ] || [ -z "$COOLIFY_TOKEN" ]; then
+            echo "Missing Coolify credentials"
+            exit 1
+          fi
+
+          curl --fail-with-body \
+            --silent \
+            --show-error \
+            --request POST \
+            "$COOLIFY_WEBHOOK" \
+            --header "Authorization: Bearer $COOLIFY_TOKEN" \
+            --header "Accept: application/json"
+
