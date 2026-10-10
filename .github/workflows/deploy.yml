@@ -51,6 +51,21 @@ jobs:
           cache-to: type=gha,mode=max,scope=priconpri-backend
 
 
+      - name: Build and push maintenance image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: maintenance
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:maintenance-latest
+            ${{ env.IMAGE }}:maintenance-${{ github.sha }}
+          cache-from: type=gha,scope=priconpri-backend
+          cache-to: type=gha,mode=max,scope=priconpri-backend
+
+
       - name: Trigger Coolify deployment
         if: ${{ vars.ENABLE_COOLIFY_DEPLOY == 'true' }}
         env:

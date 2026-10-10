@@ -17,6 +17,23 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
+
+# Database maintenance image
+# Includes Prisma CLI, migrations, TypeScript and seed scripts.
+FROM deps AS maintenance
+
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+COPY tsconfig.json ./
+COPY src ./src
+
+# Generate Prisma Client without connecting to production.
+RUN DATABASE_URL="mysql://build:build@localhost:3306/build" \
+    npx prisma generate
+
+CMD ["npx", "prisma", "migrate", "status"]
+
+
 # Build
 FROM deps AS builder
 
