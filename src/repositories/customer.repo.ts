@@ -4,6 +4,12 @@ import { getBookingLifecycleStatus, isNoShowBooking } from '../utils/booking-sta
 
 type BookingStatusWithNoShow = BookingStatus;
 
+export interface CustomerTagSummary {
+    id: number;
+    name: string;
+    color: string;
+}
+
 export interface CustomerWithStats {
     id: number;
     customerKey: string;
@@ -13,6 +19,7 @@ export interface CustomerWithStats {
     phone: string | null;
     phonePrefix: string | null;
     notes: string | null;
+    tags: CustomerTagSummary[];
     totalBookings: number;
     completedBookings: number;
     cancelledBookings: number;
@@ -73,6 +80,7 @@ interface CustomerAggregateMutable {
     phone: string | null;
     phonePrefix: string | null;
     notes: string | null;
+    tags: CustomerTagSummary[];
     totalBookings: number;
     completedBookings: number;
     cancelledBookings: number;
@@ -176,6 +184,7 @@ function buildCustomerSeed(params: {
         phone: params.phone,
         phonePrefix: params.phonePrefix,
         notes: params.notes,
+        tags: [],
         totalBookings: 0,
         completedBookings: 0,
         cancelledBookings: 0,
@@ -224,6 +233,7 @@ function toFinalCustomer(row: CustomerAggregateMutable): CustomerWithStats {
         phone: row.phone,
         phonePrefix: row.phonePrefix,
         notes: row.notes,
+        tags: row.tags,
         totalBookings: row.totalBookings,
         completedBookings: row.completedBookings,
         cancelledBookings: row.cancelledBookings,
@@ -340,6 +350,7 @@ export async function getCustomersWithBookingStats(
     companyId: number,
     search?: string,
     categoryId?: number,
+    tagId?: number,
 ): Promise<CustomerWithStats[]> {
     const now = new Date();
 
@@ -563,7 +574,23 @@ export async function getCustomersWithBookingStats(
         return a.name.localeCompare(b.name);
     });
 
-    return rows;
+    // ponytail: Guest records follow the existing email/phone/name key; use a stable guest profile ID if that identity becomes editable independently.
+    const crmRecords = rows.length ? await prisma.customerCrmRecord.findMany({
+        where: {
+            company_id: companyId,
+            customer_key: { in: rows.map((row) => row.customerKey) },
+            ...(tagId ? { tag_assignments: { some: { tag_id: tagId } } } : {}),
+        },
+        include: { tag_assignments: { include: { tag: { select: { id: true, name: true, color: true } } } } },
+    }) : [];
+    const crmRecordsByKey = new Map(crmRecords.map((record) => [record.customer_key, record]));
+
+    return rows.flatMap((row) => {
+        const crmRecord = crmRecordsByKey.get(row.customerKey);
+        const tags = crmRecord?.tag_assignments.map(({ tag }) => tag) || [];
+        if (tagId && !tags.some((tag) => tag.id === tagId)) return [];
+        return [{ ...row, notes: crmRecord ? crmRecord.internal_notes : row.notes, tags }];
+    });
 }
 
 export async function getCustomerBookingHistory(params: {

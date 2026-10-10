@@ -1,4 +1,4 @@
-import { CompanyUserRole } from '@prisma/client';
+import { CompanyUserRole, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import {
     getCustomerBookingHistory,
@@ -53,6 +53,7 @@ interface SendMassCustomerMessageInput {
     search?: string;
     segment?: CustomerSegmentKey;
     categoryId?: number;
+    tagId?: number;
     idempotencyKey?: string;
 }
 
@@ -60,6 +61,7 @@ interface CustomerExportOptions {
     search?: string;
     segment?: CustomerSegmentKey;
     categoryId?: number;
+    tagId?: number;
     requestedByUserId?: string;
 }
 
@@ -73,6 +75,30 @@ export type CustomerSegmentKey =
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const N8N_CUSTOMER_EXPORT_WEBHOOK_URL = (process.env.N8N_CUSTOMER_EXPORT_WEBHOOK_URL || '').trim();
 const N8N_CUSTOMER_EXPORT_TIMEOUT_MS = Number(process.env.N8N_CUSTOMER_EXPORT_TIMEOUT_MS || '10000');
+
+async function saveCustomerCrmData(
+    tx: Prisma.TransactionClient,
+    companyId: number,
+    customerKey: string,
+    notes?: string | null,
+    tagIds?: number[],
+) {
+    const record = await tx.customerCrmRecord.upsert({
+        where: { company_id_customer_key: { company_id: companyId, customer_key: customerKey } },
+        create: { company_id: companyId, customer_key: customerKey, internal_notes: notes?.trim() || null },
+        update: notes === undefined ? {} : { internal_notes: notes?.trim() || null },
+        select: { id: true },
+    });
+    if (tagIds !== undefined) {
+        await tx.customerCrmTagAssignment.deleteMany({ where: { customer_record_id: record.id } });
+        if (tagIds.length) {
+            await tx.customerCrmTagAssignment.createMany({
+                data: tagIds.map((tag_id) => ({ customer_record_id: record.id, tag_id })),
+            });
+        }
+    }
+    return record;
+}
 
 function normalizeEmail(email?: string | null): string | null {
     const value = (email || '').trim().toLowerCase();
@@ -242,6 +268,7 @@ function buildCustomersCsv(customers: CustomerWithStats[]): string {
         'preferred_service',
         'preferred_category',
         'booking_frequency_per_month',
+        'tags',
     ];
 
     const rows = customers.map((customer) => [
@@ -261,6 +288,7 @@ function buildCustomersCsv(customers: CustomerWithStats[]): string {
         customer.preferredServiceName,
         customer.preferredCategoryName,
         customer.bookingFrequencyPerMonth,
+        customer.tags.map((tag) => tag.name).join('; '),
     ]);
 
     return [headers, ...rows]
@@ -274,6 +302,7 @@ export async function triggerCustomerExportWebhook(params: {
     requestedByUserId?: string;
     search?: string;
     segment?: CustomerSegmentKey;
+    tagId?: number;
     customers: CustomerWithStats[];
 }) {
     if (isDemoRequest() || await isDemoCompanyId(params.companyId)) return { triggered: false };
@@ -292,6 +321,7 @@ export async function triggerCustomerExportWebhook(params: {
         filters: {
             search: params.search || null,
             segment: params.segment || null,
+            tagId: params.tagId || null,
         },
         exportedAt: new Date().toISOString(),
         customers: params.customers.map((customer) => ({
@@ -312,6 +342,7 @@ export async function triggerCustomerExportWebhook(params: {
             preferredServiceName: customer.preferredServiceName,
             preferredCategoryName: customer.preferredCategoryName,
             bookingFrequencyPerMonth: customer.bookingFrequencyPerMonth,
+            tags: customer.tags,
         })),
     };
 
@@ -349,8 +380,9 @@ export async function listCustomers(
     search?: string,
     segment: CustomerSegmentKey = 'ALL',
     categoryId?: number,
+    tagId?: number,
 ) {
-    const customers = await getCustomersWithBookingStats(companyId, search, categoryId);
+    const customers = await getCustomersWithBookingStats(companyId, search, categoryId, tagId);
     return applyCustomerSegment(customers, segment);
 }
 
@@ -359,6 +391,52 @@ export async function companyHasCustomerCategory(companyId: number, categoryId: 
         where: { id: categoryId, company_id: companyId, deleted_at: null },
         select: { id: true },
     }));
+}
+
+export async function listCustomerTags(companyId: number) {
+    return prisma.customerTag.findMany({ where: { company_id: companyId }, orderBy: { name: 'asc' }, select: { id: true, name: true, color: true } });
+}
+
+export async function companyHasCustomerTag(companyId: number, tagId: number): Promise<boolean> {
+    return Boolean(await prisma.customerTag.findFirst({ where: { id: tagId, company_id: companyId }, select: { id: true } }));
+}
+
+function normalizeCustomerTagInput(input: { name?: string; color?: string }) {
+    const name = typeof input.name === 'string' ? input.name.trim() : '';
+    const color = typeof input.color === 'string' ? input.color.trim() : '';
+    if (!name || Array.from(name).length > 64) return { error: 'Tag name must be between 1 and 64 characters' };
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) return { error: 'Tag color must be a six-digit hex color' };
+    return { name, color: color.toUpperCase() };
+}
+
+export async function createCustomerTag(companyId: number, input: { name?: string; color?: string }) {
+    const value = normalizeCustomerTagInput(input);
+    if ('error' in value) return { code: 400, error: true, message: value.error };
+    try {
+        const data = await prisma.customerTag.create({ data: { company_id: companyId, ...value }, select: { id: true, name: true, color: true } });
+        return { code: 201, error: false, data };
+    } catch (error: any) {
+        if (error?.code === 'P2002') return { code: 409, error: true, message: 'A tag with this name already exists' };
+        throw error;
+    }
+}
+
+export async function updateCustomerTag(companyId: number, tagId: number, input: { name?: string; color?: string }) {
+    const value = normalizeCustomerTagInput(input);
+    if ('error' in value) return { code: 400, error: true, message: value.error };
+    if (!(await companyHasCustomerTag(companyId, tagId))) return { code: 404, error: true, message: 'Tag not found' };
+    try {
+        const data = await prisma.customerTag.update({ where: { id: tagId }, data: value, select: { id: true, name: true, color: true } });
+        return { code: 200, error: false, data };
+    } catch (error: any) {
+        if (error?.code === 'P2002') return { code: 409, error: true, message: 'A tag with this name already exists' };
+        throw error;
+    }
+}
+
+export async function deleteCustomerTag(companyId: number, tagId: number) {
+    const result = await prisma.customerTag.deleteMany({ where: { id: tagId, company_id: companyId } });
+    return result.count ? { code: 200, error: false } : { code: 404, error: true, message: 'Tag not found' };
 }
 
 export async function listInterestCaptureLeads(companyId: number) {
@@ -615,6 +693,7 @@ export async function updateCustomerByKey(
         phone_prefix?: string | null;
         country_code?: string | null;
         notes?: string | null;
+        tag_ids?: number[];
     },
 ) {
     const normalizedKey = (customerKey || '').trim();
@@ -632,6 +711,32 @@ export async function updateCustomerByKey(
     }
 
     const customer = currentResult.data as CustomerWithStats;
+    const hasProfileUpdate = [input.name, input.email, input.phone, input.phone_prefix, input.country_code]
+        .some((value) => value !== undefined);
+
+    if (input.tag_ids !== undefined && (!Array.isArray(input.tag_ids) || input.tag_ids.length > 100 || input.tag_ids.some((id) => !Number.isSafeInteger(id) || id <= 0))) {
+        return { code: 400, error: true, message: 'Invalid tag IDs' };
+    }
+    const tagIds = input.tag_ids === undefined ? undefined : [...new Set(input.tag_ids)];
+    if (tagIds?.length) {
+        const matchingTags = await prisma.customerTag.count({ where: { company_id: companyId, id: { in: tagIds } } });
+        if (matchingTags !== tagIds.length) return { code: 400, error: true, message: 'One or more tags were not found for this company' };
+    }
+
+    if (!hasProfileUpdate) {
+        if (input.notes === undefined && tagIds === undefined) return currentResult;
+        await prisma.$transaction(async (tx) => {
+            await saveCustomerCrmData(tx, companyId, normalizedKey, input.notes === undefined ? customer.notes : input.notes, tagIds);
+            if (input.notes !== undefined && customer.userId) {
+                await tx.customerProfile.updateMany({
+                    where: { company_id: companyId, user_id: customer.userId, deleted_at: null },
+                    data: { notes: input.notes?.trim() || null },
+                });
+            }
+        });
+        return getCustomerByKey(companyId, normalizedKey);
+    }
+
     if (!customer.userId) {
         return {
             code: 400,
@@ -731,15 +836,14 @@ export async function updateCustomerByKey(
     const currentEmailIsTemporary =
         Boolean(currentEmail?.endsWith('@tmppriconpri.com')) ||
         Boolean(currentEmail?.endsWith('@temp.priconpri.com'));
-    const finalEmail =
-        normalizedEmail ||
-        (currentEmailIsTemporary
-            ? existingProfile.user.email
-            : await ensureUniqueTempEmail(canonicalPhone.phoneNumber || existingProfile.user.id.slice(-6)));
+    const finalEmail = normalizedEmail || (currentEmailIsTemporary
+        ? existingProfile.user.email
+        : await ensureUniqueTempEmail(canonicalPhone.phoneNumber || existingProfile.user.id.slice(-6)));
     const finalCountryCode = hasPhone
         ? ((input.country_code || existingProfile.user.country_code || '').trim().toUpperCase() || null)
         : null;
     const nameParts = splitFullName(trimmedName);
+    const notes = input.notes === undefined ? existingProfile.notes : input.notes?.trim() || null;
     const emailChanged = finalEmail !== existingProfile.user.email;
     const phoneChanged =
         (canonicalPhone.phoneNumber || null) !== (existingProfile.user.phoneNumber || null) ||
@@ -764,10 +868,10 @@ export async function updateCustomerByKey(
 
             await tx.customerProfile.update({
                 where: { id: existingProfile.id },
-                data: {
-                    notes: input.notes?.trim() || null,
-                },
+                data: { notes },
             });
+
+            await saveCustomerCrmData(tx, companyId, normalizedKey, notes, tagIds);
 
             const credentialAccount = await tx.account.findFirst({
                 where: {
@@ -820,7 +924,7 @@ export async function exportCustomers(
     }
 
     const customers = applyCustomerSegment(
-        await getCustomersWithBookingStats(companyId, options.search || undefined, options.categoryId),
+        await getCustomersWithBookingStats(companyId, options.search || undefined, options.categoryId, options.tagId),
         normalizeCustomerSegment(options.segment),
     );
     const csv = buildCustomersCsv(customers);
@@ -832,6 +936,7 @@ export async function exportCustomers(
             requestedByUserId: options.requestedByUserId,
             search: options.search,
             segment: normalizeCustomerSegment(options.segment),
+            tagId: options.tagId,
             customers,
         });
 
@@ -874,6 +979,7 @@ export async function sendMassCustomerMessage(
     const search = (payload.search || '').trim();
     const segment = normalizeCustomerSegment(payload.segment);
     const categoryId = payload.categoryId;
+    const tagId = payload.tagId;
 
     if (!message) {
         return {
@@ -885,6 +991,9 @@ export async function sendMassCustomerMessage(
 
     if (categoryId !== undefined && !(await companyHasCustomerCategory(companyId, categoryId))) {
         return { code: 400, error: true, message: 'Category not found for this company' };
+    }
+    if (tagId !== undefined && !(await companyHasCustomerTag(companyId, tagId))) {
+        return { code: 400, error: true, message: 'Tag not found for this company' };
     }
 
     if (message.length > 1500) {
@@ -920,7 +1029,7 @@ export async function sendMassCustomerMessage(
     const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
 
     const customers = applyCustomerSegment(
-        await getCustomersWithBookingStats(companyId, search || undefined, categoryId),
+        await getCustomersWithBookingStats(companyId, search || undefined, categoryId, tagId),
         segment,
     );
     const seenWhatsappTargets = new Set<string>();

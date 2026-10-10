@@ -14,6 +14,35 @@ const upload = multer({
 const adminRoles = [CompanyUserRole.OWNER, CompanyUserRole.ADMIN];
 
 router.get(
+    '/tags',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('CRM_BASE'),
+    AdminCustomerController.listCustomerTags,
+);
+router.post(
+    '/tags',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('CRM_BASE'),
+    AdminCustomerController.createCustomerTag,
+);
+router.put(
+    '/tags/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('CRM_BASE'),
+    AdminCustomerController.updateCustomerTag,
+);
+router.delete(
+    '/tags/:id',
+    requireAuth,
+    requireCompanyRole(adminRoles),
+    requireCompanyCapability('CRM_BASE'),
+    AdminCustomerController.deleteCustomerTag,
+);
+
+router.get(
     '/',
     requireAuth,
     requireCompanyRole(adminRoles),

@@ -14,15 +14,60 @@ function requiresAdvancedCustomerFilters(segment?: string, categoryId?: number):
     return Boolean((segment && segment !== 'ALL') || categoryId);
 }
 
+export async function listCustomerTags(req: AuthenticatedRequest, res: Response) {
+    try {
+        const companyId = (req as any).companyID;
+        return res.json({ data: await CustomerService.listCustomerTags(companyId) });
+    } catch (error: any) {
+        console.error('Error listing customer tags:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
+export async function createCustomerTag(req: AuthenticatedRequest, res: Response) {
+    try {
+        const result = await CustomerService.createCustomerTag((req as any).companyID, req.body || {});
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error creating customer tag:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
+export async function updateCustomerTag(req: AuthenticatedRequest, res: Response) {
+    try {
+        const tagId = parseCategoryId(req.params.id);
+        if (tagId === null || tagId === undefined) return res.status(400).json({ code: 400, error: true, message: 'Invalid tag ID' });
+        const result = await CustomerService.updateCustomerTag((req as any).companyID, tagId, req.body || {});
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error updating customer tag:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
+export async function deleteCustomerTag(req: AuthenticatedRequest, res: Response) {
+    try {
+        const tagId = parseCategoryId(req.params.id);
+        if (tagId === null || tagId === undefined) return res.status(400).json({ code: 400, error: true, message: 'Invalid tag ID' });
+        const result = await CustomerService.deleteCustomerTag((req as any).companyID, tagId);
+        return res.status(result.code).json(result);
+    } catch (error: any) {
+        console.error('Error deleting customer tag:', error);
+        return res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+}
+
 export async function listCustomers(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
         const search = req.query.search as string | undefined;
         const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
         const categoryId = parseCategoryId(req.query.category_id);
+        const tagId = parseCategoryId(req.query.tag_id);
 
-        if (categoryId === null) {
-            return res.status(400).json({ code: 400, error: true, message: 'Invalid category ID' });
+        if (categoryId === null || tagId === null) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid customer filter ID' });
         }
 
         if (requiresAdvancedCustomerFilters(segment, categoryId)) {
@@ -43,12 +88,16 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
         if (categoryId && !(await CustomerService.companyHasCustomerCategory(companyId, categoryId))) {
             return res.status(400).json({ code: 400, error: true, message: 'Category not found for this company' });
         }
+        if (tagId && !(await CustomerService.companyHasCustomerTag(companyId, tagId))) {
+            return res.status(400).json({ code: 400, error: true, message: 'Tag not found for this company' });
+        }
 
         const customers = await CustomerService.listCustomers(
             companyId,
             search || undefined,
             segment,
             categoryId,
+            tagId,
         );
 
         return res.json({ data: customers });
@@ -128,14 +177,18 @@ export async function updateCustomerByKey(req: AuthenticatedRequest, res: Respon
         const companyId = (req as any).companyID;
         const customerKey = decodeURIComponent((req.params.customerKey as string | undefined) || '');
         const payload = req.body || {};
+        if (Object.prototype.hasOwnProperty.call(payload, 'tag_ids') && !Array.isArray(payload.tag_ids)) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid tag IDs' });
+        }
 
         const result = await CustomerService.updateCustomerByKey(companyId, customerKey, {
             name: typeof payload.name === 'string' ? payload.name : undefined,
-            email: typeof payload.email === 'string' ? payload.email : null,
-            phone: typeof payload.phone === 'string' ? payload.phone : null,
-            phone_prefix: typeof payload.phone_prefix === 'string' ? payload.phone_prefix : null,
-            country_code: typeof payload.country_code === 'string' ? payload.country_code : null,
-            notes: typeof payload.notes === 'string' ? payload.notes : null,
+            email: typeof payload.email === 'string' ? payload.email : payload.email === null ? null : undefined,
+            phone: typeof payload.phone === 'string' ? payload.phone : payload.phone === null ? null : undefined,
+            phone_prefix: typeof payload.phone_prefix === 'string' ? payload.phone_prefix : payload.phone_prefix === null ? null : undefined,
+            country_code: typeof payload.country_code === 'string' ? payload.country_code : payload.country_code === null ? null : undefined,
+            notes: typeof payload.notes === 'string' ? payload.notes : payload.notes === null ? null : undefined,
+            tag_ids: payload.tag_ids as number[] | undefined,
         });
 
         return res.status(result.code).json(result);
@@ -151,19 +204,24 @@ export async function exportCustomers(req: AuthenticatedRequest, res: Response) 
         const search = req.query.search as string | undefined;
         const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
         const categoryId = parseCategoryId(req.query.category_id);
+        const tagId = parseCategoryId(req.query.tag_id);
         const requestedByUserId = req.authUser?.id;
 
-        if (categoryId === null) {
-            return res.status(400).json({ code: 400, error: true, message: 'Invalid category ID' });
+        if (categoryId === null || tagId === null) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid customer filter ID' });
         }
         if (categoryId && !(await CustomerService.companyHasCustomerCategory(companyId, categoryId))) {
             return res.status(400).json({ code: 400, error: true, message: 'Category not found for this company' });
+        }
+        if (tagId && !(await CustomerService.companyHasCustomerTag(companyId, tagId))) {
+            return res.status(400).json({ code: 400, error: true, message: 'Tag not found for this company' });
         }
 
         const result = await CustomerService.exportCustomers(companyId, {
             search: search || undefined,
             segment,
             categoryId,
+            tagId,
             requestedByUserId,
         });
 
@@ -228,14 +286,16 @@ export async function downloadImportTemplate(req: AuthenticatedRequest, res: Res
 export async function sendMassMessage(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
-        const { message, search, segment, idempotency_key, category_id } = req.body as {
+        const { message, search, segment, idempotency_key, category_id, tag_id } = req.body as {
             message?: string;
             search?: string;
             segment?: string;
             category_id?: number | string;
+            tag_id?: number | string;
             idempotency_key?: string;
         };
         const categoryId = parseCategoryId(category_id);
+        const tagId = parseCategoryId(tag_id);
 
         if (!companyId) {
             return res.status(400).json({
@@ -245,8 +305,11 @@ export async function sendMassMessage(req: AuthenticatedRequest, res: Response) 
             });
         }
 
-        if (categoryId === null) {
-            return res.status(400).json({ code: 400, error: true, message: 'Invalid category ID' });
+        if (categoryId === null || tagId === null) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid customer filter ID' });
+        }
+        if (tagId && !(await CustomerService.companyHasCustomerTag(companyId, tagId))) {
+            return res.status(400).json({ code: 400, error: true, message: 'Tag not found for this company' });
         }
 
         const result = await CustomerService.sendMassCustomerMessage(companyId, {
@@ -254,6 +317,7 @@ export async function sendMassMessage(req: AuthenticatedRequest, res: Response) 
             search: search || '',
             segment: CustomerService.normalizeCustomerSegment(segment),
             categoryId,
+            tagId,
             idempotencyKey: idempotency_key,
         });
 

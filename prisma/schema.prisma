@@ -59,6 +59,8 @@ model Company {
   product_subscriptions                    CompanyProductSubscription[]
   config_messages                          ConfigMessage[]
   customer_profiles                        CustomerProfile[]
+  customer_crm_records                     CustomerCrmRecord[]
+  customer_tags                            CustomerTag[]
   discount_codes                           DiscountCode[]
   hours                                    Hours[]
   reviews                                  Review[]
@@ -1390,6 +1392,46 @@ model CustomerProfile {
   @@index([preferred_staff_id])
   @@index([user_id], map: "customer_profile_user_id_fkey")
   @@map("customer_profile")
+}
+
+model CustomerCrmRecord {
+  id              Int                         @id @default(autoincrement())
+  company_id      Int
+  customer_key    String                      @db.VarChar(512)
+  internal_notes  String?                     @db.Text
+  created_at      DateTime                    @default(now())
+  updated_at      DateTime                    @updatedAt
+  company         Company                     @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  tag_assignments CustomerCrmTagAssignment[]
+
+  @@unique([company_id, customer_key])
+  @@map("customer_crm_record")
+}
+
+model CustomerTag {
+  id          Int                         @id @default(autoincrement())
+  company_id  Int
+  name        String                      @db.VarChar(64)
+  color       String                      @db.VarChar(7)
+  created_at  DateTime                    @default(now())
+  updated_at  DateTime                    @updatedAt
+  company     Company                     @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  assignments CustomerCrmTagAssignment[]
+
+  @@unique([company_id, name])
+  @@map("customer_tag")
+}
+
+model CustomerCrmTagAssignment {
+  customer_record_id Int
+  tag_id             Int
+  created_at         DateTime           @default(now())
+  customer_record    CustomerCrmRecord  @relation(fields: [customer_record_id], references: [id], onDelete: Cascade)
+  tag                CustomerTag        @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+
+  @@id([customer_record_id, tag_id])
+  @@index([tag_id])
+  @@map("customer_crm_tag_assignment")
 }
 
 model Category {
