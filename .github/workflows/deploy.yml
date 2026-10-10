@@ -50,7 +50,7 @@ jobs:
           cache-from: type=gha,scope=priconpri-backend
           cache-to: type=gha,mode=max,scope=priconpri-backend
 
-	
+
       - name: Trigger Coolify deployment
         if: ${{ vars.ENABLE_COOLIFY_DEPLOY == 'true' }}
         env:
