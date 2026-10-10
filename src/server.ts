@@ -17,9 +17,18 @@ if (wahaProviderState.mode === 'remote' && wahaProviderState.configured) {
 
 const server = app.listen(env.port, () => {
     logger.info(`Server is running on port ${env.port}`);
+if (process.env.ENABLE_WHATSAPP_WORKER !== 'false') {
     void startWhatsappWorker().catch((error) => {
-        logger.error({ event: 'whatsapp_worker_start_failed', error }, 'Unable to start WhatsApp outbox worker');
+        logger.error(
+            { event: 'whatsapp_worker_start_failed', error },
+            'Unable to start WhatsApp outbox worker'
+        );
     });
+} else {
+    logger.info(
+        'WhatsApp worker disabled for this instance'
+    );
+}
     if (wahaProviderState.mode === 'remote' && wahaProviderState.configured) {
         void warnIfWahaSessionMissing();
         startWahaDisconnectMonitor();
