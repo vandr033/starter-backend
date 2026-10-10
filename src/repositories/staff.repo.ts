@@ -1,5 +1,6 @@
 import { prisma } from '../prisma/client';
 import { CompanyUserRole } from '@prisma/client';
+import { assertDemoOperatorMayJoinCompany } from '../services/demo-operator-membership.service';
 
 /**
  * Get all staff profiles for a company
@@ -148,6 +149,7 @@ export async function createStaffProfile(data: {
     endDate?: Date;
 }) {
     const companyRole = data.role ?? CompanyUserRole.STAFF;
+    await assertDemoOperatorMayJoinCompany(prisma, data.userId, data.companyId);
 
     // Check for soft-deleted CompanyUser and restore, or create new
     const deletedCompanyUser = await prisma.companyUser.findFirst({

@@ -185,6 +185,7 @@ async function classifyAccount(params: {
 }
 
 async function dispatchSharedCode(params: {
+    companyId: number;
     email: string;
     phoneFull: string;
     code: string;
@@ -200,8 +201,9 @@ async function dispatchSharedCode(params: {
     maskedPhone: string | null;
 }> {
     const [emailResult, phoneResult] = await Promise.all([
-        sendEmailCode(params.email, params.code).catch(() => -1),
+        sendEmailCode(params.email, params.code, params.companyId).catch(() => -1),
         queueWhatsappCode(params.phoneFull, params.code, {
+            companyId: params.companyId,
             sourceType: 'COMMERCE_GUEST_CHECKOUT_OTP',
             sourceId: params.sourceId ?? params.phoneFull,
             expiresAt: params.expiresAt ?? new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
@@ -383,7 +385,7 @@ export async function startCommerceGuestCheckout(slug: string, input: StartInput
     const otpHash = await bcrypt.hash(sharedCode, 10);
     const phoneFull = canonicalPhone.fullPhone ?? `${canonicalPhone.phonePrefix}${canonicalPhone.phoneNumber}`;
     const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
-    const delivery = await dispatchSharedCode({ email, phoneFull, code: sharedCode, expiresAt, sourceId: `start:${phoneFull}` });
+    const delivery = await dispatchSharedCode({ companyId: company.id, email, phoneFull, code: sharedCode, expiresAt, sourceId: `start:${phoneFull}` });
     const resendAvailableAt = new Date(Date.now() + getResendCooldownSeconds() * 1000);
 
     const session = await prisma.commerceGuestCheckoutSession.create({
@@ -456,7 +458,7 @@ export async function resendCommerceGuestCheckoutCode(slug: string, sessionId: s
     const otpHash = await bcrypt.hash(sharedCode, 10);
     const phoneFull = `${session.phone_prefix}${session.phone_number}`;
     const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
-    const delivery = await dispatchSharedCode({ email: session.email, phoneFull, code: sharedCode, expiresAt, sourceId: `resend:${session.id}` });
+    const delivery = await dispatchSharedCode({ companyId: company.id, email: session.email, phoneFull, code: sharedCode, expiresAt, sourceId: `resend:${session.id}` });
     const resendAvailableAt = new Date(Date.now() + getResendCooldownSeconds() * 1000);
 
     await prisma.commerceGuestCheckoutSession.update({

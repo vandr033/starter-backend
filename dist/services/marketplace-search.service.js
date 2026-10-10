@@ -1,0 +1,686 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.searchMarketplace = searchMarketplace;
+exports.trackMarketplaceClick = trackMarketplaceClick;
+const BookingService = __importStar(require("./booking.service"));
+const MarketplaceRepo = __importStar(require("../repositories/marketplace.repo"));
+const MarketplaceAnalyticsService = __importStar(require("./marketplace-analytics.service"));
+const marketplaceMatch_1 = require("../utils/marketplaceMatch");
+const coordinates_1 = require("../utils/coordinates");
+const PRIMARY_CANDIDATE_EVALUATION_CAP = 60;
+const SIMILAR_CANDIDATE_EVALUATION_CAP = 30;
+const FETCH_CANDIDATE_LIMIT = 200;
+const EVALUATION_CONCURRENCY = 6;
+function toI18nMap(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    const normalized = {};
+    for (const [rawKey, rawValue] of Object.entries(value)) {
+        const key = rawKey.trim().toLowerCase();
+        const text = typeof rawValue === 'string' ? rawValue.trim() : '';
+        if (!key || !text)
+            continue;
+        normalized[key] = text;
+    }
+    return Object.keys(normalized).length > 0 ? normalized : null;
+}
+function parseTimeToMinutes(time) {
+    if (!time)
+        return null;
+    const normalized = time.trim();
+    const match24 = normalized.match(/^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/);
+    if (match24) {
+        const hours = Number(match24[1]);
+        const minutes = Number(match24[2]);
+        return hours * 60 + minutes;
+    }
+    const match12 = normalized.match(/^(0?[1-9]|1[0-2]):([0-5]\d)\s*([AaPp][Mm])$/);
+    if (match12) {
+        const rawHour = Number(match12[1]);
+        const minutes = Number(match12[2]);
+        const meridiem = match12[3].toUpperCase();
+        let hours = rawHour % 12;
+        if (meridiem === 'PM')
+            hours += 12;
+        return hours * 60 + minutes;
+    }
+    return null;
+}
+function haversineDistanceKm(lat1, lon1, lat2, lon2) {
+    const rad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * rad;
+    const dLon = (lon2 - lon1) * rad;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return 6371 * c;
+}
+async function mapWithConcurrency(items, concurrency, mapper) {
+    const safeConcurrency = Math.max(1, Math.min(concurrency, items.length || 1));
+    const results = new Array(items.length);
+    let cursor = 0;
+    async function worker() {
+        while (true) {
+            const index = cursor;
+            cursor += 1;
+            if (index >= items.length)
+                return;
+            results[index] = await mapper(items[index], index);
+        }
+    }
+    await Promise.all(Array.from({ length: safeConcurrency }, () => worker()));
+    return results;
+}
+function uniqueSortedTimes(slots) {
+    return [...new Set(slots.map((slot) => slot.time))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+function chooseRandomStaffId(staffIds) {
+    if (staffIds.length === 0)
+        return null;
+    const idx = Math.floor(Math.random() * staffIds.length);
+    return staffIds[idx] ?? null;
+}
+function toMatchType(deltaMinutes) {
+    if (deltaMinutes <= 30)
+        return 'exact';
+    if (deltaMinutes <= 120)
+        return 'flexible';
+    return 'similar';
+}
+function buildDistanceKm(center, latitude, longitude) {
+    const coordinates = (0, coordinates_1.getValidCoordinates)(latitude, longitude);
+    if (!center || !coordinates)
+        return null;
+    return haversineDistanceKm(center.lat, center.lng, coordinates.latitude, coordinates.longitude);
+}
+async function evaluateCompany(company, params, requestedMinutes, referenceCenter, forceSimilarByArea) {
+    const matchingServices = company.services;
+    if (matchingServices.length === 0)
+        return null;
+    let bestChoice = null;
+    for (const service of matchingServices) {
+        const slotResponse = await BookingService.getAvailableSlots({
+            company_id: company.id,
+            service_ids: [service.id],
+            date: params.date,
+        });
+        if (slotResponse.error || !Array.isArray(slotResponse.data)) {
+            continue;
+        }
+        const slots = slotResponse.data.filter((slot) => typeof slot.time === 'string');
+        if (slots.length === 0)
+            continue;
+        const times = uniqueSortedTimes(slots);
+        if (times.length === 0)
+            continue;
+        const earliestSlotTime = times[0];
+        const availabilityDensity = times.length;
+        if (requestedMinutes == null) {
+            const staffIds = [...new Set(slots.filter((slot) => slot.time === earliestSlotTime).map((slot) => slot.staff_id))];
+            const candidateChoice = {
+                serviceId: service.id,
+                serviceName: service.name,
+                globalServiceTypeId: service.global_type_id ?? params.serviceTypeId,
+                priceFrom: service.price_cents,
+                matchedSlotTime: earliestSlotTime,
+                matchType: 'flexible',
+                matchDeltaMinutes: null,
+                availableStaffIds: staffIds,
+                availabilityDensity,
+                earliestSlotTime,
+                whyThisResult: (0, marketplaceMatch_1.buildWhyThisResult)({
+                    matchType: 'flexible',
+                    slotTime: earliestSlotTime,
+                    requestedTime: params.time,
+                    matchDeltaMinutes: null,
+                    noTimeRequested: true,
+                    fromRelaxedArea: false,
+                    rating: 0,
+                    reviewCount: 0,
+                }),
+            };
+            if (!bestChoice) {
+                bestChoice = candidateChoice;
+            }
+            else {
+                if (candidateChoice.availabilityDensity > bestChoice.availabilityDensity) {
+                    bestChoice = candidateChoice;
+                }
+                else if (candidateChoice.availabilityDensity === bestChoice.availabilityDensity &&
+                    candidateChoice.matchedSlotTime < bestChoice.matchedSlotTime) {
+                    bestChoice = candidateChoice;
+                }
+                else if (candidateChoice.availabilityDensity === bestChoice.availabilityDensity &&
+                    candidateChoice.matchedSlotTime === bestChoice.matchedSlotTime &&
+                    candidateChoice.priceFrom < bestChoice.priceFrom) {
+                    bestChoice = candidateChoice;
+                }
+            }
+            continue;
+        }
+        let bestTimeForService = times[0];
+        let bestDelta = Number.MAX_SAFE_INTEGER;
+        for (const time of times) {
+            const slotMinutes = parseTimeToMinutes(time);
+            if (slotMinutes == null || requestedMinutes == null) {
+                continue;
+            }
+            const delta = Math.abs(slotMinutes - requestedMinutes);
+            if (delta < bestDelta) {
+                bestDelta = delta;
+                bestTimeForService = time;
+            }
+        }
+        const inferredMatchType = toMatchType(bestDelta);
+        const normalizedMatchType = forceSimilarByArea ? 'similar' : inferredMatchType;
+        const staffIds = [...new Set(slots.filter((slot) => slot.time === bestTimeForService).map((slot) => slot.staff_id))];
+        const candidateChoice = {
+            serviceId: service.id,
+            serviceName: service.name,
+            globalServiceTypeId: service.global_type_id ?? params.serviceTypeId,
+            priceFrom: service.price_cents,
+            matchedSlotTime: bestTimeForService,
+            matchType: normalizedMatchType,
+            matchDeltaMinutes: bestDelta,
+            availableStaffIds: staffIds,
+            availabilityDensity,
+            earliestSlotTime,
+            whyThisResult: (0, marketplaceMatch_1.buildWhyThisResult)({
+                matchType: normalizedMatchType,
+                slotTime: bestTimeForService,
+                requestedTime: params.time,
+                matchDeltaMinutes: bestDelta,
+                noTimeRequested: false,
+                fromRelaxedArea: forceSimilarByArea,
+                rating: 0,
+                reviewCount: 0,
+            }),
+        };
+        if (!bestChoice) {
+            bestChoice = candidateChoice;
+            continue;
+        }
+        const rank = (type) => (type === 'exact' ? 0 : type === 'flexible' ? 1 : 2);
+        const candidateRank = rank(candidateChoice.matchType);
+        const currentRank = rank(bestChoice.matchType);
+        if (candidateRank < currentRank) {
+            bestChoice = candidateChoice;
+            continue;
+        }
+        if (candidateRank === currentRank) {
+            const candidateDelta = candidateChoice.matchDeltaMinutes ?? Number.MAX_SAFE_INTEGER;
+            const currentDelta = bestChoice.matchDeltaMinutes ?? Number.MAX_SAFE_INTEGER;
+            if (candidateDelta < currentDelta) {
+                bestChoice = candidateChoice;
+            }
+            else if (candidateDelta === currentDelta && candidateChoice.priceFrom < bestChoice.priceFrom) {
+                bestChoice = candidateChoice;
+            }
+        }
+    }
+    if (!bestChoice)
+        return null;
+    const selectedStaffId = chooseRandomStaffId(bestChoice.availableStaffIds);
+    return {
+        companyId: company.id,
+        slug: company.slug,
+        name: company.name,
+        currency: company.currency,
+        businessType: company.company_type?.name ?? null,
+        businessTypeI18n: toI18nMap(company.company_type?.name_i18n),
+        zoneOrArea: company.state ?? company.address ?? null,
+        city: company.city ?? null,
+        latitude: company.latitude,
+        longitude: company.longitude,
+        thumbnailImage: company.home_hero_image_url || company.logo_url || null,
+        serviceId: bestChoice.serviceId,
+        serviceName: bestChoice.serviceName,
+        globalServiceTypeId: bestChoice.globalServiceTypeId,
+        priceFrom: bestChoice.priceFrom,
+        matchedSlotTime: bestChoice.matchedSlotTime,
+        matchedSlotDate: params.date,
+        matchType: bestChoice.matchType,
+        matchDeltaMinutes: bestChoice.matchDeltaMinutes,
+        whyThisResult: bestChoice.whyThisResult,
+        selectedStaffId,
+        availableStaffIds: bestChoice.availableStaffIds,
+        availabilityDensity: bestChoice.availabilityDensity,
+        earliestSlotTime: bestChoice.earliestSlotTime,
+        distanceKm: buildDistanceKm(referenceCenter, company.latitude, company.longitude),
+        fromRelaxedArea: forceSimilarByArea,
+        rating: 0,
+        reviewCount: 0,
+        score: 0,
+    };
+}
+function scoreAndDecorate(items, hasRequestedTime, hasReferenceCenter, debug) {
+    if (items.length === 0)
+        return [];
+    const maxDensity = Math.max(...items.map((item) => item.availabilityDensity), 1);
+    const priced = items.filter((item) => Number.isFinite(item.priceFrom));
+    const minPrice = priced.length ? Math.min(...priced.map((item) => item.priceFrom)) : 0;
+    const maxPrice = priced.length ? Math.max(...priced.map((item) => item.priceFrom)) : 0;
+    return items.map((item) => {
+        const availabilityQuality = item.matchType === 'exact' ? 1 : item.matchType === 'flexible' ? 0.72 : 0.38;
+        const timeOrDensity = hasRequestedTime
+            ? Math.max(0, 1 - Math.min(item.matchDeltaMinutes ?? 240, 240) / 240)
+            : Math.max(0, Math.min(1, item.availabilityDensity / maxDensity));
+        const distance = hasReferenceCenter
+            ? item.distanceKm == null
+                ? 0.35
+                : Math.max(0, 1 - Math.min(item.distanceKm, 30) / 30)
+            : 0.5;
+        const ratingBase = Math.max(0, Math.min(1, item.rating / 5));
+        const reviewConfidence = Math.max(0, Math.min(1, Math.log10(item.reviewCount + 1) / 2));
+        const rating = ratingBase * 0.7 + reviewConfidence * 0.3;
+        let price = 0.5;
+        if (maxPrice > minPrice) {
+            price = Math.max(0, 1 - (item.priceFrom - minPrice) / (maxPrice - minPrice));
+        }
+        else if (maxPrice === minPrice && maxPrice > 0) {
+            price = 1;
+        }
+        const score = availabilityQuality * 0.4 +
+            timeOrDensity * 0.25 +
+            distance * 0.15 +
+            rating * 0.15 +
+            price * 0.05;
+        return {
+            ...item,
+            score,
+            debugComponents: debug
+                ? {
+                    availabilityQuality,
+                    timeOrDensity,
+                    distance,
+                    rating,
+                    price,
+                }
+                : undefined,
+        };
+    });
+}
+function sortCandidates(items, sort) {
+    const sorted = [...items];
+    sorted.sort((a, b) => {
+        if (sort === 'earliest') {
+            if (a.matchedSlotTime !== b.matchedSlotTime) {
+                return a.matchedSlotTime < b.matchedSlotTime ? -1 : 1;
+            }
+            return b.score - a.score;
+        }
+        if (sort === 'nearest') {
+            const aDist = a.distanceKm == null ? Number.POSITIVE_INFINITY : a.distanceKm;
+            const bDist = b.distanceKm == null ? Number.POSITIVE_INFINITY : b.distanceKm;
+            if (aDist !== bDist)
+                return aDist - bDist;
+            return b.score - a.score;
+        }
+        if (sort === 'rating') {
+            if (a.rating !== b.rating)
+                return b.rating - a.rating;
+            if (a.reviewCount !== b.reviewCount)
+                return b.reviewCount - a.reviewCount;
+            return b.score - a.score;
+        }
+        if (sort === 'price') {
+            if (a.priceFrom !== b.priceFrom)
+                return a.priceFrom - b.priceFrom;
+            return b.score - a.score;
+        }
+        return b.score - a.score;
+    });
+    return sorted;
+}
+function toApiResult(item, serviceTypeId, requestedTime, debug) {
+    const matchClassification = (0, marketplaceMatch_1.toMatchClassification)(item.matchType);
+    const matchLabel = (0, marketplaceMatch_1.toMatchLabel)(matchClassification, { hasRequestedTime: Boolean(requestedTime) });
+    return {
+        companyId: item.companyId,
+        slug: item.slug,
+        name: item.name,
+        currency: item.currency,
+        businessType: item.businessType,
+        businessTypeI18n: item.businessTypeI18n,
+        zoneOrArea: item.zoneOrArea,
+        city: item.city,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        thumbnailImage: item.thumbnailImage,
+        rating: item.rating,
+        reviewCount: item.reviewCount,
+        serviceId: item.serviceId,
+        serviceName: item.serviceName,
+        globalServiceTypeId: item.globalServiceTypeId || serviceTypeId,
+        priceFrom: item.priceFrom,
+        matchedSlotTime: item.matchedSlotTime,
+        matchedSlotDate: item.matchedSlotDate,
+        matchType: item.matchType,
+        matchClassification,
+        matchLabel,
+        matchDeltaMinutes: item.matchDeltaMinutes,
+        whyThisResult: item.whyThisResult,
+        prefill: {
+            source: 'marketplace',
+            companyId: item.companyId,
+            companySlug: item.slug,
+            serviceTypeId,
+            serviceId: item.serviceId,
+            date: item.matchedSlotDate,
+            requestedTime: requestedTime ?? null,
+            selectedSlotTime: item.matchedSlotTime,
+            staffId: item.selectedStaffId,
+            bookingUrlParams: {
+                source: 'marketplace',
+                company_id: item.companyId,
+                date: item.matchedSlotDate,
+                time: item.matchedSlotTime,
+                service_ids: `${item.serviceId}`,
+                staff_id: item.selectedStaffId,
+            },
+        },
+        ...(debug
+            ? {
+                score: item.score,
+                scoreComponents: item.debugComponents,
+                distanceKm: item.distanceKm,
+                availabilityDensity: item.availabilityDensity,
+            }
+            : {}),
+    };
+}
+function toMapPin(item, isPrimaryMatch) {
+    const coordinates = (0, coordinates_1.getValidCoordinates)(item.latitude, item.longitude);
+    if (!coordinates)
+        return null;
+    return {
+        companyId: item.companyId,
+        lat: coordinates.latitude,
+        lng: coordinates.longitude,
+        title: item.name,
+        slug: item.slug,
+        matchType: item.matchType,
+        isPrimaryMatch,
+        businessType: item.businessType,
+        logo: item.thumbnailImage,
+        popup: {
+            name: item.name,
+            currency: item.currency,
+            businessType: item.businessType,
+            businessTypeI18n: item.businessTypeI18n,
+            rating: item.rating,
+            reviewCount: item.reviewCount,
+            matchedSlotTime: item.matchedSlotTime,
+            priceFrom: item.priceFrom,
+        },
+    };
+}
+function dedupeByCompany(items) {
+    const map = new Map();
+    for (const item of items) {
+        const existing = map.get(item.companyId);
+        if (!existing) {
+            map.set(item.companyId, item);
+            continue;
+        }
+        if (item.score > existing.score) {
+            map.set(item.companyId, item);
+        }
+    }
+    return [...map.values()];
+}
+async function searchMarketplace(params) {
+    const startedAt = Date.now();
+    const requestedMinutes = params.time ? parseTimeToMinutes(params.time) : null;
+    const referenceCenter = params.bounds
+        ? {
+            lat: (params.bounds.minLat + params.bounds.maxLat) / 2,
+            lng: (params.bounds.minLng + params.bounds.maxLng) / 2,
+        }
+        : null;
+    try {
+        const primaryCandidates = await MarketplaceRepo.getMarketplaceCandidates({
+            serviceTypeId: params.serviceTypeId,
+            city: params.city,
+            zone: params.zone,
+            q: params.q,
+            searchMode: params.searchMode,
+            bounds: params.bounds,
+            applyPrimaryAreaFilters: true,
+            take: FETCH_CANDIDATE_LIMIT,
+        });
+        const primaryToEvaluate = primaryCandidates.slice(0, PRIMARY_CANDIDATE_EVALUATION_CAP);
+        const primaryEvaluatedRaw = await mapWithConcurrency(primaryToEvaluate, EVALUATION_CONCURRENCY, (candidate) => evaluateCompany(candidate, params, requestedMinutes, referenceCenter, false));
+        const primaryEvaluated = primaryEvaluatedRaw.filter((item) => Boolean(item));
+        let relaxedEvaluated = [];
+        if (params.includeSimilar && requestedMinutes != null) {
+            const relaxedCandidates = await MarketplaceRepo.getMarketplaceCandidates({
+                serviceTypeId: params.serviceTypeId,
+                city: params.city,
+                zone: params.zone,
+                q: params.q,
+                searchMode: params.searchMode,
+                applyPrimaryAreaFilters: false,
+                take: FETCH_CANDIDATE_LIMIT,
+            });
+            const alreadyPresent = new Set(primaryToEvaluate.map((candidate) => candidate.id));
+            const relaxedToEvaluate = relaxedCandidates
+                .filter((candidate) => !alreadyPresent.has(candidate.id))
+                .slice(0, SIMILAR_CANDIDATE_EVALUATION_CAP);
+            const relaxedRaw = await mapWithConcurrency(relaxedToEvaluate, EVALUATION_CONCURRENCY, (candidate) => evaluateCompany(candidate, params, requestedMinutes, referenceCenter, true));
+            relaxedEvaluated = relaxedRaw.filter((item) => Boolean(item));
+        }
+        const allEvaluated = [...primaryEvaluated, ...relaxedEvaluated];
+        const ratingsMap = await MarketplaceRepo.getCompanyRatings(allEvaluated.map((item) => item.companyId));
+        for (const item of allEvaluated) {
+            const rating = ratingsMap.get(item.companyId);
+            item.rating = rating?.rating ?? 0;
+            item.reviewCount = rating?.reviewCount ?? 0;
+            item.whyThisResult = (0, marketplaceMatch_1.buildWhyThisResult)({
+                matchType: item.matchType,
+                slotTime: item.matchedSlotTime,
+                requestedTime: params.time,
+                matchDeltaMinutes: item.matchDeltaMinutes,
+                noTimeRequested: requestedMinutes == null,
+                fromRelaxedArea: item.fromRelaxedArea,
+                rating: item.rating,
+                reviewCount: item.reviewCount,
+            });
+        }
+        const scoredPrimary = scoreAndDecorate(primaryEvaluated, requestedMinutes != null, referenceCenter != null, params.debug);
+        const scoredRelaxed = scoreAndDecorate(relaxedEvaluated, requestedMinutes != null, referenceCenter != null, params.debug);
+        let exactBucket = [];
+        let flexibleBucket = [];
+        let similarBucket = [];
+        if (requestedMinutes == null) {
+            flexibleBucket = scoredPrimary;
+        }
+        else {
+            // TODO(marketplace): Add similar-service-category bucket after validating demand.
+            // TODO(marketplace): Add next-day fallback when same-day supply is insufficient.
+            for (const item of scoredPrimary) {
+                if (item.matchType === 'exact') {
+                    exactBucket.push(item);
+                }
+                else if (item.matchType === 'flexible') {
+                    flexibleBucket.push(item);
+                }
+                else if (params.includeSimilar) {
+                    similarBucket.push(item);
+                }
+            }
+            if (params.includeSimilar) {
+                similarBucket = [...similarBucket, ...scoredRelaxed];
+            }
+        }
+        const orderedPrimary = sortCandidates([...exactBucket, ...flexibleBucket], params.sort);
+        const orderedSimilar = params.includeSimilar ? sortCandidates(dedupeByCompany(similarBucket), params.sort) : [];
+        const totalPrimary = orderedPrimary.length;
+        const totalPages = Math.max(1, Math.ceil(totalPrimary / params.limit));
+        const safePage = Math.min(params.page, totalPages);
+        const startIdx = (safePage - 1) * params.limit;
+        const pagedPrimary = orderedPrimary.slice(startIdx, startIdx + params.limit);
+        const pagedSimilar = orderedSimilar.slice(0, params.limit);
+        const mapPinsByCompany = new Map();
+        for (const item of [...orderedPrimary, ...orderedSimilar]) {
+            const pin = toMapPin(item, !orderedSimilar.some((similar) => similar.companyId === item.companyId));
+            if (pin && !mapPinsByCompany.has(item.companyId)) {
+                mapPinsByCompany.set(item.companyId, pin);
+            }
+        }
+        const searchPayload = {
+            filters: {
+                service_type_id: params.serviceTypeId,
+                city: params.city ?? null,
+                zone: params.zone ?? null,
+                date: params.date,
+                time: params.time ?? null,
+                bounds: params.bounds ?? null,
+                sort: params.sort,
+                search_mode: params.searchMode,
+                q: params.q ?? null,
+                include_similar: params.includeSimilar,
+            },
+            counts: {
+                total_primary: totalPrimary,
+                exact: exactBucket.length,
+                flexible: flexibleBucket.length,
+                similar: orderedSimilar.length,
+            },
+            has_exact_matches: exactBucket.length > 0,
+            pagination: {
+                page: safePage,
+                limit: params.limit,
+            },
+        };
+        await Promise.all([
+            MarketplaceAnalyticsService.trackSearchPerformed(searchPayload),
+            MarketplaceAnalyticsService.trackSearchResultsViewed(searchPayload),
+            requestedMinutes != null && exactBucket.length === 0
+                ? MarketplaceAnalyticsService.trackNoExactMatch(searchPayload)
+                : Promise.resolve(),
+        ]);
+        return {
+            code: 200,
+            error: false,
+            message: 'Marketplace search completed',
+            data: {
+                querySummary: {
+                    serviceTypeId: params.serviceTypeId,
+                    city: params.city ?? null,
+                    zone: params.zone ?? null,
+                    date: params.date,
+                    time: params.time ?? null,
+                    hasRequestedTime: requestedMinutes != null,
+                    bounds: params.bounds ?? null,
+                    sort: params.sort,
+                    page: safePage,
+                    limit: params.limit,
+                    searchMode: params.searchMode,
+                    q: params.q ?? null,
+                    includeSimilar: params.includeSimilar,
+                },
+                results: pagedPrimary.map((item) => toApiResult(item, params.serviceTypeId, params.time, params.debug)),
+                similarBookings: pagedSimilar.map((item) => toApiResult(item, params.serviceTypeId, params.time, params.debug)),
+                mapPins: [...mapPinsByCompany.values()].filter(Boolean),
+                mapProvider: 'mapbox',
+                meta: {
+                    page: safePage,
+                    limit: params.limit,
+                    totalResults: totalPrimary,
+                    totalPages,
+                    counts: {
+                        exact: exactBucket.length,
+                        flexible: flexibleBucket.length,
+                        similar: orderedSimilar.length,
+                    },
+                    diagnostics: {
+                        candidatesFound: primaryCandidates.length,
+                        candidatesEvaluated: primaryToEvaluate.length + (params.includeSimilar ? relaxedEvaluated.length : 0),
+                        evaluationCapHit: primaryCandidates.length > PRIMARY_CANDIDATE_EVALUATION_CAP,
+                        processingMs: Date.now() - startedAt,
+                    },
+                },
+            },
+        };
+    }
+    catch (error) {
+        return {
+            code: 500,
+            error: true,
+            message: 'Failed to run marketplace search',
+            technicalMessage: error?.message || String(error),
+        };
+    }
+}
+async function trackMarketplaceClick(params) {
+    try {
+        const eventName = params.eventName ?? 'marketplace_result_card_clicked';
+        await MarketplaceAnalyticsService.trackEvent(eventName, {
+            companyId: params.companyId ?? null,
+            serviceTypeId: params.serviceTypeId ?? null,
+            date: params.date ?? null,
+            time: params.time ?? null,
+            matchType: params.matchType ?? null,
+            position: params.position ?? null,
+            source: params.source ?? 'marketplace',
+            surface: params.surface ?? null,
+            city: params.city ?? null,
+            zone: params.zone ?? null,
+            hasExactMatches: params.hasExactMatches ?? null,
+            counts: params.counts ?? null,
+            ...(params.metadata ?? {}),
+            q: params.q ?? null,
+        });
+        return {
+            code: 201,
+            error: false,
+            message: 'Marketplace event tracked',
+            data: {
+                tracked: true,
+            },
+        };
+    }
+    catch (error) {
+        return {
+            code: 500,
+            error: true,
+            message: 'Failed to track marketplace click',
+            technicalMessage: error?.message || String(error),
+        };
+    }
+}

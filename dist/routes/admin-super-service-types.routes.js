@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const requireAuth_1 = require("../middlewares/requireAuth");
+const admin_super_service_types_controller_1 = require("../controllers/admin-super-service-types.controller");
+const router = (0, express_1.Router)();
+router.use(requireAuth_1.requireAuth);
+router.use(requireAuth_1.requireSuperAdmin);
+router.get("/service-types", admin_super_service_types_controller_1.getServiceTypes);
+router.post("/service-types", admin_super_service_types_controller_1.createServiceType);
+router.put("/service-types/:id", admin_super_service_types_controller_1.updateServiceType);
+router.delete("/service-types/:id", admin_super_service_types_controller_1.deleteServiceType);
+exports.default = router;

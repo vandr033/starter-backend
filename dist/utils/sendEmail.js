@@ -1,0 +1,496 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.transporter = void 0;
+exports.isTemporaryEmailAddress = isTemporaryEmailAddress;
+exports.sendEmailCode = sendEmailCode;
+exports.sendStaffInviteEmail = sendStaffInviteEmail;
+exports.sendAdminTempPasswordInviteEmail = sendAdminTempPasswordInviteEmail;
+exports.sendCustomerPortalAccessEmail = sendCustomerPortalAccessEmail;
+exports.sendResetPasswordEmail = sendResetPasswordEmail;
+exports.sendStaffTimeOffRequestEmail = sendStaffTimeOffRequestEmail;
+exports.sendGenericEmail = sendGenericEmail;
+exports.sendCustomerMassMessageEmail = sendCustomerMassMessageEmail;
+const logger_1 = require("../config/logger");
+const notification_provider_service_1 = require("../services/notification-provider.service");
+const notificationBranding_1 = require("./notificationBranding");
+// Kept as a small compatibility facade for legacy callers. It does not create
+// a transport at import time and never falls back to a guessed SMTP host.
+exports.transporter = {
+    async sendMail(mailOptions) {
+        const result = await (0, notification_provider_service_1.deliverEmail)(mailOptions);
+        if (result.status === 'FAILED') {
+            const error = new Error(`Email delivery failed: ${result.reason}`);
+            error.notificationResult = result;
+            throw error;
+        }
+        return {
+            messageId: result.providerId,
+            accepted: result.status === 'SENT' ? [mailOptions.to] : [],
+            rejected: result.status === 'SENT' ? [] : [mailOptions.to],
+            response: result.reason,
+            notificationResult: result,
+        };
+    },
+};
+const maskEmail = (email) => {
+    const [local, domain] = email.split("@");
+    if (!local || !domain)
+        return email;
+    if (local.length <= 2)
+        return `${local[0] ?? "*"}*@${domain}`;
+    return `${local.slice(0, 2)}***@${domain}`;
+};
+function isTemporaryEmailAddress(email) {
+    const normalized = (email ?? "").trim().toLowerCase();
+    if (!normalized)
+        return false;
+    return normalized.endsWith("@tmppriconpri.com") || normalized.endsWith("@temp.priconpri.com");
+}
+function temporaryEmailResult() {
+    return { provider: 'email', status: 'SKIPPED', reason: 'TEMPORARY_ADDRESS' };
+}
+function escapeHtml(input) {
+    return input
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+async function resolveEmailBranding(options) {
+    const companyBranding = options?.companyId
+        ? await (0, notificationBranding_1.getCompanyNotificationBranding)(options.companyId)
+        : null;
+    return (0, notificationBranding_1.mergeBranding)(companyBranding, options?.branding);
+}
+async function brandedEmailHtml(params) {
+    return (0, notificationBranding_1.renderBrandedEmail)({
+        title: params.title,
+        bodyHtml: params.bodyHtml,
+        preheader: params.preheader,
+        branding: await resolveEmailBranding(params.options),
+    });
+}
+async function sendEmailCode(email, code, companyId) {
+    if (isTemporaryEmailAddress(email)) {
+        logger_1.logger.info({ event: "email_skipped_temp_address", to: maskEmail(email) }, "Skipping email delivery for temporary address");
+        return 1;
+    }
+    try {
+        const html = await brandedEmailHtml({
+            title: "Código de verificación",
+            preheader: "Tu código de verificación de Priconpri",
+            bodyHtml: `
+        <h2 style="margin-top:0;">¡Hola!</h2>
+        <p>Gracias por usar Priconpri. Para completar tu verificación, utiliza el siguiente código:</p>
+        <div style="background:#fdf2f8;border:2px dashed #9f145b;padding:20px;text-align:center;margin:20px 0;border-radius:10px;">
+          <div style="font-size:32px;font-weight:bold;letter-spacing:5px;color:#9f145b;font-family:monospace;">${escapeHtml(code)}</div>
+        </div>
+        <p><strong>Importante:</strong> Este código expirará en 15 minutos por razones de seguridad.</p>
+        <p>Si no solicitaste este código, puedes ignorar este correo.</p>
+      `,
+        });
+        const info = await exports.transporter.sendMail({
+            to: email,
+            from: process.env.MAIL_FROM,
+            subject: "Código de verificación",
+            html,
+            companyId,
+        });
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        return -1;
+    }
+}
+async function sendStaffInviteEmail(email, otp, inviteLink, companyName, companyId) {
+    try {
+        const info = await exports.transporter.sendMail({
+            to: email,
+            from: process.env.MAIL_FROM,
+            subject: `You've been invited to join ${companyName}`,
+            companyId,
+            html: `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Staff Invitation</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f4f4f4; }
+                        .container { background-color: #ffffff; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                        .header { text-align: center; margin-bottom: 30px; }
+                        .logo { font-size: 24px; font-weight: bold; color: #007bff; }
+                        .code-box { background-color: #f8f9fa; border: 2px dashed #007bff; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px; }
+                        .code { font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #007bff; font-family: monospace; }
+                        .invite-button { display: inline-block; background-color: #007bff; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; margin: 20px 0; }
+                        .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #666; }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <div class="logo">Staff Invitation</div>
+                        </div>
+                        <h2>You've been invited to join ${companyName}!</h2>
+                        <p>An administrator has invited you to join their team. To accept the invitation, click the button below and use this verification code:</p>
+                        <div class="code-box">
+                            <div class="code">${otp}</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <a href="${inviteLink}" class="invite-button">Accept Invitation</a>
+                        </div>
+                        <p>Or copy this link into your browser:</p>
+                        <p style="word-break: break-all; background-color: #f8f9fa; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 12px;">${inviteLink}</p>
+                        <p><strong>Important:</strong> This invitation expires in 24 hours.</p>
+                        <div class="footer">
+                            <p>If you did not expect this invitation, you can safely ignore this email.</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+            `,
+        });
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        console.error('Error sending staff invite email:', error);
+        return -1;
+    }
+}
+async function sendAdminTempPasswordInviteEmail(params) {
+    const { email, temporaryPassword, companyName, companyId, loginUrl } = params;
+    const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/admin/login`;
+    try {
+        const subject = `Acceso temporal a ${companyName}`;
+        const html = await brandedEmailHtml({
+            title: "Invitación al panel",
+            bodyHtml: `
+                <p>Se creó un acceso para <strong>${escapeHtml(companyName)}</strong>.</p>
+                <p>Usa estas credenciales temporales:</p>
+                <ul>
+                    <li><strong>Email:</strong> ${escapeHtml(email)}</li>
+                    <li><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword)}</li>
+                </ul>
+                <p>Al iniciar sesión, deberás cambiar la contraseña antes de poder usar el panel.</p>
+                <p><a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#9f145b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">Ir al login</a></p>
+            `,
+            options: { branding: { companyName } },
+        });
+        const info = await exports.transporter.sendMail({
+            to: email,
+            from: process.env.MAIL_FROM,
+            companyId,
+            subject,
+            html,
+        });
+        logger_1.logger.info({
+            event: "admin_temp_password_invite_sent",
+            to: maskEmail(email),
+            companyName,
+            loginUrl: safeLoginUrl,
+            tempPasswordLength: temporaryPassword.length,
+            messageId: info.messageId,
+            accepted: info.accepted,
+            rejected: info.rejected,
+            response: info.response,
+        }, "Admin temp password invite email sent");
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        logger_1.logger.error({
+            event: "admin_temp_password_invite_failed",
+            to: maskEmail(email),
+            companyName,
+            loginUrl: safeLoginUrl,
+            err: error,
+        }, "Error sending admin temp password invite email");
+        return -1;
+    }
+}
+async function sendCustomerPortalAccessEmail(params) {
+    const { email, companyName, companyId, temporaryPassword, loginUrl } = params;
+    const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/auth/sign-in`;
+    if (isTemporaryEmailAddress(email)) {
+        logger_1.logger.info({ event: "email_skipped_temp_address", to: maskEmail(email) }, "Skipping customer access email for temporary address");
+        return 1;
+    }
+    try {
+        const hasTempPassword = typeof temporaryPassword === "string" && temporaryPassword.length > 0;
+        const subject = hasTempPassword ? `Tu acceso a ${companyName}` : `Accede a tus reservas en ${companyName}`;
+        const html = await brandedEmailHtml({
+            title: hasTempPassword ? "Tu cuenta ya está lista" : "Acceso a tus reservas",
+            bodyHtml: `
+                <p>${hasTempPassword
+                ? `Creamos una cuenta para que puedas revisar tus reservas y pases de <strong>${escapeHtml(companyName)}</strong>.`
+                : `Tu cuenta en <strong>${escapeHtml(companyName)}</strong> ya existe y puedes usarla para revisar tus reservas y pases.`}
+                </p>
+                ${hasTempPassword ? `
+                    <p>Usa estas credenciales temporales:</p>
+                    <ul>
+                        <li><strong>Email:</strong> ${escapeHtml(email)}</li>
+                        <li><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword)}</li>
+                    </ul>
+                    <p>Al iniciar sesión te pediremos cambiar la contraseña.</p>
+                ` : `
+                    <p>Ingresa con tu email habitual. Si no recuerdas tu contraseña, usa la opción de recuperación desde el login.</p>
+                `}
+                <p><a href="${safeLoginUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#9f145b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">Ir al login</a></p>
+            `,
+            options: { branding: { companyName } },
+        });
+        const info = await exports.transporter.sendMail({
+            to: email,
+            from: process.env.MAIL_FROM,
+            companyId,
+            subject,
+            html,
+        });
+        logger_1.logger.info({
+            event: "customer_portal_access_email_sent",
+            to: maskEmail(email),
+            companyName,
+            loginUrl: safeLoginUrl,
+            hasTempPassword,
+            messageId: info.messageId,
+            accepted: info.accepted,
+            rejected: info.rejected,
+            response: info.response,
+        }, "Customer portal access email sent");
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        logger_1.logger.error({
+            event: "customer_portal_access_email_failed",
+            to: maskEmail(email),
+            companyName,
+            loginUrl: safeLoginUrl,
+            hasTempPassword: Boolean(temporaryPassword),
+            err: error,
+        }, "Error sending customer portal access email");
+        return -1;
+    }
+}
+async function sendResetPasswordEmail(user, url) {
+    if (isTemporaryEmailAddress(user.email)) {
+        logger_1.logger.info({ event: "email_skipped_temp_address", to: maskEmail(user.email) }, "Skipping reset password email for temporary address");
+        return;
+    }
+    try {
+        const info = await exports.transporter.sendMail({
+            to: user.email,
+            from: process.env.MAIL_FROM,
+            subject: "Restablecimiento de contraseña",
+            html: `
+              <!DOCTYPE html>
+              <html>
+              <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Restablecimiento de contraseña</title>
+                <style>
+                  body {
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                    background-color: #f4f4f4;
+                  }
+                  .container {
+                    background-color: #ffffff;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                  }
+                  .header {
+                    text-align: center;
+                    margin-bottom: 30px;
+                  }
+                  .logo {
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #dc3545;
+                  }
+                  .reset-button {
+                    display: inline-block;
+                    background-color: #dc3545;
+                    color: white;
+                    padding: 15px 30px;
+                    text-decoration: none;
+                    border-radius: 5px;
+                    font-weight: bold;
+                    margin: 20px 0;
+                    text-align: center;
+                  }
+                  .reset-button:hover {
+                    background-color: #c82333;
+                  }
+                  .warning {
+                    background-color: #fff3cd;
+                    border: 1px solid #ffeaa7;
+                    padding: 15px;
+                    margin: 20px 0;
+                    border-radius: 5px;
+                    color: #856404;
+                  }
+                  .footer {
+                    text-align: center;
+                    margin-top: 30px;
+                    font-size: 12px;
+                    color: #666;
+                  }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <div class="header">
+                    <div class="logo">Restablecimiento de Contraseña</div>
+                  </div>
+                  
+                  <h2>¡Hola ${user.name}!</h2>
+                  <p>Hemos recibido una solicitud para restablecer la contraseña de tu cuenta. Si no realizaste esta solicitud, puedes ignorar este correo de forma segura.</p>
+                  
+                  <p>Para restablecer tu contraseña, haz clic en el siguiente botón:</p>
+                  
+                  <div style="text-align: center;">
+                    <a href="${url}" class="reset-button">Restablecer Contraseña</a>
+                  </div>
+                  
+                  <p>Si el botón no funciona, puedes copiar y pegar el siguiente enlace en tu navegador:</p>
+                  <p style="word-break: break-all; background-color: #f8f9fa; padding: 10px; border-radius: 5px; font-family: monospace;">${url}</p>
+                  
+                  <div class="warning">
+                    <strong>Importante:</strong> Este enlace expirará en 1 hora por razones de seguridad. Si no lo usas en ese tiempo, deberás solicitar un nuevo restablecimiento de contraseña.
+                  </div>
+                  
+                  <p>Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos.</p>
+                  
+                  <div class="footer">
+                    <p> 2025 Tu Empresa. Todos los derechos reservados.</p>
+                  </div>
+                </div>
+              </body>
+              </html>
+            `
+        });
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        return -1;
+    }
+}
+async function sendStaffTimeOffRequestEmail(params) {
+    const { companyId, ownerEmail, ownerName, companyName, staffName, startsAt, endsAt, reason, dashboardUrl, } = params;
+    const startsAtLabel = startsAt.toLocaleString('es-BO', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+    });
+    const endsAtLabel = endsAt.toLocaleString('es-BO', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+    });
+    try {
+        const info = await exports.transporter.sendMail({
+            to: ownerEmail,
+            from: process.env.MAIL_FROM,
+            companyId,
+            subject: `Nueva solicitud de tiempo libre - ${companyName}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+                    <h2>Solicitud de tiempo libre</h2>
+                    <p>Hola ${ownerName},</p>
+                    <p><strong>${staffName}</strong> solicitó tiempo libre en <strong>${companyName}</strong>.</p>
+                    <ul>
+                        <li><strong>Desde:</strong> ${startsAtLabel}</li>
+                        <li><strong>Hasta:</strong> ${endsAtLabel}</li>
+                        <li><strong>Motivo:</strong> ${reason ? reason : 'No especificado'}</li>
+                    </ul>
+                    <p>Puedes revisarlo en el panel:</p>
+                    <p><a href="${dashboardUrl}" target="_blank" rel="noopener noreferrer">${dashboardUrl}</a></p>
+                </div>
+            `,
+        });
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        console.error('Error sending staff time-off request email:', error);
+        return -1;
+    }
+}
+async function sendGenericEmail(to, subject, html, options) {
+    if (isTemporaryEmailAddress(to)) {
+        logger_1.logger.info({ event: "email_skipped_temp_address", to: maskEmail(to), subject }, "Skipping generic email delivery for temporary address");
+        return temporaryEmailResult();
+    }
+    try {
+        const brandedHtml = await brandedEmailHtml({
+            title: subject,
+            bodyHtml: html,
+            options,
+        });
+        return await (0, notification_provider_service_1.deliverEmail)({
+            to,
+            from: process.env.MAIL_FROM,
+            subject,
+            html: brandedHtml,
+            companyId: options?.companyId,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error({ event: 'generic_email_failed', to: maskEmail(to), subject, err: error }, 'Error sending generic email');
+        return { provider: 'email', status: 'FAILED', reason: 'TRANSPORT_FAILED' };
+    }
+}
+async function sendCustomerMassMessageEmail(params) {
+    if (isTemporaryEmailAddress(params.email)) {
+        logger_1.logger.info({ event: "email_skipped_temp_address", to: maskEmail(params.email), companyName: params.companyName }, "Skipping customer mass message email for temporary address");
+        return 1;
+    }
+    const locale = params.locale === 'en' ? 'en' : 'es';
+    const subject = locale === 'en'
+        ? `Message from ${params.companyName}`
+        : `Mensaje de ${params.companyName}`;
+    const title = locale === 'en' ? 'New message for you' : 'Nuevo mensaje para ti';
+    const intro = locale === 'en'
+        ? `You received a message from ${params.companyName}:`
+        : `Recibiste un mensaje de ${params.companyName}:`;
+    const messageHtml = escapeHtml(params.message).replace(/\r?\n/g, '<br/>');
+    try {
+        const html = await brandedEmailHtml({
+            title,
+            bodyHtml: `
+                <p>${intro}</p>
+                <div style="margin-top: 16px; background: #fdf2f8; border-radius: 10px; padding: 14px; border:1px solid #fbcfe8;">${messageHtml}</div>
+            `,
+            options: {
+                companyId: params.companyId,
+                branding: {
+                    companyName: params.companyName,
+                    companyPhonePrefix: params.companyPhonePrefix,
+                    companyPhone: params.companyPhone,
+                    companyLogoUrl: params.companyLogoUrl,
+                },
+            },
+        });
+        const info = await exports.transporter.sendMail({
+            to: params.email,
+            from: process.env.MAIL_FROM,
+            companyId: params.companyId,
+            subject,
+            html,
+        });
+        return info.notificationResult.status === 'SENT' ? 1 : -1;
+    }
+    catch (error) {
+        logger_1.logger.error({
+            event: 'customer_mass_message_email_failed',
+            to: maskEmail(params.email),
+            companyName: params.companyName,
+            err: error,
+        }, 'Error sending customer mass message email');
+        return -1;
+    }
+}

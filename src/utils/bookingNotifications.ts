@@ -606,9 +606,9 @@ function bookingTodayReminderEmailHtml(data: BookingReminderData): string {
 
 // ─── SEND HELPERS (fire-and-forget, never throw) ─────────
 
-async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+async function sendEmail(to: string, subject: string, html: string, companyId: number): Promise<boolean> {
     try {
-        const result = await sendGenericEmail(to, subject, html);
+        const result = await sendGenericEmail(to, subject, html, { companyId });
         return result.status === 'SENT';
     } catch (err) {
         logger.error({ err, to }, "Failed to send booking notification email");
@@ -847,7 +847,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
             "Tu reserva ha sido creada exitosamente. Aquí están los detalles:",
             "#007bff"
         );
-        void sendEmail(data.customerEmail, `Reserva confirmada – ${data.companyName}`, brandEmail(data, "Reserva Confirmada", html));
+        void sendEmail(data.customerEmail, `Reserva confirmada – ${data.companyName}`, brandEmail(data, "Reserva Confirmada", html), data.companyId);
     }
 
     if (audience.customer && doWa && data.customerPhone) {
@@ -882,7 +882,7 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
                             ? `Nueva reserva asignada – ${data.companyName}`
                             : `Nueva reserva en tu tienda – ${data.companyName}`;
                     const html = bookingInternalEmailHtml(data, recipient);
-                    void sendEmail(recipient.email, subject, brandEmail(data, subject, html));
+                    void sendEmail(recipient.email, subject, brandEmail(data, subject, html), data.companyId);
                 }
 
                 if (doWa && recipient.phone) {
@@ -964,7 +964,7 @@ export async function notifyBookingConfirmedForStaff(data: BookingNotificationDa
                     heading: "Reserva confirmada asignada",
                     message: "La reserva fue confirmada. Aquí están los datos:",
                 });
-                void sendEmail(recipient.email, `Reserva confirmada asignada – ${data.companyName}`, brandEmail(data, "Reserva confirmada asignada", html));
+                void sendEmail(recipient.email, `Reserva confirmada asignada – ${data.companyName}`, brandEmail(data, "Reserva confirmada asignada", html), data.companyId);
             }
 
             if (doWa && recipient.phone) {
@@ -1000,7 +1000,7 @@ export async function notifyBookingUpdated(data: BookingNotificationData): Promi
             "Tu reserva ha sido modificada. Revisa los nuevos detalles:",
             "#f59e0b"
         );
-        void sendEmail(data.customerEmail, `Reserva actualizada – ${data.companyName}`, brandEmail(data, "Reserva Actualizada", html));
+        void sendEmail(data.customerEmail, `Reserva actualizada – ${data.companyName}`, brandEmail(data, "Reserva Actualizada", html), data.companyId);
     }
 
     if (doWa && data.customerPhone) {
@@ -1029,7 +1029,7 @@ export async function notifyBookingCancelled(data: BookingNotificationData): Pro
             "Tu reserva ha sido cancelada. Si esto fue un error, por favor contáctanos para reagendar.",
             "#dc3545"
         );
-        void sendEmail(data.customerEmail, `Reserva cancelada – ${data.companyName}`, brandEmail(data, "Reserva Cancelada", html));
+        void sendEmail(data.customerEmail, `Reserva cancelada – ${data.companyName}`, brandEmail(data, "Reserva Cancelada", html), data.companyId);
     }
 
     if (doWa && data.customerPhone) {
@@ -1077,7 +1077,7 @@ export async function notifyBookingTodayReminder(
             locale === "en"
                 ? `Today's appointment reminder – ${data.companyName}`
                 : `Recordatorio de cita de hoy – ${data.companyName}`;
-        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
+        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html), data.companyId);
         return ok
             ? { sent: true, channel: "EMAIL", status: 'SENT' }
             : { sent: false, status: 'FAILED', reason: "EMAIL_SEND_FAILED" };
@@ -1115,7 +1115,7 @@ export async function notifyBookingNoShow(
                 ? `No-show notice – ${data.companyName}`
                 : `Aviso de no asistencia – ${data.companyName}`;
         const html = bookingNoShowEmailHtml(data, message);
-        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
+        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html), data.companyId);
         return ok ? { sent: true, channel: "EMAIL", status: 'SENT' } : { sent: false, status: 'FAILED', reason: "EMAIL_SEND_FAILED" };
     }
 
@@ -1133,7 +1133,7 @@ export async function notifyBookingNoShow(
                 ? `No-show notice – ${data.companyName}`
                 : `Aviso de no asistencia – ${data.companyName}`;
         const html = bookingNoShowEmailHtml(data, message);
-        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html));
+        const ok = await sendEmail(customerEmail, subject, brandEmail(data, subject, html), data.companyId);
         return ok ? { sent: true, channel: "EMAIL", status: 'SENT' } : { sent: false, status: 'FAILED', reason: "EMAIL_SEND_FAILED" };
     }
 

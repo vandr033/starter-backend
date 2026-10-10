@@ -83,7 +83,8 @@ async function brandedEmailHtml(params: {
 
 export async function sendEmailCode(
   email: string,
-  code: string
+  code: string,
+  companyId?: number,
 ) {
   if (isTemporaryEmailAddress(email)) {
     logger.info({ event: "email_skipped_temp_address", to: maskEmail(email) }, "Skipping email delivery for temporary address");
@@ -108,6 +109,7 @@ export async function sendEmailCode(
       from: process.env.MAIL_FROM!,
       subject: "Código de verificación",
       html,
+      companyId,
     });  
     return info.notificationResult.status === 'SENT' ? 1 : -1;
     } catch (error) {
@@ -120,13 +122,15 @@ export async function sendStaffInviteEmail(
     email: string,
     otp: string,
     inviteLink: string,
-    companyName: string
+    companyName: string,
+    companyId?: number,
 ) {
     try {
         const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
             subject: `You've been invited to join ${companyName}`,
+            companyId,
             html: `
                 <!DOCTYPE html>
                 <html>
@@ -179,10 +183,11 @@ export async function sendStaffInviteEmail(
 export async function sendAdminTempPasswordInviteEmail(params: {
     email: string;
     temporaryPassword: string;
-    companyName: string;
-    loginUrl?: string;
+        companyName: string;
+        companyId?: number;
+        loginUrl?: string;
 }) {
-    const { email, temporaryPassword, companyName, loginUrl } = params;
+    const { email, temporaryPassword, companyName, companyId, loginUrl } = params;
     const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/admin/login`;
 
     try {
@@ -204,6 +209,7 @@ export async function sendAdminTempPasswordInviteEmail(params: {
         const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
+            companyId,
             subject,
             html,
         });
@@ -240,10 +246,11 @@ export async function sendAdminTempPasswordInviteEmail(params: {
 export async function sendCustomerPortalAccessEmail(params: {
     email: string;
     companyName: string;
+    companyId?: number;
     temporaryPassword?: string;
     loginUrl?: string;
 }) {
-    const { email, companyName, temporaryPassword, loginUrl } = params;
+    const { email, companyName, companyId, temporaryPassword, loginUrl } = params;
     const safeLoginUrl = loginUrl || `${process.env.FRONTEND_URL || "http://localhost:3000"}/auth/sign-in`;
 
     if (isTemporaryEmailAddress(email)) {
@@ -278,6 +285,7 @@ export async function sendCustomerPortalAccessEmail(params: {
         const info = await transporter.sendMail({
             to: email,
             from: process.env.MAIL_FROM!,
+            companyId,
             subject,
             html,
         });
@@ -423,6 +431,7 @@ export async function sendResetPasswordEmail(user: User, url: string){
 }
 
 export async function sendStaffTimeOffRequestEmail(params: {
+    companyId?: number;
     ownerEmail: string;
     ownerName: string;
     companyName: string;
@@ -433,6 +442,7 @@ export async function sendStaffTimeOffRequestEmail(params: {
     dashboardUrl: string;
 }) {
     const {
+        companyId,
         ownerEmail,
         ownerName,
         companyName,
@@ -456,6 +466,7 @@ export async function sendStaffTimeOffRequestEmail(params: {
         const info = await transporter.sendMail({
             to: ownerEmail,
             from: process.env.MAIL_FROM!,
+            companyId,
             subject: `Nueva solicitud de tiempo libre - ${companyName}`,
             html: `
                 <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
@@ -503,6 +514,7 @@ export async function sendGenericEmail(
             from: process.env.MAIL_FROM!,
             subject,
             html: brandedHtml,
+            companyId: options?.companyId,
         });
     } catch (error) {
         logger.error(
@@ -562,6 +574,7 @@ export async function sendCustomerMassMessageEmail(params: {
         const info = await transporter.sendMail({
             to: params.email,
             from: process.env.MAIL_FROM!,
+            companyId: params.companyId,
             subject,
             html,
         });

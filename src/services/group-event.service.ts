@@ -5,11 +5,13 @@ import { MensajeApi } from '../types/MensajeApi';
 import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { sanitizeRichText } from '../utils/richText';
 import { parseDateTimeInTimeZone } from '../utils/timezone';
+import * as CategoryRepo from '../repositories/category.repo';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface CreateGroupEventInput {
     title: string;
+    category_id: number;
     slug?: string;
     description?: string | null;
     no_availability_message?: string | null;
@@ -30,6 +32,7 @@ export interface CreateGroupEventInput {
 
 export interface UpdateGroupEventInput {
     title?: string;
+    category_id?: number;
     slug?: string;
     description?: string | null;
     no_availability_message?: string | null;
@@ -136,6 +139,10 @@ export async function createGroupEvent(companyId: number, userId: string, input:
         return { code: 403, error: true, message: 'Group events require Business plan or higher' };
     }
 
+    if (!(await CategoryRepo.getCategoryById(input.category_id, companyId))) {
+        return { code: 400, error: true, message: 'Category not found for this company' };
+    }
+
     const slugSource = input.slug?.trim() || input.title;
     const slug = await resolveUniqueEventSlug(companyId, slugSource);
 
@@ -169,6 +176,7 @@ export async function createGroupEvent(companyId: number, userId: string, input:
     const event = await prisma.groupEvent.create({
         data: {
             company_id: companyId,
+            category_id: input.category_id,
             title: input.title,
             slug,
             description: sanitizeRichText(input.description) ?? null,
@@ -224,6 +232,12 @@ export async function updateGroupEvent(companyId: number, eventId: number, input
     const updateData: Prisma.GroupEventUpdateInput = {};
 
     if (input.title !== undefined) updateData.title = input.title;
+    if (input.category_id !== undefined) {
+        if (!(await CategoryRepo.getCategoryById(input.category_id, companyId))) {
+            return { code: 400, error: true, message: 'Category not found for this company' };
+        }
+        updateData.category = { connect: { id: input.category_id } };
+    }
     if (input.slug !== undefined || input.title !== undefined) {
         const slugSource = input.slug?.trim() || input.title || existing.title;
         updateData.slug = await resolveUniqueEventSlug(companyId, slugSource, eventId);
@@ -365,6 +379,7 @@ export async function listGroupEvents(companyId: number, filters?: {
     const events = await prisma.groupEvent.findMany({
         where,
         include: {
+            category: { select: { id: true, name: true, slug: true, position: true } },
             staff_assignments: {
                 include: { staff_profile: { select: { id: true, display_name: true, image_url: true } } },
             },
@@ -410,6 +425,7 @@ async function getEventWithRelations(eventId: number, companyId: number) {
     const event = await prisma.groupEvent.findFirst({
         where: { id: eventId, company_id: companyId, deleted_at: null },
         include: {
+            category: { select: { id: true, name: true, slug: true, position: true } },
             staff_assignments: {
                 include: { staff_profile: { select: { id: true, display_name: true, image_url: true } } },
             },

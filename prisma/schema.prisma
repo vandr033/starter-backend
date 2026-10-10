@@ -124,6 +124,7 @@ model Company {
   restaurant_shift_closeouts               RestaurantShiftCloseout[]
   restaurant_shift_closeout_adjustments    RestaurantShiftCloseoutAdjustment[]
   upload_intents                           UploadIntent[]
+  demo_sessions                            DemoSession[]
 
   @@index([availableUntil], map: "company_available_until_idx")
   @@index([plan, billingCycle], map: "company_plan_billing_cycle_idx")
@@ -1091,6 +1092,7 @@ model User {
   restaurant_closeout_reopeners            RestaurantShiftCloseout[]                @relation("RestaurantCloseoutReopenedBy")
   restaurant_closeout_adjusters            RestaurantShiftCloseoutAdjustment[]      @relation("RestaurantCloseoutAdjustmentActor")
   restaurant_customer_profiles_as_waiter   RestaurantCustomerProfile[]              @relation("RestaurantCustomerPreferredWaiter")
+  demo_sessions                            DemoSession[]
 
   @@map("user")
 }
@@ -1406,6 +1408,8 @@ model Category {
   company             Company            @relation(fields: [company_id], references: [id])
   global_service_type GlobalServiceType? @relation(fields: [global_service_type_id], references: [id])
   services            Service[]
+  group_events        GroupEvent[]
+  group_classes       GroupClass[]
 
   @@unique([company_id, slug])
   @@index([global_service_type_id])
@@ -2088,6 +2092,23 @@ model Session {
 
   @@index([userId], map: "session_userId_fkey")
   @@map("session")
+}
+
+model DemoSession {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  profile   String    @db.VarChar(32)
+  companyId Int       @map("company_id")
+  userId    String    @map("user_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, expiresAt], map: "demo_session_company_expires_idx")
+  @@index([userId, expiresAt], map: "demo_session_user_expires_idx")
+  @@map("demo_session")
 }
 
 model Account {
@@ -2825,6 +2846,7 @@ enum AccountVerificationStatus {
 model GroupEvent {
   id                             Int             @id @default(autoincrement())
   company_id                     Int
+  category_id                    Int
   title                          String          @db.VarChar(255)
   slug                           String          @db.VarChar(255)
   description                    String?         @db.Text
@@ -2848,6 +2870,7 @@ model GroupEvent {
   deleted_at                     DateTime?
 
   company                            Company                         @relation(fields: [company_id], references: [id])
+  category                           Category                        @relation(fields: [category_id], references: [id])
   created_by                         User?                           @relation("GroupEventCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
   staff_assignments                  GroupStaffAssignment[]
   bookings                           GroupEventBooking[]
@@ -2861,6 +2884,7 @@ model GroupEvent {
   @@index([company_id, status])
   @@index([company_id, status, is_private])
   @@index([company_id, start_at])
+  @@index([category_id])
   @@index([created_by_user_id])
   @@map("group_event")
 }
@@ -2870,6 +2894,7 @@ model GroupEvent {
 model GroupClass {
   id                       Int              @id @default(autoincrement())
   company_id               Int
+  category_id              Int
   title                    String           @db.VarChar(255)
   slug                     String           @db.VarChar(255)
   description              String?          @db.Text
@@ -2895,6 +2920,7 @@ model GroupClass {
   deleted_at               DateTime?
 
   company                   Company                            @relation(fields: [company_id], references: [id])
+  category                  Category                           @relation(fields: [category_id], references: [id])
   created_by                User?                              @relation("GroupClassCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
   sessions                  GroupClassSession[]
   staff_assignments         GroupStaffAssignment[]
@@ -2904,6 +2930,7 @@ model GroupClass {
 
   @@unique([company_id, slug])
   @@index([company_id, status])
+  @@index([category_id])
   @@index([created_by_user_id])
   @@map("group_class")
 }

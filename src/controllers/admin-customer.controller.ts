@@ -3,8 +3,15 @@ import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import * as CustomerService from '../services/customer.service';
 import { companyHasCapability } from '../services/company-entitlements.service';
 
-function requiresAdvancedCustomerFilters(segment?: string): boolean {
-    return Boolean(segment && segment !== 'ALL');
+function parseCategoryId(value: unknown): number | null | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+    const categoryId = Number(value);
+    return Number.isSafeInteger(categoryId) && categoryId > 0 ? categoryId : null;
+}
+
+function requiresAdvancedCustomerFilters(segment?: string, categoryId?: number): boolean {
+    return Boolean((segment && segment !== 'ALL') || categoryId);
 }
 
 export async function listCustomers(req: AuthenticatedRequest, res: Response) {
@@ -12,8 +19,13 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
         const companyId = (req as any).companyID;
         const search = req.query.search as string | undefined;
         const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
+        const categoryId = parseCategoryId(req.query.category_id);
 
-        if (requiresAdvancedCustomerFilters(segment)) {
+        if (categoryId === null) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid category ID' });
+        }
+
+        if (requiresAdvancedCustomerFilters(segment, categoryId)) {
             const hasCrmPro = await companyHasCapability(companyId, 'CRM_PRO');
             if (!hasCrmPro) {
                 return res.status(403).json({
@@ -28,10 +40,15 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
             }
         }
 
+        if (categoryId && !(await CustomerService.companyHasCustomerCategory(companyId, categoryId))) {
+            return res.status(400).json({ code: 400, error: true, message: 'Category not found for this company' });
+        }
+
         const customers = await CustomerService.listCustomers(
             companyId,
             search || undefined,
             segment,
+            categoryId,
         );
 
         return res.json({ data: customers });
@@ -133,11 +150,20 @@ export async function exportCustomers(req: AuthenticatedRequest, res: Response) 
         const companyId = (req as any).companyID;
         const search = req.query.search as string | undefined;
         const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
+        const categoryId = parseCategoryId(req.query.category_id);
         const requestedByUserId = req.authUser?.id;
+
+        if (categoryId === null) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid category ID' });
+        }
+        if (categoryId && !(await CustomerService.companyHasCustomerCategory(companyId, categoryId))) {
+            return res.status(400).json({ code: 400, error: true, message: 'Category not found for this company' });
+        }
 
         const result = await CustomerService.exportCustomers(companyId, {
             search: search || undefined,
             segment,
+            categoryId,
             requestedByUserId,
         });
 
@@ -202,12 +228,14 @@ export async function downloadImportTemplate(req: AuthenticatedRequest, res: Res
 export async function sendMassMessage(req: AuthenticatedRequest, res: Response) {
     try {
         const companyId = (req as any).companyID;
-        const { message, search, segment, idempotency_key } = req.body as {
+        const { message, search, segment, idempotency_key, category_id } = req.body as {
             message?: string;
             search?: string;
             segment?: string;
+            category_id?: number | string;
             idempotency_key?: string;
         };
+        const categoryId = parseCategoryId(category_id);
 
         if (!companyId) {
             return res.status(400).json({
@@ -217,10 +245,15 @@ export async function sendMassMessage(req: AuthenticatedRequest, res: Response) 
             });
         }
 
+        if (categoryId === null) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid category ID' });
+        }
+
         const result = await CustomerService.sendMassCustomerMessage(companyId, {
             message: message || '',
             search: search || '',
             segment: CustomerService.normalizeCustomerSegment(segment),
+            categoryId,
             idempotencyKey: idempotency_key,
         });
 

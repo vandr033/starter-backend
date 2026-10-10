@@ -19,6 +19,7 @@ import {
 } from './outbound-message.repository';
 import { hashDedupeKey } from './outbound-message.service';
 import { registerWhatsappWorkerWakeup } from './whatsapp-worker-signals';
+import { isDemoCompanyId } from './demo-session.service';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_LEASE_MS = 120_000;
@@ -359,6 +360,11 @@ export class WhatsappWorker {
 
   private async processClaimedJob(job: ClaimedOutboundJob, mode: WhatsappProviderAvailability['mode']): Promise<boolean> {
     const current = this.now();
+    if (job.company_id != null && await isDemoCompanyId(job.company_id)) {
+      await this.repository.markExpired(job.id, this.id, 'DEMO_READ_ONLY');
+      this.log.warn({ event: 'whatsapp_demo_job_skipped', jobId: job.id, companyId: job.company_id }, 'Skipped WhatsApp outbox job for a demo tenant');
+      return true;
+    }
     if (job.expires_at && job.expires_at.getTime() <= current.getTime()) {
       await this.repository.markExpired(job.id, this.id);
       return true;

@@ -29,6 +29,8 @@ import {
   mergeBranding,
   type NotificationBranding,
 } from '../utils/notificationBranding';
+import { isDemoCompanyId } from './demo-session.service';
+import { isDemoRequest } from './demo-request-context';
 
 export type WhatsappEnqueueStatus = 'QUEUED' | 'DUPLICATE' | 'SKIPPED' | 'REJECTED';
 export type WhatsappEnqueueLifecycleStatus = OutboundMessageStatus | 'SKIPPED';
@@ -200,12 +202,24 @@ function getProviderState(dependencies?: WhatsappQueueDependencies) {
   return dependencies?.providerState ?? getWahaProviderState();
 }
 
+async function isDemoCompany(companyId?: number): Promise<boolean> {
+  return isDemoRequest() || (companyId != null && await isDemoCompanyId(companyId));
+}
+
+function isDemoPhoneNumber(value: string): boolean {
+  const digits = value.replace(/\D/g, '');
+  return /^0{8,}$/.test(digits);
+}
+
 export async function queueWhatsappText(
   recipient: string,
   text: string,
   options: WhatsappQueueOptions = {},
   dependencies?: WhatsappQueueDependencies,
 ): Promise<WhatsappEnqueueResult> {
+  if (await isDemoCompany(options.companyId) || isDemoPhoneNumber(recipient)) {
+    return { accepted: false, status: 'SKIPPED', reason: 'DEMO_READ_ONLY' };
+  }
   const providerState = getProviderState(dependencies);
   if (providerState.mode === 'disabled') {
     logger.info(
@@ -284,6 +298,9 @@ export async function queueWhatsappImage(
   options: WhatsappImageQueueOptions = {},
   dependencies?: WhatsappQueueDependencies,
 ): Promise<WhatsappEnqueueResult> {
+  if (await isDemoCompany(options.companyId) || isDemoPhoneNumber(recipient)) {
+    return { accepted: false, status: 'SKIPPED', reason: 'DEMO_READ_ONLY' };
+  }
   const providerState = getProviderState(dependencies);
   if (providerState.mode === 'disabled') {
     logger.info(
@@ -374,6 +391,18 @@ export async function queueWhatsappBatch(
   dependencies?: WhatsappQueueDependencies,
 ): Promise<WhatsappBatchEnqueueResult> {
   const total = items.length;
+  if (await isDemoCompany(options.companyId)) {
+    return {
+      accepted: false,
+      status: 'SKIPPED',
+      total,
+      queued: 0,
+      duplicates: 0,
+      rejected: 0,
+      skipped: total,
+      reason: 'DEMO_READ_ONLY',
+    };
+  }
   const providerState = getProviderState(dependencies);
   if (providerState.mode === 'disabled') {
     logger.info(

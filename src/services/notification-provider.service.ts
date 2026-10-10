@@ -1,5 +1,7 @@
 import nodemailer from 'nodemailer';
 import { logger } from '../config/logger';
+import { isDemoCompanyId } from './demo-session.service';
+import { isDemoRequest } from './demo-request-context';
 
 export type NotificationProviderMode = 'disabled' | 'sink' | 'remote';
 export type NotificationDeliveryStatus = 'SENT' | 'SKIPPED' | 'FAILED';
@@ -10,7 +12,8 @@ export type NotificationDeliveryReason =
   | 'PROVIDER_NOT_CONFIGURED'
   | 'TRANSPORT_FAILED'
   | 'INVALID_RECIPIENT'
-  | 'TEMPORARY_ADDRESS';
+  | 'TEMPORARY_ADDRESS'
+  | 'DEMO_READ_ONLY';
 
 export interface EmailProviderState {
   enabled: boolean;
@@ -31,6 +34,7 @@ export interface EmailMessage {
   from?: string;
   subject: string;
   html: string;
+  companyId?: number;
 }
 
 export function isEmailDeliverySuccessful(result: unknown): boolean {
@@ -161,8 +165,17 @@ export async function deliverEmail(
   message: EmailMessage,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<EmailDeliveryResult> {
+  const normalizedRecipient = normalize(message.to);
+  if (
+    isDemoRequest()
+    || (message.companyId != null && await isDemoCompanyId(message.companyId))
+    || normalizedRecipient.endsWith('@demo.priconpri.invalid')
+  ) {
+    return { provider: 'email', status: 'SKIPPED', reason: 'DEMO_READ_ONLY' };
+  }
+
   const state = getEmailProviderState(env);
-  const recipient = normalize(message.to);
+  const recipient = normalizedRecipient;
 
   if (!recipient || !recipient.includes('@')) {
     const result: EmailDeliveryResult = {

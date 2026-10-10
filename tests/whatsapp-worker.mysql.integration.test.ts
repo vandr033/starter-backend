@@ -126,6 +126,19 @@ async function moveSemanticJobToProcessing(jobId: number, lockOwner: string, now
   });
 }
 
+async function getTestCategoryId(companyId: number): Promise<number> {
+  const category = await prisma.category.findFirst({
+    where: { company_id: companyId, deleted_at: null },
+    select: { id: true },
+  });
+  if (category) return category.id;
+  const created = await prisma.category.create({
+    data: { company_id: companyId, name: 'Integration tests', slug: `integration-${Date.now()}` },
+    select: { id: true },
+  });
+  return created.id;
+}
+
 async function createManualEventCase(
   companyId: number,
   label: string,
@@ -133,9 +146,11 @@ async function createManualEventCase(
   endAt: Date,
 ): Promise<void> {
   const unique = `${Date.now()}-${manualEventIds.length}`;
+  const categoryId = await getTestCategoryId(companyId);
   const event = await prisma.groupEvent.create({
     data: {
       company_id: companyId,
+      category_id: categoryId,
       title: `Manual mass-message ${label}`,
       slug: `manual-mass-message-${label}-${unique}`,
       is_free: true,
@@ -315,9 +330,11 @@ test('real MySQL manual event mass messages stay queued after the event and deli
   assert.ok(company);
 
   const now = new Date();
+  const categoryId = await getTestCategoryId(company.id);
   const event = await prisma.groupEvent.create({
     data: {
       company_id: company.id,
+      category_id: categoryId,
       title: 'Manual mass-message regression',
       slug: `manual-mass-message-regression-${Date.now()}`,
       is_free: true,

@@ -1,0 +1,15 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const requireAuth_1 = require("../middlewares/requireAuth");
+const validate_1 = require("../middlewares/validate");
+const super_admin_product_requests_controller_1 = require("../controllers/super-admin-product-requests.controller");
+const product_access_requests_schema_1 = require("../schemas/product-access-requests.schema");
+const router = (0, express_1.Router)();
+router.use(requireAuth_1.requireAuth);
+router.use(requireAuth_1.requireSuperAdmin);
+router.get('/product-requests', super_admin_product_requests_controller_1.getProductAccessRequests);
+router.post('/product-requests/:id/approve', (0, validate_1.validate)(product_access_requests_schema_1.resolveProductAccessRequestSchema), super_admin_product_requests_controller_1.approveRequest);
+router.post('/product-requests/:id/reject', (0, validate_1.validate)(product_access_requests_schema_1.resolveProductAccessRequestSchema), super_admin_product_requests_controller_1.rejectRequest);
+router.post('/product-requests/:id/cancel', (0, validate_1.validate)(product_access_requests_schema_1.resolveProductAccessRequestSchema), super_admin_product_requests_controller_1.cancelRequest);
+exports.default = router;

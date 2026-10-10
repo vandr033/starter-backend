@@ -1,0 +1,1634 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getAvailableSlots = getAvailableSlots;
+exports.createBooking = createBooking;
+exports.getAvailableDates = getAvailableDates;
+exports.createCustomerBooking = createCustomerBooking;
+exports.createPublicBooking = createPublicBooking;
+const BookingRepo = __importStar(require("../repositories/booking.repo"));
+const client_1 = require("../prisma/client");
+const bookingNotifications_1 = require("../utils/bookingNotifications");
+const client_2 = require("@prisma/client");
+const MarketplaceAnalyticsService = __importStar(require("./marketplace-analytics.service"));
+const company_entitlements_service_1 = require("./company-entitlements.service");
+const plan_enforcement_service_1 = require("./plan-enforcement.service");
+const service_pricing_service_1 = require("./service-pricing.service");
+const timezone_1 = require("../utils/timezone");
+const upload_intent_service_1 = require("./upload-intent.service");
+const upload_errors_1 = require("../utils/upload-errors");
+const storage_service_1 = require("./storage.service");
+function getSlotSearchDurationMinutes(services) {
+    // Multi-session services are booked one session at a time in checkout,
+    // so slot search must use the per-session duration for that flow.
+    if (services.length === 1 && services[0]?.is_multi_session) {
+        return services[0].session_duration_minutes || services[0].duration_minutes;
+    }
+    return services.reduce((sum, service) => sum + service.duration_minutes, 0);
+}
+/**
+ * Validate that the chosen payment method is allowed by company settings.
+ * Returns an error message if not allowed, or null if OK.
+ */
+async function validatePaymentMethod(companyId, paymentMethod) {
+    if (paymentMethod === 'NONE')
+        return null;
+    const settings = await client_1.prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { allow_cash_payment: true, allow_qr_payment: true },
+    });
+    if (!settings)
+        return null; // No settings = allow all
+    if (paymentMethod === 'CASH' && !settings.allow_cash_payment) {
+        return 'El pago en efectivo no está habilitado para este negocio.';
+    }
+    if (paymentMethod === 'QR' && !settings.allow_qr_payment) {
+        return 'El pago por QR no está habilitado para este negocio.';
+    }
+    return null;
+}
+async function resolveBookingFlowSettings(companyId) {
+    const [settings, canCustomizeFlow] = await Promise.all([
+        client_1.prisma.companySettings.findUnique({
+            where: { company_id: companyId },
+            select: {
+                require_comprobante_for_qr: true,
+                auto_confirm_bookings: true,
+                allow_cash_payment: true,
+                allow_qr_payment: true,
+            },
+        }),
+        (0, plan_enforcement_service_1.isFeatureEnabledForCompany)(companyId, 'BOOKING_FLOW_CUSTOMIZATION'),
+    ]);
+    return {
+        requireComprobante: canCustomizeFlow ? (settings?.require_comprobante_for_qr ?? true) : true,
+        autoConfirm: canCustomizeFlow ? (settings?.auto_confirm_bookings ?? true) : true,
+        allowCash: settings?.allow_cash_payment ?? true,
+        allowQr: settings?.allow_qr_payment ?? true,
+    };
+}
+function shouldRequireQrProof(settings) {
+    return settings.requireComprobante && !(settings.allowQr && !settings.allowCash);
+}
+function buildServiceSnapshots(services, promotionsEnabled) {
+    return services.map((service, index) => {
+        const pricing = (0, service_pricing_service_1.resolveEffectiveServicePrice)({
+            priceCents: service.price_cents,
+            promoPriceCents: service.promo_price_cents ?? null,
+            promoStartsAt: service.promo_starts_at ?? null,
+            promoEndsAt: service.promo_ends_at ?? null,
+            promoLabel: service.promo_label ?? null,
+            promotionsEnabled,
+        });
+        return {
+            service_id: service.id,
+            service_name_snapshot: service.name,
+            price_cents_snapshot: pricing.finalPriceCents,
+            regular_price_cents_snapshot: pricing.regularPriceCents,
+            promo_applied_snapshot: pricing.promoApplied,
+            promo_label_snapshot: pricing.promoLabel,
+            duration_minutes_snapshot: service.duration_minutes,
+            position: index,
+        };
+    });
+}
+/**
+ * Validate that the booking time respects advance booking limits.
+ * Returns an error message if outside allowed window, or null if OK.
+ */
+async function validateAdvanceBookingLimits(companyId, startAt, options) {
+    const settings = await client_1.prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: { max_advance_booking_days: true, min_advance_booking_minutes: true },
+    });
+    if (!settings)
+        return null;
+    const now = new Date();
+    const diffMs = startAt.getTime() - now.getTime();
+    if (settings.min_advance_booking_minutes != null) {
+        const minMs = settings.min_advance_booking_minutes * 60 * 1000;
+        if (diffMs < minMs) {
+            return `La reserva debe hacerse con al menos ${settings.min_advance_booking_minutes} minuto(s) de anticipación.`;
+        }
+    }
+    if (!options?.ignoreMaxAdvanceDays && settings.max_advance_booking_days != null) {
+        const maxMs = settings.max_advance_booking_days * 24 * 60 * 60 * 1000;
+        if (diffMs > maxMs) {
+            return `La reserva no puede hacerse con más de ${settings.max_advance_booking_days} día(s) de anticipación.`;
+        }
+    }
+    return null;
+}
+function toAnalyticsSource(bookingSource) {
+    switch (bookingSource) {
+        case client_2.BookingSource.MARKETPLACE:
+            return 'marketplace';
+        case client_2.BookingSource.ADMIN:
+            return 'admin';
+        case client_2.BookingSource.MANUAL:
+            return 'manual';
+        case client_2.BookingSource.SALON_SITE:
+        default:
+            return 'salon_site';
+    }
+}
+/**
+ * Parse time string "HH:MM" to minutes since midnight
+ */
+function timeToMinutes(time) {
+    const [hours, minutes] = time.split(':').map(Number);
+    return hours * 60 + minutes;
+}
+/**
+ * Convert minutes since midnight to "HH:MM" format
+ */
+function minutesToTime(minutes) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+}
+function parseDateOnlyParts(date) {
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match)
+        return null;
+    return {
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3]),
+    };
+}
+function addDaysToDateString(date, days) {
+    const parts = parseDateOnlyParts(date);
+    if (!parts)
+        return date;
+    const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12, 0, 0));
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+}
+function getDateKeyAndMinutesInTimeZone(date, timeZone) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    }).formatToParts(date);
+    const value = (type) => parts.find((part) => part.type === type)?.value || '00';
+    return {
+        dateKey: `${value('year')}-${value('month')}-${value('day')}`,
+        minutes: Number(value('hour')) * 60 + Number(value('minute')),
+    };
+}
+function getDayOfWeekFromDateKey(dateKey) {
+    const parts = parseDateOnlyParts(dateKey);
+    if (!parts)
+        return null;
+    return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0)).getUTCDay();
+}
+/**
+ * Check if a slot conflicts with any existing bookings
+ */
+function hasConflict(slotStart, slotEnd, bookings, bufferMinutes) {
+    // Add buffer to slot end
+    const slotEndWithBuffer = new Date(slotEnd.getTime() + bufferMinutes * 60 * 1000);
+    for (const booking of bookings) {
+        const bookingStart = new Date(booking.start_at);
+        const bookingEnd = new Date(booking.end_at);
+        // Check for overlap: slot conflicts if it overlaps with booking (including buffer)
+        // Overlap exists if: slotStart < bookingEnd AND slotEndWithBuffer > bookingStart
+        if (slotStart < bookingEnd && slotEndWithBuffer > bookingStart) {
+            return true;
+        }
+    }
+    return false;
+}
+function normalizeDateOnly(date) {
+    const copy = new Date(date);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+}
+function isIntervalWithinWindows(startMinutes, endMinutes, windows) {
+    return windows.some((window) => {
+        const windowStart = timeToMinutes(window.start_time);
+        const windowEnd = timeToMinutes(window.end_time);
+        return startMinutes >= windowStart && endMinutes <= windowEnd;
+    });
+}
+function overlapsAnyInterval(startAt, endAt, intervals) {
+    return intervals.some((interval) => interval.starts_at < endAt && interval.ends_at > startAt);
+}
+async function isStaffAvailableForInterval(params) {
+    const { companyId, staffId, startAt, endAt, timezone } = params;
+    const companyTimezone = timezone || 'America/La_Paz';
+    const staffList = await BookingRepo.getBookableStaff(companyId, staffId);
+    if (staffList.length === 0) {
+        return { available: false, message: 'No encontramos el personal o ya no acepta reservas.' };
+    }
+    const staff = staffList[0];
+    const requestDateInfo = getDateKeyAndMinutesInTimeZone(startAt, companyTimezone);
+    const endDateInfo = getDateKeyAndMinutesInTimeZone(endAt, companyTimezone);
+    if (staff.start_date &&
+        requestDateInfo.dateKey <
+            getDateKeyAndMinutesInTimeZone(new Date(staff.start_date), companyTimezone).dateKey) {
+        return { available: false, message: 'El personal todavía no está activo para esa fecha.' };
+    }
+    if (staff.end_date &&
+        requestDateInfo.dateKey >
+            getDateKeyAndMinutesInTimeZone(new Date(staff.end_date), companyTimezone).dateKey) {
+        return { available: false, message: 'El personal no está disponible para esa fecha.' };
+    }
+    const dayOfWeek = getDayOfWeekFromDateKey(requestDateInfo.dateKey) ?? startAt.getUTCDay();
+    const companyHours = await BookingRepo.getCompanyHourWindowsForDay(companyId, dayOfWeek);
+    const companyWindows = companyHours
+        .filter((window) => !window.is_closed && window.open_time && window.close_time)
+        .map((window) => ({ start_time: window.open_time, end_time: window.close_time }));
+    if (companyWindows.length === 0) {
+        return { available: false, message: 'El negocio está cerrado ese día.' };
+    }
+    const startMinutes = requestDateInfo.minutes;
+    const endMinutes = endDateInfo.dateKey === requestDateInfo.dateKey ? endDateInfo.minutes : 24 * 60;
+    if (!isIntervalWithinWindows(startMinutes, endMinutes, companyWindows)) {
+        return { available: false, message: 'Selected time is outside company opening hours' };
+    }
+    const [availabilityCounts, dayAvailability, timeOff, groupCommitments] = await Promise.all([
+        BookingRepo.getStaffAvailabilityCounts(companyId, [staffId]),
+        BookingRepo.getStaffAvailabilityForDay(companyId, [staffId], dayOfWeek),
+        BookingRepo.getApprovedStaffTimeOffOverlaps(companyId, [staffId], startAt, endAt),
+        BookingRepo.getGroupStaffCommitmentsForDateRange(companyId, [staffId], startAt, endAt),
+    ]);
+    const hasCustomSchedule = (availabilityCounts[0]?._count?.id || 0) > 0;
+    if (hasCustomSchedule) {
+        const staffWindows = dayAvailability.map((slot) => ({
+            start_time: slot.start_time,
+            end_time: slot.end_time,
+        }));
+        if (!isIntervalWithinWindows(startMinutes, endMinutes, staffWindows)) {
+            return { available: false, message: 'El personal no trabaja en ese día u horario.' };
+        }
+    }
+    if (timeOff.length > 0) {
+        return { available: false, message: 'El personal tiene una ausencia en ese horario.' };
+    }
+    if (groupCommitments.length > 0) {
+        return { available: false, message: 'El personal ya está asignado a un evento o clase grupal en ese horario.' };
+    }
+    return { available: true };
+}
+/**
+ * Get available booking slots for a date
+ */
+async function getAvailableSlots(params) {
+    const { company_id, staff_id, secondary_staff_id, service_ids, date } = params;
+    try {
+        // 1. Validate company exists
+        const company = await BookingRepo.getCompanyById(company_id);
+        if (!company) {
+            return {
+                code: 404,
+                message: 'No encontramos el negocio.',
+                error: true,
+            };
+        }
+        // 2. Get services and calculate total duration
+        const services = await BookingRepo.getServicesByIds(service_ids, company_id);
+        if (services.length === 0) {
+            return {
+                code: 400,
+                message: 'No encontramos servicios válidos.',
+                error: true,
+            };
+        }
+        const totalDuration = getSlotSearchDurationMinutes(services);
+        // 3. Get company settings
+        const settings = await BookingRepo.getCompanySettings(company_id);
+        const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
+        const granularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+        const companyTimezone = company.timezone || 'America/La_Paz';
+        const dateParts = parseDateOnlyParts(date);
+        if (!dateParts) {
+            return {
+                code: 400,
+                message: 'Formato de fecha inválido.',
+                error: true,
+            };
+        }
+        // 4. Resolve the requested business date in the company's timezone.
+        const requestedDate = new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 12, 0, 0));
+        const dayOfWeek = requestedDate.getUTCDay();
+        // 5. Get company opening windows for that day
+        const dayHours = await BookingRepo.getCompanyHourWindowsForDay(company_id, dayOfWeek);
+        const companyWindows = dayHours
+            .filter((hour) => !hour.is_closed && hour.open_time && hour.close_time)
+            .map((hour) => ({
+            start_time: hour.open_time,
+            end_time: hour.close_time,
+        }));
+        if (companyWindows.length === 0) {
+            return {
+                code: 200,
+                message: 'El negocio está cerrado ese día.',
+                error: false,
+                data: [],
+            };
+        }
+        // 6. Get bookable staff
+        const staffList = await BookingRepo.getBookableStaff(company_id, staff_id, service_ids);
+        if (staffList.length === 0) {
+            return {
+                code: 400,
+                message: staff_id
+                    ? 'No encontramos el personal seleccionado o ya no acepta reservas.'
+                    : 'No hay personal disponible para reservar.',
+                error: true,
+            };
+        }
+        const requestedDay = normalizeDateOnly(requestedDate);
+        const eligibleStaff = staffList.filter((staff) => {
+            if (staff.start_date && requestedDay < normalizeDateOnly(new Date(staff.start_date))) {
+                return false;
+            }
+            if (staff.end_date && requestedDay > normalizeDateOnly(new Date(staff.end_date))) {
+                return false;
+            }
+            return true;
+        });
+        if (eligibleStaff.length === 0) {
+            return {
+                code: 200,
+                message: 'No hay personal disponible para la fecha seleccionada.',
+                error: false,
+                data: [],
+            };
+        }
+        const staffIds = eligibleStaff.map(s => s.id);
+        // 7. Get existing bookings for the date
+        const dateStart = (0, timezone_1.parseDateTimeInTimeZone)(`${date}T00:00:00`, companyTimezone);
+        const nextDate = addDaysToDateString(date, 1);
+        const dateEnd = (0, timezone_1.parseDateTimeInTimeZone)(`${nextDate}T00:00:00`, companyTimezone);
+        // Include secondary resource ID in bookings query so we can check its conflicts too
+        const allResourceIds = secondary_staff_id ? [...staffIds, secondary_staff_id] : staffIds;
+        const existingBookings = await BookingRepo.getBookingsForDateRange(company_id, allResourceIds, dateStart, dateEnd);
+        // Group bookings by staff_id
+        const bookingsByStaff = new Map();
+        for (const booking of existingBookings) {
+            const blockingIds = [booking.staff_id, booking.secondary_staff_id].filter((resourceId) => typeof resourceId === 'number');
+            for (const resourceId of new Set(blockingIds)) {
+                if (!bookingsByStaff.has(resourceId)) {
+                    bookingsByStaff.set(resourceId, []);
+                }
+                bookingsByStaff.get(resourceId).push({
+                    start_at: booking.start_at,
+                    end_at: booking.end_at,
+                });
+            }
+        }
+        const [availabilityCounts, dayAvailability, timeOff, groupCommitments] = await Promise.all([
+            BookingRepo.getStaffAvailabilityCounts(company_id, staffIds),
+            BookingRepo.getStaffAvailabilityForDay(company_id, staffIds, dayOfWeek),
+            BookingRepo.getApprovedStaffTimeOffOverlaps(company_id, staffIds, dateStart, dateEnd),
+            BookingRepo.getGroupStaffCommitmentsForDateRange(company_id, staffIds, dateStart, dateEnd),
+        ]);
+        const hasCustomScheduleByStaff = new Map();
+        for (const entry of availabilityCounts) {
+            hasCustomScheduleByStaff.set(entry.staff_id, (entry._count.id || 0) > 0);
+        }
+        const staffAvailabilityByStaff = new Map();
+        for (const slot of dayAvailability) {
+            if (!staffAvailabilityByStaff.has(slot.staff_id)) {
+                staffAvailabilityByStaff.set(slot.staff_id, []);
+            }
+            staffAvailabilityByStaff.get(slot.staff_id).push({
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+            });
+        }
+        const timeOffByStaff = new Map();
+        for (const item of timeOff) {
+            if (!timeOffByStaff.has(item.staff_id)) {
+                timeOffByStaff.set(item.staff_id, []);
+            }
+            timeOffByStaff.get(item.staff_id).push({
+                starts_at: item.starts_at,
+                ends_at: item.ends_at,
+            });
+        }
+        const groupCommitmentsByStaff = new Map();
+        for (const commitment of groupCommitments) {
+            if (!groupCommitmentsByStaff.has(commitment.staff_id)) {
+                groupCommitmentsByStaff.set(commitment.staff_id, []);
+            }
+            groupCommitmentsByStaff.get(commitment.staff_id).push({
+                start_at: commitment.start_at,
+                end_at: commitment.end_at,
+            });
+        }
+        // Determine current time in company timezone to filter past slots
+        const currentInCompanyTz = getDateKeyAndMinutesInTimeZone(new Date(), companyTimezone);
+        const isToday = date === currentInCompanyTz.dateKey;
+        const currentMinutes = isToday ? currentInCompanyTz.minutes : -1;
+        const slots = [];
+        // Generate slots at granularity intervals across each opening window
+        for (const window of companyWindows) {
+            const openMinutes = timeToMinutes(window.start_time);
+            const closeMinutes = timeToMinutes(window.end_time);
+            for (let slotMinutes = openMinutes; slotMinutes + totalDuration <= closeMinutes; slotMinutes += granularityMinutes) {
+                // Skip slots in the past for today
+                if (isToday && slotMinutes <= currentMinutes) {
+                    continue;
+                }
+                const slotTime = minutesToTime(slotMinutes);
+                // Create slot start and end times (using local-time parsing)
+                const slotStart = (0, timezone_1.parseDateTimeInTimeZone)(`${date}T${slotTime}:00`, companyTimezone);
+                const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
+                for (const staff of eligibleStaff) {
+                    const hasCustomSchedule = hasCustomScheduleByStaff.get(staff.id) || false;
+                    if (hasCustomSchedule) {
+                        const staffWindows = staffAvailabilityByStaff.get(staff.id) || [];
+                        const fitsSchedule = isIntervalWithinWindows(slotMinutes, slotMinutes + totalDuration, staffWindows);
+                        if (!fitsSchedule) {
+                            continue;
+                        }
+                    }
+                    const staffTimeOff = timeOffByStaff.get(staff.id) || [];
+                    if (overlapsAnyInterval(slotStart, slotEnd, staffTimeOff)) {
+                        continue;
+                    }
+                    const staffBookings = bookingsByStaff.get(staff.id) || [];
+                    const staffGroupCommitments = groupCommitmentsByStaff.get(staff.id) || [];
+                    const isAvailableForGroups = !hasConflict(slotStart, slotEnd, staffGroupCommitments, bufferMinutes);
+                    if (!isAvailableForGroups) {
+                        continue;
+                    }
+                    const isAvailable = !hasConflict(slotStart, slotEnd, staffBookings, bufferMinutes);
+                    if (!isAvailable)
+                        continue;
+                    // If a secondary resource (e.g. room) is required, also check it
+                    if (secondary_staff_id) {
+                        const secondaryBookings = bookingsByStaff.get(secondary_staff_id) || [];
+                        const secondaryAvailable = !hasConflict(slotStart, slotEnd, secondaryBookings, bufferMinutes);
+                        if (!secondaryAvailable)
+                            continue;
+                    }
+                    slots.push({
+                        time: slotTime,
+                        staff_id: staff.id,
+                        staff_name: staff.display_name,
+                        available: true,
+                    });
+                }
+            }
+        }
+        return {
+            code: 200,
+            message: 'Horarios disponibles obtenidos correctamente.',
+            error: false,
+            data: slots,
+        };
+    }
+    catch (error) {
+        console.error('Error getting available slots:', error);
+        return {
+            code: 500,
+            message: 'No pudimos obtener los horarios disponibles.',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+function bookingUploadError(error) {
+    if (error instanceof upload_errors_1.UploadSecurityError) {
+        return { code: error.statusCode, error: true, message: error.message, errorCode: error.errorCode, reason: error.errorCode };
+    }
+    return { code: 403, error: true, message: 'No puedes adjuntar un comprobante que no te pertenece.' };
+}
+/**
+ * Create a new customer booking
+ */
+async function createBooking(params) {
+    const { company_id, staff_id, secondary_staff_id, service_ids, start_at, payment_method, notes, user_id, booking_source } = params;
+    let qr_proof_image_url = params.qr_proof_image_url?.trim() || null;
+    try {
+        // 1. Validate company exists and is active
+        const company = await BookingRepo.getActiveCompanyById(company_id);
+        if (!company) {
+            return {
+                code: 404,
+                message: 'Company not found or inactive',
+                error: true,
+            };
+        }
+        if (qr_proof_image_url) {
+            try {
+                const stored = await (0, upload_intent_service_1.assertStoredUpload)({
+                    rawPathOrUrl: qr_proof_image_url,
+                    companyId: company_id,
+                    purpose: upload_intent_service_1.UPLOAD_PURPOSES.BOOKING_QR_PROOF,
+                    contextId: `BOOKING:${user_id}`,
+                });
+                if (!(await storage_service_1.StorageService.fileExists(stored.relativePath)))
+                    return bookingUploadError(new upload_errors_1.UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
+                qr_proof_image_url = stored.relativePath;
+            }
+            catch (error) {
+                return bookingUploadError(error);
+            }
+        }
+        // 1.5 Validate payment method is allowed
+        const paymentError = await validatePaymentMethod(company_id, payment_method);
+        if (paymentError) {
+            return { code: 400, message: paymentError, error: true };
+        }
+        // 1.6 Fetch QR/confirm settings (plan-gated)
+        const bookingFlowSettings = await resolveBookingFlowSettings(company_id);
+        // 1.7 Validate comprobante if required for QR
+        if (payment_method === 'QR' && shouldRequireQrProof(bookingFlowSettings) && !qr_proof_image_url) {
+            return { code: 400, message: 'Comprobante is required for QR payment bookings', error: true };
+        }
+        // 2. Validate staff belongs to company and is bookable
+        const staffList = await BookingRepo.getBookableStaff(company_id, staff_id, service_ids);
+        if (staffList.length === 0) {
+            return {
+                code: 400,
+                message: 'Staff not found or not bookable',
+                error: true,
+            };
+        }
+        const staff = staffList[0];
+        // 3. Validate all services exist and belong to company
+        const services = await BookingRepo.getServicesByIds(service_ids, company_id);
+        if (services.length !== service_ids.length) {
+            return {
+                code: 400,
+                message: 'One or more services not found or inactive',
+                error: true,
+            };
+        }
+        const promotionsEnabled = await (0, company_entitlements_service_1.companyHasCapability)(company_id, 'RESERVAS_SERVICE_PROMOTIONS');
+        // 4. Calculate total duration and end time
+        const totalDuration = services.reduce((sum, s) => sum + s.duration_minutes, 0);
+        const totalPrice = services.reduce((sum, service) => {
+            const pricing = (0, service_pricing_service_1.resolveEffectiveServicePrice)({
+                priceCents: service.price_cents,
+                promoPriceCents: service.promo_price_cents ?? null,
+                promoStartsAt: service.promo_starts_at ?? null,
+                promoEndsAt: service.promo_ends_at ?? null,
+                promoLabel: service.promo_label ?? null,
+                promotionsEnabled,
+            });
+            return sum + pricing.finalPriceCents;
+        }, 0);
+        const startAt = (0, timezone_1.parseDateTimeInTimeZone)(start_at, company.timezone);
+        const endAt = new Date(startAt.getTime() + totalDuration * 60 * 1000);
+        // 4.5 Validate advance booking limits
+        const advanceError = await validateAdvanceBookingLimits(company_id, startAt);
+        if (advanceError) {
+            return { code: 400, message: advanceError, error: true };
+        }
+        // 5.5 Validate staff schedule/time-off/company windows
+        const staffAvailability = await isStaffAvailableForInterval({
+            companyId: company_id,
+            staffId: staff_id,
+            startAt,
+            endAt,
+            timezone: company.timezone,
+        });
+        if (!staffAvailability.available) {
+            return {
+                code: 400,
+                message: staffAvailability.message || 'Staff is not available at the selected time',
+                error: true,
+            };
+        }
+        // 6. Get company settings for buffer
+        const settings = await BookingRepo.getCompanySettings(company_id);
+        const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
+        // 7. Re-validate slot availability (prevent race conditions)
+        const conflict = await BookingRepo.checkSlotConflict(company_id, staff_id, startAt, endAt, bufferMinutes);
+        if (conflict) {
+            return {
+                code: 409,
+                message: 'Time slot is no longer available',
+                error: true,
+                data: {
+                    conflicting_booking_id: conflict.id,
+                    conflicting_start: conflict.start_at,
+                    conflicting_end: conflict.end_at,
+                },
+            };
+        }
+        // 7b. Check secondary resource conflict (room/equipment)
+        if (secondary_staff_id) {
+            const secondaryConflict = await BookingRepo.checkSlotConflict(company_id, secondary_staff_id, startAt, endAt, bufferMinutes);
+            if (secondaryConflict) {
+                return {
+                    code: 409,
+                    message: 'The required room or equipment is no longer available at this time',
+                    error: true,
+                };
+            }
+        }
+        const groupConflict = await BookingRepo.checkGroupSlotConflict(company_id, staff_id, startAt, endAt, bufferMinutes);
+        if (groupConflict) {
+            return {
+                code: 409,
+                message: 'Time slot is blocked by a group reservation',
+                error: true,
+                data: {
+                    conflict_type: groupConflict.type,
+                    conflict_id: groupConflict.id,
+                    conflict_title: groupConflict.title,
+                    conflicting_start: groupConflict.start_at,
+                    conflicting_end: groupConflict.end_at,
+                },
+            };
+        }
+        // 8. Get or create CustomerProfile
+        const customerProfile = await BookingRepo.getOrCreateCustomerProfile(company_id, user_id);
+        // 9. Prepare service snapshots
+        const serviceSnapshots = buildServiceSnapshots(services, promotionsEnabled);
+        // 10. Determine booking status based on auto_confirm setting
+        const bookingStatus = bookingFlowSettings.autoConfirm ? client_2.BookingStatus.CONFIRMED : client_2.BookingStatus.PENDING;
+        // 11. Create booking with services in transaction
+        const booking = await BookingRepo.createBookingWithServices({
+            company_id,
+            staff_id,
+            secondary_staff_id: secondary_staff_id ?? null,
+            customer_id: customerProfile.id,
+            start_at: startAt,
+            end_at: endAt,
+            payment_method,
+            notes,
+            created_by_user_id: user_id,
+            total_price_cents: totalPrice,
+            booking_source: booking_source ?? client_2.BookingSource.SALON_SITE,
+            status: bookingStatus,
+            qr_proof_image_url: qr_proof_image_url ?? null,
+        }, serviceSnapshots);
+        // 12. Send notification only when auto-confirmed and plan allows
+        const canSendTransactionalNotifications = await (0, plan_enforcement_service_1.isFeatureEnabledForCompany)(company_id, 'TRANSACTIONAL_BOOKING_NOTIFICATIONS');
+        if (canSendTransactionalNotifications && company && booking) {
+            const user = await client_1.prisma.user.findUnique({ where: { id: user_id }, select: { email: true, name: true, phoneNumber: true, phone_prefix: true } });
+            const notificationData = {
+                companyId: company_id,
+                bookingId: booking.id,
+                staffId: staff_id,
+                customerEmail: user?.email,
+                customerPhone: user?.phoneNumber,
+                customerPhonePrefix: user?.phone_prefix,
+                customerName: user?.name,
+                companyName: company.name,
+                staffName: staff.display_name,
+                serviceNames: services.map(s => s.name),
+                serviceIds: services.map(s => s.id),
+                startAt,
+                endAt,
+                totalPriceCents: totalPrice,
+            };
+            if (bookingFlowSettings.autoConfirm) {
+                void (0, bookingNotifications_1.notifyBookingCreated)(notificationData);
+            }
+            else {
+                void (0, bookingNotifications_1.notifyBookingPendingForManagement)(notificationData);
+            }
+        }
+        const resolvedSource = booking_source ?? client_2.BookingSource.SALON_SITE;
+        void MarketplaceAnalyticsService.trackBookingStarted({
+            source: toAnalyticsSource(resolvedSource),
+            booking_source: resolvedSource,
+            company_id,
+            booking_id: booking?.id ?? null,
+            service_ids: service_ids,
+            staff_id,
+            start_at: startAt.toISOString(),
+            date: start_at.slice(0, 10),
+            time: start_at.slice(11, 16),
+            total_price_cents: totalPrice,
+        });
+        return {
+            code: 201,
+            message: 'Booking created successfully',
+            error: false,
+            data: booking,
+        };
+    }
+    catch (error) {
+        console.error('Error creating booking:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+/**
+ * Get available booking dates with hours information
+ */
+async function getAvailableDates(params) {
+    const { companyId, startDate, numberOfDays } = params;
+    try {
+        // 1. Validate company exists
+        const company = await BookingRepo.getCompanyById(companyId);
+        if (!company) {
+            return {
+                code: 404,
+                message: 'Company not found',
+                error: true,
+            };
+        }
+        // 2. Get all company hours
+        const allHours = await BookingRepo.getAllCompanyHours(companyId);
+        // Group hours by day_of_week
+        const hoursByDay = new Map();
+        for (const hour of allHours) {
+            if (!hoursByDay.has(hour.day_of_week)) {
+                hoursByDay.set(hour.day_of_week, []);
+            }
+            hoursByDay.get(hour.day_of_week).push(hour);
+        }
+        // 3. Generate dates
+        const dates = [];
+        const currentDate = new Date(startDate);
+        for (let i = 0; i < numberOfDays; i++) {
+            const dateStr = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD
+            const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
+            // Get hours for this day
+            const dayHours = hoursByDay.get(dayOfWeek) || [];
+            // Filter out closed slots and create windows
+            const windows = [];
+            let is_open = false;
+            for (const hour of dayHours) {
+                if (!hour.is_closed && hour.open_time && hour.close_time) {
+                    windows.push({
+                        open_time: hour.open_time,
+                        close_time: hour.close_time,
+                    });
+                    is_open = true;
+                }
+            }
+            // Sort windows by open_time
+            windows.sort((a, b) => a.open_time.localeCompare(b.open_time));
+            dates.push({
+                date: dateStr,
+                day_of_week: dayOfWeek,
+                is_open,
+                windows,
+            });
+            // Move to next day
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+        return {
+            code: 200,
+            message: 'Available dates retrieved successfully',
+            error: false,
+            data: {
+                dates,
+                timezone: company.timezone || 'UTC',
+            },
+        };
+    }
+    catch (error) {
+        console.error('Error getting available dates:', error);
+        return {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+function splitAmountAcrossSessions(totalCents, parts) {
+    if (parts <= 1)
+        return [totalCents];
+    const base = Math.floor(totalCents / parts);
+    const remainder = totalCents - base * parts;
+    return Array.from({ length: parts }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+function intervalsOverlap(startA, endA, startB, endB) {
+    return startA < endB && endA > startB;
+}
+function findRequestedCheckoutOverlap(groups) {
+    const resolvedSlots = [];
+    for (const group of groups) {
+        for (const slot of group.slots) {
+            const existing = resolvedSlots.find((candidate) => intervalsOverlap(candidate.startAt, candidate.endAt, slot.startAt, slot.endAt));
+            if (existing) {
+                return {
+                    current: {
+                        clientGroupId: group.clientGroupId,
+                        sessionIndex: slot.sessionIndex,
+                        sessionCount: slot.sessionCount,
+                        startAt: slot.startAt,
+                        endAt: slot.endAt,
+                    },
+                    existing,
+                };
+            }
+            resolvedSlots.push({
+                clientGroupId: group.clientGroupId,
+                sessionIndex: slot.sessionIndex,
+                sessionCount: slot.sessionCount,
+                startAt: slot.startAt,
+                endAt: slot.endAt,
+            });
+        }
+    }
+    return null;
+}
+function resolveServiceAssignments(service) {
+    let primaryStaffId = null;
+    let secondaryStaffId = null;
+    for (const resource of service.required_resources) {
+        const resourceType = resource.staff_profile?.resource_type;
+        if (primaryStaffId === null &&
+            resourceType !== 'ROOM' &&
+            resourceType !== 'EQUIPMENT') {
+            primaryStaffId = resource.staff_profile_id;
+            continue;
+        }
+        if (secondaryStaffId === null &&
+            (resourceType === 'ROOM' || resourceType === 'EQUIPMENT')) {
+            secondaryStaffId = resource.staff_profile_id;
+        }
+    }
+    return { primaryStaffId, secondaryStaffId };
+}
+async function loadCheckoutServices(companyId, serviceIds) {
+    if (serviceIds.length === 0)
+        return [];
+    return client_1.prisma.service.findMany({
+        where: {
+            id: { in: serviceIds },
+            company_id: companyId,
+            is_active: true,
+            deleted_at: null,
+        },
+        select: {
+            id: true,
+            name: true,
+            duration_minutes: true,
+            price_cents: true,
+            promo_price_cents: true,
+            promo_starts_at: true,
+            promo_ends_at: true,
+            promo_label: true,
+            is_multi_session: true,
+            session_count: true,
+            session_duration_minutes: true,
+            required_resources: {
+                where: {
+                    staff_profile: {
+                        deleted_at: null,
+                    },
+                },
+                select: {
+                    staff_profile_id: true,
+                    staff_profile: {
+                        select: {
+                            id: true,
+                            display_name: true,
+                            resource_type: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+}
+function buildLegacyRequestedGroups(params) {
+    const groups = new Map();
+    for (const service of params.services) {
+        const assignment = resolveServiceAssignments(service);
+        const staffId = assignment.primaryStaffId ?? params.defaultStaffId ?? null;
+        const secondaryStaffId = assignment.secondaryStaffId ?? params.defaultSecondaryStaffId ?? null;
+        const key = [
+            staffId ?? 'sin-staff',
+            secondaryStaffId ?? 'sin-recurso',
+            service.is_multi_session ? `multi-${service.id}` : 'simple',
+        ].join('|');
+        const existing = groups.get(key);
+        if (existing) {
+            existing.service_ids.push(service.id);
+            continue;
+        }
+        groups.set(key, {
+            client_group_id: key,
+            staff_id: staffId,
+            secondary_staff_id: secondaryStaffId,
+            service_ids: [service.id],
+            start_at: params.defaultStartAt ?? null,
+        });
+    }
+    return Array.from(groups.values());
+}
+async function resolveRequestedCheckoutGroups(params) {
+    const uniqueServiceIds = Array.from(new Set(params.requestedGroups.flatMap((group) => Array.isArray(group.service_ids) ? group.service_ids : [])));
+    const services = await loadCheckoutServices(params.companyId, uniqueServiceIds);
+    if (services.length !== uniqueServiceIds.length) {
+        return {
+            error: true,
+            result: {
+                code: 400,
+                message: 'Uno o más servicios ya no están disponibles.',
+                error: true,
+            },
+        };
+    }
+    const serviceById = new Map(services.map((service) => [service.id, service]));
+    const groups = [];
+    for (const [groupIndex, requestedGroup] of params.requestedGroups.entries()) {
+        if (!Array.isArray(requestedGroup.service_ids) || requestedGroup.service_ids.length === 0) {
+            return {
+                error: true,
+                result: {
+                    code: 400,
+                    message: 'Cada grupo debe incluir al menos un servicio.',
+                    error: true,
+                },
+            };
+        }
+        const groupServices = requestedGroup.service_ids
+            .map((serviceId) => serviceById.get(serviceId))
+            .filter(Boolean);
+        const multiSessionServices = groupServices.filter((service) => service.is_multi_session);
+        if (multiSessionServices.length > 1 || (multiSessionServices.length === 1 && groupServices.length > 1)) {
+            return {
+                error: true,
+                result: {
+                    code: 400,
+                    message: 'Cada servicio con múltiples sesiones debe reservarse en su propio grupo.',
+                    error: true,
+                },
+            };
+        }
+        const primaryStaffIds = new Set();
+        const secondaryStaffIds = new Set();
+        for (const service of groupServices) {
+            const assignment = resolveServiceAssignments(service);
+            if (assignment.primaryStaffId)
+                primaryStaffIds.add(assignment.primaryStaffId);
+            if (assignment.secondaryStaffId)
+                secondaryStaffIds.add(assignment.secondaryStaffId);
+        }
+        if (primaryStaffIds.size > 1 || secondaryStaffIds.size > 1) {
+            return {
+                error: true,
+                result: {
+                    code: 400,
+                    message: 'Los servicios seleccionados requieren recursos distintos. Reservalos en grupos separados.',
+                    error: true,
+                },
+            };
+        }
+        const requiredPrimaryStaffId = primaryStaffIds.values().next().value ?? null;
+        const requiredSecondaryStaffId = secondaryStaffIds.values().next().value ?? null;
+        const staffId = requiredPrimaryStaffId ?? requestedGroup.staff_id ?? null;
+        const secondaryStaffId = requiredSecondaryStaffId ?? requestedGroup.secondary_staff_id ?? null;
+        if (!staffId) {
+            return {
+                error: true,
+                result: {
+                    code: 400,
+                    message: 'Cada grupo necesita un personal asignado.',
+                    error: true,
+                },
+            };
+        }
+        const totalPriceCents = groupServices.reduce((sum, service) => {
+            const pricing = (0, service_pricing_service_1.resolveEffectiveServicePrice)({
+                priceCents: service.price_cents,
+                promoPriceCents: service.promo_price_cents ?? null,
+                promoStartsAt: service.promo_starts_at ?? null,
+                promoEndsAt: service.promo_ends_at ?? null,
+                promoLabel: service.promo_label ?? null,
+                promotionsEnabled: params.promotionsEnabled,
+            });
+            return sum + pricing.finalPriceCents;
+        }, 0);
+        if (multiSessionServices.length === 1) {
+            const multiService = multiSessionServices[0];
+            const sessionCount = multiService.session_count ?? 0;
+            const sessionDurationMinutes = multiService.session_duration_minutes ?? 0;
+            const sessionSlots = requestedGroup.session_slots ?? [];
+            if (sessionCount <= 1 || sessionDurationMinutes <= 0) {
+                return {
+                    error: true,
+                    result: {
+                        code: 400,
+                        message: 'La configuración del servicio con múltiples sesiones es inválida.',
+                        error: true,
+                    },
+                };
+            }
+            if (sessionSlots.length !== sessionCount) {
+                return {
+                    error: true,
+                    result: {
+                        code: 400,
+                        message: `Debés elegir fecha y hora para las ${sessionCount} sesiones.`,
+                        error: true,
+                    },
+                };
+            }
+            groups.push({
+                clientGroupId: requestedGroup.client_group_id?.trim() || `grupo-${groupIndex + 1}`,
+                staffId,
+                secondaryStaffId,
+                services: groupServices,
+                totalPriceCents,
+                isMultiSession: true,
+                slots: sessionSlots.map((slot, sessionIndex) => {
+                    const startAt = (0, timezone_1.parseDateTimeInTimeZone)(slot.start_at, params.timezone);
+                    return {
+                        startAt,
+                        endAt: new Date(startAt.getTime() + sessionDurationMinutes * 60 * 1000),
+                        sessionIndex: sessionIndex + 1,
+                        sessionCount,
+                        durationMinutes: sessionDurationMinutes,
+                    };
+                }),
+            });
+            continue;
+        }
+        if (!requestedGroup.start_at) {
+            return {
+                error: true,
+                result: {
+                    code: 400,
+                    message: 'Cada grupo necesita una fecha y hora.',
+                    error: true,
+                },
+            };
+        }
+        const totalDurationMinutes = groupServices.reduce((sum, service) => sum + service.duration_minutes, 0);
+        const startAt = (0, timezone_1.parseDateTimeInTimeZone)(requestedGroup.start_at, params.timezone);
+        groups.push({
+            clientGroupId: requestedGroup.client_group_id?.trim() || `grupo-${groupIndex + 1}`,
+            staffId,
+            secondaryStaffId,
+            services: groupServices,
+            totalPriceCents,
+            isMultiSession: false,
+            slots: [
+                {
+                    startAt,
+                    endAt: new Date(startAt.getTime() + totalDurationMinutes * 60 * 1000),
+                    sessionIndex: null,
+                    sessionCount: null,
+                    durationMinutes: totalDurationMinutes,
+                },
+            ],
+        });
+    }
+    return { error: false, groups };
+}
+function buildNotificationLine(params) {
+    const timezone = params.timezone || 'America/La_Paz';
+    const dateLabel = params.slot.startAt.toLocaleDateString('es-BO', {
+        timeZone: timezone,
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    });
+    const startLabel = params.slot.startAt.toLocaleTimeString('es-BO', {
+        timeZone: timezone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    });
+    const endLabel = params.slot.endAt.toLocaleTimeString('es-BO', {
+        timeZone: timezone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    });
+    const sessionLabel = params.slot.sessionIndex && params.slot.sessionCount
+        ? `Sesión ${params.slot.sessionIndex}/${params.slot.sessionCount}: `
+        : '';
+    return `${sessionLabel}${params.services.map((service) => service.name).join(' + ')} · ${dateLabel} ${startLabel}-${endLabel}`;
+}
+async function createCheckoutBookings(params) {
+    const bookingFlowSettings = await resolveBookingFlowSettings(params.company.id);
+    let qrProofImageUrl = params.qr_proof_image_url?.trim() || null;
+    if (qrProofImageUrl) {
+        try {
+            const stored = await (0, upload_intent_service_1.assertStoredUpload)({
+                rawPathOrUrl: qrProofImageUrl,
+                companyId: params.company.id,
+                purpose: upload_intent_service_1.UPLOAD_PURPOSES.BOOKING_QR_PROOF,
+                contextId: params.upload_context_id ?? null,
+            });
+            if (!(await storage_service_1.StorageService.fileExists(stored.relativePath)))
+                return bookingUploadError(new upload_errors_1.UploadSecurityError('UPLOAD_INTENT_INVALID', 403));
+            qrProofImageUrl = stored.relativePath;
+        }
+        catch (error) {
+            return bookingUploadError(error);
+        }
+    }
+    if (params.payment_method === 'QR' &&
+        shouldRequireQrProof(bookingFlowSettings) &&
+        !qrProofImageUrl) {
+        return {
+            code: 400,
+            message: 'Debés subir el comprobante para pagar por QR.',
+            error: true,
+        };
+    }
+    const servicePromotionsEnabled = await (0, company_entitlements_service_1.companyHasCapability)(params.company.id, 'RESERVAS_SERVICE_PROMOTIONS');
+    const resolvedGroupsResult = await resolveRequestedCheckoutGroups({
+        companyId: params.company.id,
+        timezone: params.company.timezone,
+        requestedGroups: params.requestedGroups,
+        promotionsEnabled: servicePromotionsEnabled,
+    });
+    if (resolvedGroupsResult.error) {
+        return resolvedGroupsResult.result;
+    }
+    const resolvedGroups = resolvedGroupsResult.groups;
+    const requestedOverlap = findRequestedCheckoutOverlap(resolvedGroups);
+    if (requestedOverlap) {
+        return {
+            code: 409,
+            message: 'No podés reservar dos sesiones al mismo tiempo, aunque sean con distinto personal. Elegí horarios distintos para continuar.',
+            error: true,
+            data: {
+                current_group_id: requestedOverlap.current.clientGroupId,
+                current_session_index: requestedOverlap.current.sessionIndex,
+                current_session_count: requestedOverlap.current.sessionCount,
+                conflicting_group_id: requestedOverlap.existing.clientGroupId,
+                conflicting_session_index: requestedOverlap.existing.sessionIndex,
+                conflicting_session_count: requestedOverlap.existing.sessionCount,
+            },
+        };
+    }
+    const staffIds = Array.from(new Set(resolvedGroups.flatMap((group) => [
+        group.staffId,
+        ...(group.secondaryStaffId ? [group.secondaryStaffId] : []),
+    ])));
+    const staffProfiles = await client_1.prisma.staffProfile.findMany({
+        where: {
+            company_id: params.company.id,
+            id: { in: staffIds },
+            deleted_at: null,
+        },
+        select: {
+            id: true,
+            display_name: true,
+            is_bookable: true,
+        },
+    });
+    const staffById = new Map(staffProfiles.map((staff) => [staff.id, staff]));
+    const settings = await BookingRepo.getCompanySettings(params.company.id);
+    const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
+    for (const group of resolvedGroups) {
+        const primaryStaff = staffById.get(group.staffId);
+        if (!primaryStaff || !primaryStaff.is_bookable) {
+            return {
+                code: 400,
+                message: 'El personal seleccionado ya no está disponible para reservas.',
+                error: true,
+            };
+        }
+        const groupServiceIds = group.services.map((service) => service.id);
+        const compatiblePrimaryStaff = await BookingRepo.getBookableStaff(params.company.id, group.staffId, groupServiceIds);
+        if (compatiblePrimaryStaff.length === 0) {
+            return {
+                code: 400,
+                message: 'El personal seleccionado no ofrece todos los servicios elegidos.',
+                error: true,
+            };
+        }
+        if (group.secondaryStaffId) {
+            const secondaryStaff = staffById.get(group.secondaryStaffId);
+            if (!secondaryStaff) {
+                return {
+                    code: 400,
+                    message: 'El recurso seleccionado ya no está disponible.',
+                    error: true,
+                };
+            }
+        }
+        for (const slot of group.slots) {
+            const advanceError = await validateAdvanceBookingLimits(params.company.id, slot.startAt, { ignoreMaxAdvanceDays: group.isMultiSession });
+            if (advanceError) {
+                return { code: 400, message: advanceError, error: true };
+            }
+            const staffAvailability = await isStaffAvailableForInterval({
+                companyId: params.company.id,
+                staffId: group.staffId,
+                startAt: slot.startAt,
+                endAt: slot.endAt,
+                timezone: params.company.timezone,
+            });
+            if (!staffAvailability.available) {
+                return {
+                    code: 400,
+                    message: staffAvailability.message ||
+                        'El personal seleccionado no tiene disponibilidad en ese horario.',
+                    error: true,
+                };
+            }
+            const staffConflict = await BookingRepo.checkSlotConflict(params.company.id, group.staffId, slot.startAt, slot.endAt, bufferMinutes);
+            if (staffConflict) {
+                return {
+                    code: 409,
+                    message: 'Ese horario ya no está disponible.',
+                    error: true,
+                };
+            }
+            if (group.secondaryStaffId) {
+                const secondaryConflict = await BookingRepo.checkSlotConflict(params.company.id, group.secondaryStaffId, slot.startAt, slot.endAt, bufferMinutes);
+                if (secondaryConflict) {
+                    return {
+                        code: 409,
+                        message: 'El recurso requerido ya no está disponible en ese horario.',
+                        error: true,
+                    };
+                }
+            }
+            const groupConflict = await BookingRepo.checkGroupSlotConflict(params.company.id, group.staffId, slot.startAt, slot.endAt, bufferMinutes);
+            if (groupConflict) {
+                return {
+                    code: 409,
+                    message: 'Ese horario está bloqueado por una reserva grupal.',
+                    error: true,
+                };
+            }
+            if (params.customer_id) {
+                const customerConflict = await BookingRepo.checkCustomerSlotConflict(params.company.id, params.customer_id, slot.startAt, slot.endAt);
+                if (customerConflict) {
+                    return {
+                        code: 409,
+                        message: 'Ya tenés otra reserva en ese horario. Elegí un horario distinto para evitar que el cliente quede agendado dos veces al mismo tiempo.',
+                        error: true,
+                        data: {
+                            conflicting_booking_id: customerConflict.id,
+                            conflicting_start: customerConflict.start_at,
+                            conflicting_end: customerConflict.end_at,
+                        },
+                    };
+                }
+            }
+        }
+    }
+    const bookingStatus = bookingFlowSettings.autoConfirm
+        ? client_2.BookingStatus.CONFIRMED
+        : client_2.BookingStatus.PENDING;
+    const totalPriceCents = resolvedGroups.reduce((sum, group) => sum + group.totalPriceCents, 0);
+    const totalBookingCount = resolvedGroups.reduce((sum, group) => sum + group.slots.length, 0);
+    const created = await client_1.prisma.$transaction(async (tx) => {
+        const bookingGroup = totalBookingCount > 1 || resolvedGroups.some((group) => group.isMultiSession)
+            ? await tx.bookingGroup.create({
+                data: {
+                    company_id: params.company.id,
+                    customer_id: params.customer_id,
+                    group_type: resolvedGroups.length > 1
+                        ? 'MULTI_STAFF_CHECKOUT'
+                        : resolvedGroups.some((group) => group.isMultiSession)
+                            ? 'MULTI_SESSION_SERVICE'
+                            : 'STANDARD',
+                    metadata: {
+                        clientGroupIds: resolvedGroups.map((group) => group.clientGroupId),
+                    },
+                },
+            })
+            : null;
+        const createdBookings = [];
+        for (const group of resolvedGroups) {
+            const perBookingTotals = group.isMultiSession
+                ? splitAmountAcrossSessions(group.totalPriceCents, group.slots.length)
+                : [group.totalPriceCents];
+            for (const [slotIndex, slot] of group.slots.entries()) {
+                const booking = await tx.booking.create({
+                    data: {
+                        company_id: params.company.id,
+                        booking_group_id: bookingGroup?.id ?? null,
+                        staff_id: group.staffId,
+                        secondary_staff_id: group.secondaryStaffId,
+                        customer_id: params.customer_id,
+                        client_name: params.client_name,
+                        client_email: params.client_email,
+                        client_phone_prefix: params.client_phone_prefix,
+                        client_phone_number: params.client_phone_number,
+                        booking_type: 'CUSTOMER',
+                        start_at: slot.startAt,
+                        end_at: slot.endAt,
+                        status: bookingStatus,
+                        payment_method: params.payment_method,
+                        payment_status: params.payment_method === 'NONE'
+                            ? client_2.PaymentStatus.UNPAID
+                            : client_2.PaymentStatus.PENDING_CONFIRMATION,
+                        qr_proof_image_url: qrProofImageUrl,
+                        total_price_cents: perBookingTotals[slotIndex] ?? group.totalPriceCents,
+                        notes: params.notes,
+                        created_by_user_id: params.created_by_user_id ?? undefined,
+                        booking_source: params.booking_source ?? client_2.BookingSource.SALON_SITE,
+                        session_index: slot.sessionIndex,
+                        session_count: slot.sessionCount,
+                    },
+                });
+                await tx.bookingService.createMany({
+                    data: group.services.map((service, serviceIndex) => {
+                        const pricing = (0, service_pricing_service_1.resolveEffectiveServicePrice)({
+                            priceCents: service.price_cents,
+                            promoPriceCents: service.promo_price_cents ?? null,
+                            promoStartsAt: service.promo_starts_at ?? null,
+                            promoEndsAt: service.promo_ends_at ?? null,
+                            promoLabel: service.promo_label ?? null,
+                            promotionsEnabled: servicePromotionsEnabled,
+                        });
+                        return {
+                            booking_id: booking.id,
+                            company_id: params.company.id,
+                            service_id: service.id,
+                            service_name_snapshot: service.name,
+                            price_cents_snapshot: group.isMultiSession
+                                ? perBookingTotals[slotIndex] ?? pricing.finalPriceCents
+                                : pricing.finalPriceCents,
+                            regular_price_cents_snapshot: pricing.regularPriceCents,
+                            promo_applied_snapshot: pricing.promoApplied,
+                            promo_label_snapshot: pricing.promoLabel,
+                            duration_minutes_snapshot: group.isMultiSession
+                                ? slot.durationMinutes
+                                : service.duration_minutes,
+                            position: serviceIndex,
+                        };
+                    }),
+                });
+                createdBookings.push({
+                    id: booking.id,
+                    staff_id: booking.staff_id,
+                    secondary_staff_id: booking.secondary_staff_id,
+                    start_at: booking.start_at,
+                    end_at: booking.end_at,
+                    total_price_cents: booking.total_price_cents,
+                    session_index: booking.session_index,
+                    session_count: booking.session_count,
+                    services: group.services,
+                });
+            }
+        }
+        return {
+            bookingGroupId: bookingGroup?.id ?? null,
+            bookings: createdBookings,
+        };
+    });
+    const canSendTransactionalNotifications = await (0, plan_enforcement_service_1.isFeatureEnabledForCompany)(params.company.id, 'TRANSACTIONAL_BOOKING_NOTIFICATIONS');
+    if (canSendTransactionalNotifications && created.bookings.length > 0) {
+        const primaryBooking = created.bookings[0];
+        const uniqueStaffNames = Array.from(new Set(created.bookings
+            .map((booking) => staffById.get(booking.staff_id)?.display_name)
+            .filter(Boolean)));
+        const notificationData = {
+            companyId: params.company.id,
+            bookingId: primaryBooking.id,
+            staffId: primaryBooking.staff_id,
+            customerEmail: params.client_email,
+            customerPhone: params.client_phone_number,
+            customerPhonePrefix: params.client_phone_prefix,
+            customerName: params.client_name,
+            companyName: params.company.name,
+            staffName: uniqueStaffNames.length === 1
+                ? uniqueStaffNames[0]
+                : 'Múltiples profesionales',
+            serviceNames: created.bookings.map((booking) => buildNotificationLine({
+                timezone: params.company.timezone,
+                services: booking.services,
+                slot: {
+                    startAt: booking.start_at,
+                    endAt: booking.end_at,
+                    sessionIndex: booking.session_index,
+                    sessionCount: booking.session_count,
+                    durationMinutes: Math.round((booking.end_at.getTime() - booking.start_at.getTime()) / 60000),
+                },
+            })),
+            serviceIds: Array.from(new Set(resolvedGroups.flatMap((group) => group.services.map((service) => service.id)))),
+            startAt: primaryBooking.start_at,
+            endAt: created.bookings[created.bookings.length - 1]?.end_at ??
+                primaryBooking.end_at,
+            totalPriceCents,
+            timeZone: params.company.timezone,
+        };
+        if (bookingFlowSettings.autoConfirm) {
+            void (0, bookingNotifications_1.notifyBookingCreated)(notificationData);
+        }
+        else {
+            void (0, bookingNotifications_1.notifyBookingPendingForManagement)(notificationData);
+        }
+    }
+    const resolvedSource = params.booking_source ?? client_2.BookingSource.SALON_SITE;
+    const firstBooking = created.bookings[0];
+    void (bookingFlowSettings.autoConfirm
+        ? MarketplaceAnalyticsService.trackBookingConfirmed
+        : MarketplaceAnalyticsService.trackBookingStarted)({
+        source: toAnalyticsSource(resolvedSource),
+        booking_source: resolvedSource,
+        company_id: params.company.id,
+        booking_id: firstBooking?.id ?? null,
+        service_ids: resolvedGroups.flatMap((group) => group.services.map((service) => service.id)),
+        staff_id: firstBooking?.staff_id ?? null,
+        start_at: firstBooking?.start_at.toISOString() ?? new Date().toISOString(),
+        date: firstBooking?.start_at.toISOString().slice(0, 10) ?? '',
+        time: firstBooking?.start_at.toISOString().slice(11, 16) ?? '',
+        total_price_cents: totalPriceCents,
+    });
+    return {
+        code: 201,
+        message: 'Reserva creada correctamente.',
+        error: false,
+        data: {
+            booking_group_id: created.bookingGroupId,
+            booking_ids: created.bookings.map((booking) => booking.id),
+            booking_count: created.bookings.length,
+            total_price_cents: totalPriceCents,
+            status: bookingStatus,
+            payment_status: params.payment_method === 'NONE'
+                ? client_2.PaymentStatus.UNPAID
+                : client_2.PaymentStatus.PENDING_CONFIRMATION,
+            bookings: created.bookings.map((booking) => ({
+                booking_id: booking.id,
+                staff_id: booking.staff_id,
+                secondary_staff_id: booking.secondary_staff_id,
+                start_at: booking.start_at,
+                end_at: booking.end_at,
+                total_price_cents: booking.total_price_cents,
+                session_index: booking.session_index,
+                session_count: booking.session_count,
+                services: booking.services.map((service) => ({
+                    id: service.id,
+                    name: service.name,
+                })),
+            })),
+        },
+    };
+}
+/**
+ * Create a booking for an existing customer (no authentication required)
+ */
+async function createCustomerBooking(params) {
+    try {
+        const company = await client_1.prisma.company.findUnique({
+            where: { id: params.company_id, is_active: true },
+            select: {
+                id: true,
+                name: true,
+                timezone: true,
+            },
+        });
+        if (!company) {
+            return {
+                code: 404,
+                message: 'No encontramos el negocio o ya no está activo.',
+                error: true,
+            };
+        }
+        const paymentError = await validatePaymentMethod(params.company_id, params.payment_method);
+        if (paymentError) {
+            return { code: 400, message: paymentError, error: true };
+        }
+        const requestedGroups = params.booking_groups && params.booking_groups.length > 0
+            ? params.booking_groups
+            : buildLegacyRequestedGroups({
+                services: await loadCheckoutServices(params.company_id, params.service_ids ?? []),
+                defaultStaffId: params.staff_id,
+                defaultSecondaryStaffId: params.secondary_staff_id ?? null,
+                defaultStartAt: params.start_at,
+            });
+        return createCheckoutBookings({
+            company,
+            customer_id: params.customer_id,
+            created_by_user_id: params.created_by_user_id,
+            payment_method: params.payment_method,
+            notes: params.notes,
+            qr_proof_image_url: params.qr_proof_image_url,
+            upload_intent: params.upload_intent,
+            // Preserve a guest upload's signed flow context when a booking
+            // started before sign-in and is resumed through this route.
+            upload_context_id: params.upload_context_id !== undefined
+                ? params.upload_context_id
+                : `BOOKING:${params.created_by_user_id}`,
+            booking_source: params.booking_source,
+            client_name: params.client_name,
+            client_email: params.client_email,
+            client_phone_prefix: params.client_phone_prefix,
+            client_phone_number: params.client_phone_number,
+            requestedGroups,
+        });
+    }
+    catch (error) {
+        console.error('Error creating customer booking:', error);
+        if (error.code === 'P2002') {
+            return {
+                code: 409,
+                message: 'Ese horario ya fue reservado.',
+                error: true,
+            };
+        }
+        return {
+            code: 500,
+            message: 'No pudimos crear la reserva.',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}
+/**
+ * Create a booking as a guest/customer (no authentication required)
+ */
+async function createPublicBooking(params) {
+    try {
+        const company = await client_1.prisma.company.findUnique({
+            where: { id: params.company_id, is_active: true },
+            select: {
+                id: true,
+                name: true,
+                timezone: true,
+            },
+        });
+        if (!company) {
+            return {
+                code: 404,
+                message: 'No encontramos el negocio o ya no está activo.',
+                error: true,
+            };
+        }
+        const paymentError = await validatePaymentMethod(params.company_id, params.payment_method);
+        if (paymentError) {
+            return { code: 400, message: paymentError, error: true };
+        }
+        const requestedGroups = params.booking_groups && params.booking_groups.length > 0
+            ? params.booking_groups
+            : buildLegacyRequestedGroups({
+                services: await loadCheckoutServices(params.company_id, params.service_ids ?? []),
+                defaultStaffId: params.staff_id,
+                defaultSecondaryStaffId: params.secondary_staff_id ?? null,
+                defaultStartAt: params.start_at,
+            });
+        return createCheckoutBookings({
+            company,
+            customer_id: null,
+            created_by_user_id: null,
+            payment_method: params.payment_method,
+            notes: params.notes,
+            qr_proof_image_url: params.qr_proof_image_url,
+            upload_intent: params.upload_intent,
+            upload_context_id: params.upload_context_id !== undefined ? params.upload_context_id : null,
+            booking_source: params.booking_source,
+            client_name: params.client_name ?? 'Cliente',
+            client_email: params.client_email ?? null,
+            client_phone_prefix: params.client_phone_prefix,
+            client_phone_number: params.client_phone_number ?? null,
+            requestedGroups,
+        });
+    }
+    catch (error) {
+        console.error('Error creating public booking:', error);
+        if (error.code === 'P2002') {
+            return {
+                code: 409,
+                message: 'Ese horario ya fue reservado.',
+                error: true,
+            };
+        }
+        return {
+            code: 500,
+            message: 'No pudimos crear la reserva.',
+            error: true,
+            technicalMessage: error.toString(),
+        };
+    }
+}

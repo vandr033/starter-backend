@@ -7,11 +7,13 @@ import { isFeatureEnabledForCompany } from './plan-enforcement.service';
 import { validateRecurrenceConfig } from '../utils/recurrence';
 import { generateSessions, regenerateSessions } from './group-session.service';
 import { sanitizeRichText } from '../utils/richText';
+import * as CategoryRepo from '../repositories/category.repo';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface CreateGroupClassInput {
     title: string;
+    category_id: number;
     slug?: string;
     description?: string | null;
     cover_image_url?: string | null;
@@ -34,6 +36,7 @@ export interface CreateGroupClassInput {
 
 export interface UpdateGroupClassInput {
     title?: string;
+    category_id?: number;
     slug?: string;
     description?: string | null;
     cover_image_url?: string | null;
@@ -181,6 +184,10 @@ export async function createGroupClass(companyId: number, userId: string, input:
         return { code: 403, error: true, message: 'Group classes require Pro plan' };
     }
 
+    if (!(await CategoryRepo.getCategoryById(input.category_id, companyId))) {
+        return { code: 400, error: true, message: 'Category not found for this company' };
+    }
+
     // Validate recurrence config
     const configError = validateRecurrenceConfig(input.recurrence_type, input.recurrence_config);
     if (configError) {
@@ -232,6 +239,7 @@ export async function createGroupClass(companyId: number, userId: string, input:
     const groupClass = await prisma.groupClass.create({
         data: {
             company_id: companyId,
+            category_id: input.category_id,
             title: input.title,
             slug,
             description: sanitizeRichText(input.description) ?? null,
@@ -292,6 +300,12 @@ export async function updateGroupClass(companyId: number, classId: number, input
     const updateData: Prisma.GroupClassUpdateInput = {};
 
     if (input.title !== undefined) updateData.title = input.title;
+    if (input.category_id !== undefined) {
+        if (!(await CategoryRepo.getCategoryById(input.category_id, companyId))) {
+            return { code: 400, error: true, message: 'Category not found for this company' };
+        }
+        updateData.category = { connect: { id: input.category_id } };
+    }
     if (input.slug !== undefined || input.title !== undefined) {
         const slugSource = input.slug?.trim() || input.title || existing.title;
         updateData.slug = await resolveUniqueClassSlug(companyId, slugSource, classId);
@@ -467,6 +481,7 @@ export async function listGroupClasses(companyId: number, filters?: {
     const classes = await prisma.groupClass.findMany({
         where,
         include: {
+            category: { select: { id: true, name: true, slug: true, position: true } },
             staff_assignments: {
                 include: { staff_profile: { select: { id: true, display_name: true, image_url: true } } },
             },
@@ -505,6 +520,7 @@ async function getClassWithRelations(classId: number, companyId: number) {
     const groupClass = await prisma.groupClass.findFirst({
         where: { id: classId, company_id: companyId, deleted_at: null },
         include: {
+            category: { select: { id: true, name: true, slug: true, position: true } },
             staff_assignments: {
                 include: { staff_profile: { select: { id: true, display_name: true, image_url: true } } },
             },

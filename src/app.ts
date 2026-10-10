@@ -6,6 +6,7 @@ import { router } from "./routes";
 import { getAuth } from "./config/auth";
 import { importEsm } from "./utils/importEsm";
 import { errorHandler } from "./middlewares/error";
+import { demoReadOnlyMiddleware, demoSessionMiddleware, demoTenantWriteGuard } from "./middlewares/demo-session.middleware";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -135,6 +136,10 @@ app.use((req, res, next) => {
   return generalApiLimiter(req, res, next);
 });
 
+// Resolve demo sessions before Better Auth so its write endpoints are also
+// covered by the demo read-only policy.
+app.use("/api", demoSessionMiddleware, demoReadOnlyMiddleware);
+
 app.use((req, res, next) => {
   if (
     (req.method === "POST" || req.method === "PUT" || req.method === "DELETE")
@@ -175,7 +180,7 @@ app.use("/api/auth", authLimiter, async (req, res, next) => {
 app.use(express.json({ limit: "1mb" }));
 
 // 3) Your own API router
-app.use("/api", router);
+app.use("/api", demoTenantWriteGuard, router);
 
 // 4) Error handler
 app.use(errorHandler);

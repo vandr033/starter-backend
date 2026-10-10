@@ -1,0 +1,21 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.env = void 0;
+require("dotenv/config");
+exports.env = {
+    port: Number(process.env.PORT ?? 3001),
+    nodeEnv: process.env.NODE_ENV ?? 'development',
+    jwtSecret: process.env.JWT_SECRET ?? 'change-me',
+    storagePath: process.env.STORAGE_PATH ?? './storage',
+    db: {
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT ?? 3306),
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME,
+        url: process.env.DATABASE_URL
+    }
+};
+if (!exports.env.db.host || !exports.env.db.user || !exports.env.db.database) {
+    throw new Error('Missing DB env vars');
+}

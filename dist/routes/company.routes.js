@@ -1,0 +1,18 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const client_1 = require("@prisma/client");
+const company_controller_1 = require("../controllers/company.controller");
+const requireAuth_1 = require("../middlewares/requireAuth");
+const validate_1 = require("../middlewares/validate");
+const company_schema_1 = require("../schemas/company.schema");
+const router = (0, express_1.Router)();
+const adminRoles = [client_1.CompanyUserRole.OWNER, client_1.CompanyUserRole.ADMIN];
+router.get('/', company_controller_1.getAllCompanies);
+router.get('/featured', company_controller_1.getFeaturedCompanies);
+router.get('/id/:id', company_controller_1.getCompanyById);
+router.put('/id/:id', requireAuth_1.requireAuth, (0, requireAuth_1.requireCompanyRole)(adminRoles), (0, validate_1.validate)(company_schema_1.updateCompanySchema), company_controller_1.updateCompany);
+router.get('/:slug/invite-service/:token', company_controller_1.getCompanyInviteService);
+router.get('/:slug', company_controller_1.getCompanyPublicPage);
+router.get('/:slug/status', company_controller_1.getCompanyStatus);
+exports.default = router;

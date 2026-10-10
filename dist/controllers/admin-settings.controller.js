@@ -1,0 +1,502 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getCompanySettings = getCompanySettings;
+exports.getCompanySubscriptionHistory = getCompanySubscriptionHistory;
+exports.updateCompanySettings = updateCompanySettings;
+exports.resetCompanySettings = resetCompanySettings;
+const client_1 = require("../prisma/client");
+const logger_1 = require("../config/logger");
+const company_subscription_history_service_1 = require("../services/company-subscription-history.service");
+const plan_enforcement_service_1 = require("../services/plan-enforcement.service");
+let mensaje;
+const DEFAULT_LANGUAGE_KEY = 'default_language';
+const SUPPORTED_LANGUAGES = new Set(['es', 'en']);
+function normalizeDefaultLanguage(value) {
+    if (typeof value !== 'string')
+        return 'es';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'en')
+        return 'en';
+    return 'es';
+}
+function normalizeBookingTimeViewDefault(value) {
+    if (typeof value !== 'string')
+        return 'hour';
+    return value.trim().toLowerCase() === 'all' ? 'all' : 'hour';
+}
+/**
+ * GET /api/admin/settings
+ * Get company settings
+ */
+async function getCompanySettings(req, res) {
+    try {
+        const companyId = req.companyID;
+        if (!companyId) {
+            mensaje = {
+                code: 400,
+                message: 'Company context not found',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        const settings = await client_1.prisma.companySettings.findUnique({
+            where: { company_id: companyId },
+        });
+        const defaultLanguageConfig = await client_1.prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        });
+        const defaultLanguage = normalizeDefaultLanguage(defaultLanguageConfig?.value);
+        if (!settings) {
+            // Return default settings if none exist
+            const defaultSettings = {
+                booking_buffer_minutes: 10,
+                booking_time_granularity_minutes: 5,
+                booking_time_view_default: 'hour',
+                cancel_limit_minutes: 120,
+                reschedule_limit_minutes: 120,
+                auto_approve_staff_time_off: false,
+                allow_qr_payment: true,
+                qr_image_url: null,
+                allow_cash_payment: true,
+                require_comprobante_for_qr: true,
+                auto_confirm_bookings: true,
+                send_email_notifications: true,
+                send_whatsapp_notifications: false,
+            };
+            // Create default settings
+            const createdSettings = await client_1.prisma.companySettings.create({
+                data: {
+                    company_id: companyId,
+                    ...defaultSettings,
+                },
+            });
+            return res.json({
+                code: 200,
+                error: false,
+                message: 'Settings retrieved successfully',
+                data: {
+                    ...createdSettings,
+                    default_language: defaultLanguage,
+                },
+            });
+        }
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Settings retrieved successfully',
+            data: {
+                ...settings,
+                default_language: defaultLanguage,
+            },
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Error getting company settings:', error);
+        mensaje = {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+        };
+        return res.status(500).json(mensaje);
+    }
+}
+/**
+ * GET /api/admin/settings/subscription-history
+ * Get current subscription values and change history for the active shop
+ */
+async function getCompanySubscriptionHistory(req, res) {
+    try {
+        const companyId = req.companyID;
+        if (!companyId) {
+            mensaje = {
+                code: 400,
+                message: 'Company context not found',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        const payload = await (0, company_subscription_history_service_1.getCompanySubscriptionHistoryPayload)(companyId);
+        if (!payload) {
+            mensaje = {
+                code: 404,
+                message: 'Company not found',
+                error: true,
+            };
+            return res.status(404).json(mensaje);
+        }
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Subscription history retrieved successfully',
+            data: payload,
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Error getting company subscription history:', error);
+        mensaje = {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+        };
+        return res.status(500).json(mensaje);
+    }
+}
+/**
+ * PUT /api/admin/settings
+ * Update company settings
+ */
+async function updateCompanySettings(req, res) {
+    try {
+        const companyId = req.companyID;
+        if (!companyId) {
+            mensaje = {
+                code: 400,
+                message: 'Company context not found',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        const { booking_buffer_minutes, booking_time_granularity_minutes, booking_time_view_default, cancel_limit_minutes, reschedule_limit_minutes, auto_approve_staff_time_off, max_advance_booking_days, min_advance_booking_minutes, allow_qr_payment, qr_image_url, allow_cash_payment, require_comprobante_for_qr, auto_confirm_bookings, send_email_notifications, send_whatsapp_notifications, social_links, default_language, custom_tos, staff_label, } = req.body;
+        // Validate numeric fields
+        if (booking_buffer_minutes !== undefined && (typeof booking_buffer_minutes !== 'number' || booking_buffer_minutes < 0)) {
+            mensaje = {
+                code: 400,
+                message: 'booking_buffer_minutes must be a non-negative number',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        if (booking_time_granularity_minutes !== undefined && (typeof booking_time_granularity_minutes !== 'number' || booking_time_granularity_minutes < 5)) {
+            mensaje = {
+                code: 400,
+                message: 'booking_time_granularity_minutes must be at least 5',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        if (booking_time_view_default !== undefined &&
+            (typeof booking_time_view_default !== 'string' || !['hour', 'all'].includes(booking_time_view_default.trim().toLowerCase()))) {
+            mensaje = {
+                code: 400,
+                message: 'booking_time_view_default must be one of: hour, all',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        if (cancel_limit_minutes !== undefined && (typeof cancel_limit_minutes !== 'number' || cancel_limit_minutes < 0)) {
+            mensaje = {
+                code: 400,
+                message: 'cancel_limit_minutes must be a non-negative number',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        if (reschedule_limit_minutes !== undefined && (typeof reschedule_limit_minutes !== 'number' || reschedule_limit_minutes < 0)) {
+            mensaje = {
+                code: 400,
+                message: 'reschedule_limit_minutes must be a non-negative number',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        // Validate boolean fields
+        const booleanFields = [
+            'allow_qr_payment',
+            'allow_cash_payment',
+            'send_email_notifications',
+            'send_whatsapp_notifications',
+            'auto_approve_staff_time_off',
+        ];
+        for (const field of booleanFields) {
+            if (req.body[field] !== undefined && typeof req.body[field] !== 'boolean') {
+                mensaje = {
+                    code: 400,
+                    message: `${field} must be a boolean`,
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+        }
+        // Validate default language if provided
+        if (default_language !== undefined &&
+            (typeof default_language !== 'string' || !SUPPORTED_LANGUAGES.has(default_language.trim().toLowerCase()))) {
+            mensaje = {
+                code: 400,
+                message: 'default_language must be one of: es, en',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        // Validate staff_label if provided
+        if (staff_label !== undefined && staff_label !== null && (typeof staff_label !== 'string' || staff_label.trim().length > 50)) {
+            mensaje = {
+                code: 400,
+                message: 'staff_label must be a string of 50 characters or fewer',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        // Validate custom_tos if provided
+        if (custom_tos !== undefined && custom_tos !== null && typeof custom_tos !== 'string') {
+            mensaje = {
+                code: 400,
+                message: 'custom_tos must be a string or null',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        // Validate qr_image_url if provided
+        if (qr_image_url !== undefined && qr_image_url !== null && typeof qr_image_url !== 'string') {
+            mensaje = {
+                code: 400,
+                message: 'qr_image_url must be a string or null',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        // Validate social_links if provided
+        let normalizedSocialLinks;
+        if (social_links !== undefined) {
+            if (typeof social_links !== 'object' || social_links === null || Array.isArray(social_links)) {
+                mensaje = {
+                    code: 400,
+                    message: 'social_links must be an object',
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+            const allowedKeys = ['instagram', 'facebook', 'tiktok', 'x_twitter', 'youtube', 'whatsapp'];
+            const unknownKeys = Object.keys(social_links).filter(k => !allowedKeys.includes(k));
+            if (unknownKeys.length > 0) {
+                mensaje = {
+                    code: 400,
+                    message: `Unknown social_links keys: ${unknownKeys.join(', ')}. Allowed: ${allowedKeys.join(', ')}`,
+                    error: true,
+                };
+                return res.status(400).json(mensaje);
+            }
+            normalizedSocialLinks = {};
+            for (const key of allowedKeys) {
+                const value = social_links[key];
+                if (value === undefined || value === null || value === '') {
+                    normalizedSocialLinks[key] = null;
+                    continue;
+                }
+                if (typeof value !== 'string') {
+                    mensaje = {
+                        code: 400,
+                        message: `social_links.${key} must be a string, null, or empty`,
+                        error: true,
+                    };
+                    return res.status(400).json(mensaje);
+                }
+                if (value.length > 500) {
+                    mensaje = {
+                        code: 400,
+                        message: `social_links.${key} must be 500 characters or fewer`,
+                        error: true,
+                    };
+                    return res.status(400).json(mensaje);
+                }
+                // WhatsApp normalization: raw digits → wa.me link
+                if (key === 'whatsapp' && /^\+?\d+$/.test(value)) {
+                    normalizedSocialLinks[key] = `https://wa.me/${value.replace(/^\+/, '')}`;
+                    continue;
+                }
+                // Basic URL validation for non-empty values
+                if (!value.startsWith('https://') && !value.startsWith('http://')) {
+                    mensaje = {
+                        code: 400,
+                        message: `social_links.${key} must be a valid URL starting with https://`,
+                        error: true,
+                    };
+                    return res.status(400).json(mensaje);
+                }
+                normalizedSocialLinks[key] = value;
+            }
+        }
+        // Plan-gate booking flow customization: ignore values if plan doesn't support
+        const canCustomizeFlow = await (0, plan_enforcement_service_1.isFeatureEnabledForCompany)(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
+        const effectiveRequireComprobante = canCustomizeFlow ? require_comprobante_for_qr : undefined;
+        const effectiveAutoConfirm = canCustomizeFlow ? auto_confirm_bookings : undefined;
+        // Upsert settings
+        const settings = await client_1.prisma.companySettings.upsert({
+            where: { company_id: companyId },
+            update: {
+                booking_buffer_minutes,
+                booking_time_granularity_minutes,
+                booking_time_view_default: booking_time_view_default !== undefined
+                    ? normalizeBookingTimeViewDefault(booking_time_view_default)
+                    : undefined,
+                cancel_limit_minutes,
+                reschedule_limit_minutes,
+                auto_approve_staff_time_off,
+                max_advance_booking_days: max_advance_booking_days !== undefined ? (max_advance_booking_days || null) : undefined,
+                min_advance_booking_minutes: min_advance_booking_minutes !== undefined ? (min_advance_booking_minutes || null) : undefined,
+                allow_qr_payment,
+                qr_image_url,
+                allow_cash_payment,
+                require_comprobante_for_qr: effectiveRequireComprobante,
+                auto_confirm_bookings: effectiveAutoConfirm,
+                send_email_notifications,
+                send_whatsapp_notifications,
+                ...(normalizedSocialLinks !== undefined && { social_links: normalizedSocialLinks }),
+                ...(custom_tos !== undefined && { custom_tos: custom_tos?.trim() || null }),
+                ...(staff_label !== undefined && { staff_label: staff_label?.trim() || 'Staff' }),
+            },
+            create: {
+                company_id: companyId,
+                booking_buffer_minutes: booking_buffer_minutes || 10,
+                booking_time_granularity_minutes: booking_time_granularity_minutes || 5,
+                booking_time_view_default: normalizeBookingTimeViewDefault(booking_time_view_default),
+                cancel_limit_minutes: cancel_limit_minutes || 120,
+                reschedule_limit_minutes: reschedule_limit_minutes || 120,
+                auto_approve_staff_time_off: auto_approve_staff_time_off !== undefined ? auto_approve_staff_time_off : false,
+                max_advance_booking_days: max_advance_booking_days || null,
+                min_advance_booking_minutes: min_advance_booking_minutes || null,
+                allow_qr_payment: allow_qr_payment !== undefined ? allow_qr_payment : true,
+                qr_image_url: qr_image_url || null,
+                allow_cash_payment: allow_cash_payment !== undefined ? allow_cash_payment : true,
+                require_comprobante_for_qr: canCustomizeFlow && effectiveRequireComprobante !== undefined ? effectiveRequireComprobante : true,
+                auto_confirm_bookings: canCustomizeFlow && effectiveAutoConfirm !== undefined ? effectiveAutoConfirm : true,
+                send_email_notifications: send_email_notifications !== undefined ? send_email_notifications : true,
+                send_whatsapp_notifications: send_whatsapp_notifications !== undefined ? send_whatsapp_notifications : false,
+                social_links: normalizedSocialLinks || {},
+                custom_tos: custom_tos?.trim() || null,
+                staff_label: staff_label?.trim() || 'Staff',
+            },
+        });
+        if (default_language !== undefined) {
+            await client_1.prisma.configMessage.upsert({
+                where: {
+                    company_id_key: {
+                        company_id: companyId,
+                        key: DEFAULT_LANGUAGE_KEY,
+                    },
+                },
+                update: {
+                    value: normalizeDefaultLanguage(default_language),
+                    name: 'Default Language',
+                    description: 'Default language for customer communications',
+                },
+                create: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                    name: 'Default Language',
+                    value: normalizeDefaultLanguage(default_language),
+                    description: 'Default language for customer communications',
+                },
+            });
+        }
+        const persistedDefaultLanguageConfig = await client_1.prisma.configMessage.findUnique({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            select: { value: true },
+        });
+        const persistedDefaultLanguage = normalizeDefaultLanguage(persistedDefaultLanguageConfig?.value);
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Settings updated successfully',
+            data: {
+                ...settings,
+                default_language: persistedDefaultLanguage,
+            },
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Error updating company settings:', error);
+        mensaje = {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+        };
+        return res.status(500).json(mensaje);
+    }
+}
+/**
+ * DELETE /api/admin/settings
+ * Reset company settings to defaults
+ */
+async function resetCompanySettings(req, res) {
+    try {
+        const companyId = req.companyID;
+        if (!companyId) {
+            mensaje = {
+                code: 400,
+                message: 'Company context not found',
+                error: true,
+            };
+            return res.status(400).json(mensaje);
+        }
+        // Delete existing settings
+        await client_1.prisma.companySettings.deleteMany({
+            where: { company_id: companyId },
+        });
+        // Create default settings
+        const defaultSettings = await client_1.prisma.companySettings.create({
+            data: {
+                company_id: companyId,
+                booking_buffer_minutes: 10,
+                booking_time_granularity_minutes: 5,
+                booking_time_view_default: 'hour',
+                cancel_limit_minutes: 120,
+                reschedule_limit_minutes: 120,
+                auto_approve_staff_time_off: false,
+                allow_qr_payment: true,
+                qr_image_url: null,
+                allow_cash_payment: true,
+                send_email_notifications: true,
+                send_whatsapp_notifications: false,
+            },
+        });
+        await client_1.prisma.configMessage.upsert({
+            where: {
+                company_id_key: {
+                    company_id: companyId,
+                    key: DEFAULT_LANGUAGE_KEY,
+                },
+            },
+            update: {
+                value: 'es',
+                name: 'Default Language',
+                description: 'Default language for customer communications',
+            },
+            create: {
+                company_id: companyId,
+                key: DEFAULT_LANGUAGE_KEY,
+                name: 'Default Language',
+                value: 'es',
+                description: 'Default language for customer communications',
+            },
+        });
+        return res.json({
+            code: 200,
+            error: false,
+            message: 'Settings reset to defaults successfully',
+            data: {
+                ...defaultSettings,
+                default_language: 'es',
+            },
+        });
+    }
+    catch (error) {
+        logger_1.logger.error('Error resetting company settings:', error);
+        mensaje = {
+            code: 500,
+            message: 'Internal server error',
+            error: true,
+        };
+        return res.status(500).json(mensaje);
+    }
+}

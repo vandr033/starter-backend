@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createUploadIntent, uploadQRImage, deleteQRImage, deleteUploadedFile, uploadMiddleware } from '../controllers/public-upload.controller';
 import { optionalAuth } from '../middlewares/optionalAuth';
+import { demoCompanySlugWriteGuard } from '../middlewares/demo-session.middleware';
 
 const router = Router();
 
@@ -20,7 +21,7 @@ const uploadRateLimit = rateLimit({
 });
 
 // The slug is the server-side tenant selector; company_id is never accepted as attribution.
-router.post('/intents/:slug', uploadRateLimit, optionalAuth, createUploadIntent);
+router.post('/intents/:slug', demoCompanySlugWriteGuard, uploadRateLimit, optionalAuth, createUploadIntent);
 router.post('/qr', uploadRateLimit, uploadMiddleware, uploadQRImage);
 
 router.delete('/qr', deleteQRImage);

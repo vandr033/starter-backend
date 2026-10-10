@@ -52,6 +52,14 @@ starter-backend/
 | `npm start` | Start production server |
 | `npm run worker:whatsapp` | Start the durable WhatsApp outbox worker |
 | `npm run prisma:seed` | Run Prisma seed script |
+| `npm run seed:demo` | Seed the isolated PriConPri demo profiles and fixtures |
+| `npm run test:demo:mysql` | Verify demo sessions and fixture idempotency on a disposable MySQL database |
+
+### Live demo
+
+Apply the schema migration, then run `npm run seed:demo`. The launcher is served by `GET /api/demo/profiles`; opening a profile calls `POST /api/demo/launch`, which sets an HttpOnly session cookie. Demo sessions last 45 minutes and are locked to one seeded tenant. Admin reads use the regular production APIs; unsafe methods return `403 DEMO_READ_ONLY`.
+
+The demo integration test writes all six canonical demo tenants and is skipped unless both `RUN_MYSQL_INTEGRATION=1` and `RUN_DEMO_SEED_INTEGRATION=1` are set. Point `DATABASE_URL` at a disposable MySQL database before running `npm run test:demo:mysql`.
 
 ### Prisma Commands
 ```bash

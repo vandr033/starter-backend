@@ -11,8 +11,11 @@ import {
 import { requireAuth } from '../middlewares/requireAuth';
 import { optionalAuth } from '../middlewares/optionalAuth';
 import { uploadMiddleware } from '../controllers/public-upload.controller';
+import { demoCompanySlugWriteGuard } from '../middlewares/demo-session.middleware';
 
 const router = Router();
+
+router.use('/:slug', demoCompanySlugWriteGuard);
 
 router.get('/:slug/store', PublicCommerceController.getPublicCommerceStore);
 router.get('/:slug/categories', PublicCommerceController.listPublicCommerceCategories);

@@ -1,4 +1,4 @@
-import { BookingSource, BookingStatus } from '@prisma/client';
+import { BookingSource, BookingStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { getBookingLifecycleStatus, isNoShowBooking } from '../utils/booking-status';
 
@@ -244,6 +244,18 @@ function toFinalCustomer(row: CustomerAggregateMutable): CustomerWithStats {
 
 type BookingRow = Awaited<ReturnType<typeof fetchBookingsForCompany>>[number];
 
+export function buildCustomerCategoryFilter(categoryId: number): Prisma.CustomerProfileWhereInput {
+    return {
+        OR: [
+            { bookings: { some: { deleted_at: null, booking_services: { some: { service: { category_id: categoryId } } } } } },
+            { group_event_bookings: { some: { group_event: { is: { category_id: categoryId, deleted_at: null } } } } },
+            { group_class_enrollments: { some: { group_class: { is: { category_id: categoryId, deleted_at: null } } } } },
+            { group_event_interests: { some: { group_event: { is: { category_id: categoryId, deleted_at: null } } } } },
+            { group_class_interests: { some: { group_class: { is: { category_id: categoryId, deleted_at: null } } } } },
+        ],
+    };
+}
+
 function buildCustomerKeyFromBooking(booking: BookingRow): string {
     const user = booking.customer?.user && !booking.customer.user.deleted_at
         ? booking.customer.user
@@ -311,6 +323,7 @@ async function fetchBookingsForCompany(companyId: number) {
                             name: true,
                             category: {
                                 select: {
+                                    id: true,
                                     name: true,
                                 },
                             },
@@ -325,11 +338,12 @@ async function fetchBookingsForCompany(companyId: number) {
 
 export async function getCustomersWithBookingStats(
     companyId: number,
-    search?: string
+    search?: string,
+    categoryId?: number,
 ): Promise<CustomerWithStats[]> {
     const now = new Date();
 
-    const [customerProfiles, bookings] = await Promise.all([
+    const [customerProfiles, bookings, registrations] = await Promise.all([
         prisma.customerProfile.findMany({
             where: {
                 company_id: companyId,
@@ -339,6 +353,7 @@ export async function getCustomersWithBookingStats(
                         deleted_at: null,
                     },
                 },
+                ...(categoryId ? buildCustomerCategoryFilter(categoryId) : {}),
             },
             include: {
                 user: {
@@ -354,6 +369,22 @@ export async function getCustomersWithBookingStats(
             orderBy: { created_at: 'desc' },
         }),
         fetchBookingsForCompany(companyId),
+        categoryId ? prisma.freeEventRegistration.findMany({
+            where: {
+                company_id: companyId,
+                group_event: { is: { category_id: categoryId, deleted_at: null } },
+            },
+            select: {
+                id: true,
+                user_id: true,
+                first_name: true,
+                last_name: true,
+                email: true,
+                phone_prefix: true,
+                phone_number: true,
+                user: { select: { id: true, name: true, email: true, phoneNumber: true, phone_prefix: true, deleted_at: true } },
+            },
+        }) : Promise.resolve([]),
     ]);
 
     const customerMap = new Map<string, CustomerAggregateMutable>();
@@ -385,6 +416,28 @@ export async function getCustomersWithBookingStats(
         );
     }
 
+    for (const registration of registrations) {
+        if (registration.user?.deleted_at) continue;
+        const email = normalizeEmail(registration.user?.email || registration.email);
+        const phone = normalizePhone(registration.user?.phoneNumber || registration.phone_number);
+        const phonePrefix = normalizePrefix(registration.user?.phone_prefix || registration.phone_prefix);
+        const name = registration.user?.name || `${registration.first_name} ${registration.last_name}`.trim() || 'Guest';
+        const userId = registration.user?.id || null;
+        const customerKey = buildCustomerKey({ userId, email, phone, phonePrefix, fallbackName: name });
+        if (!customerMap.has(customerKey)) {
+            customerMap.set(customerKey, buildCustomerSeed({
+                id: registration.id,
+                customerKey,
+                userId,
+                name,
+                email,
+                phone,
+                phonePrefix,
+                notes: null,
+            }));
+        }
+    }
+
     for (const booking of bookings) {
         const user = booking.customer?.user && !booking.customer.user.deleted_at
             ? booking.customer.user
@@ -405,6 +458,10 @@ export async function getCustomersWithBookingStats(
             phonePrefix,
             fallbackName: name,
         });
+
+        if (categoryId && !customerMap.has(customerKey) && !booking.booking_services.some((bookingService) => bookingService.service?.category?.id === categoryId)) {
+            continue;
+        }
 
         if (!customerMap.has(customerKey)) {
             customerMap.set(

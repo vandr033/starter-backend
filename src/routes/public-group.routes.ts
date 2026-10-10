@@ -14,6 +14,7 @@ import {
     publicSessionAttendanceVerifySchema,
 } from '../schemas/group.schema';
 import { optionalAuth } from '../middlewares/optionalAuth';
+import { demoClassAttendanceWriteGuard } from '../middlewares/demo-session.middleware';
 import {
     getFreeRegistrationStateHandler,
     submitFreeRegistrationHandler,
@@ -59,24 +60,28 @@ router.get(
 );
 router.post(
     '/classes/sessions/attendance/:token/start',
+    demoClassAttendanceWriteGuard,
     optionalAuth,
     validate(publicSessionAttendanceStartSchema),
     PublicGroupController.startPublicSessionAttendanceVerification,
 );
 router.post(
     '/classes/sessions/attendance/:token/resend',
+    demoClassAttendanceWriteGuard,
     optionalAuth,
     validate(publicSessionAttendanceResendSchema),
     PublicGroupController.resendPublicSessionAttendanceVerification,
 );
 router.post(
     '/classes/sessions/attendance/:token/verify',
+    demoClassAttendanceWriteGuard,
     optionalAuth,
     validate(publicSessionAttendanceVerifySchema),
     PublicGroupController.verifyPublicSessionAttendanceVerification,
 );
 router.post(
     '/classes/sessions/attendance/:token/submit',
+    demoClassAttendanceWriteGuard,
     optionalAuth,
     validate(publicSessionAttendanceSubmitSchema),
     PublicGroupController.submitPublicSessionAttendance,

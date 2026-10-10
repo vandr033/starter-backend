@@ -39,6 +39,7 @@ import {
 } from './company-provisioning.service';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
 import { buildPhoneLookupCandidates } from '../repositories/user.repo';
+import { assertDemoOperatorMayJoinCompany } from './demo-operator-membership.service';
 
 /**
  * Generate a URL-friendly slug from a string
@@ -1100,6 +1101,7 @@ export async function createShop(data: CreateShopData, changedByUserId?: string)
                 email: ownerEmail,
                 temporaryPassword: ownerPassword,
                 companyName: shop.name,
+                companyId: shop.id,
                 loginUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
             });
             if (ownerInviteStatus !== 1) {
@@ -1790,6 +1792,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
         }
 
         // Create CompanyUser assignment
+        await assertDemoOperatorMayJoinCompany(prisma, user.id, shopId);
         const companyUser = await prisma.companyUser.create({
             data: {
                 company_id: shopId,
@@ -1831,6 +1834,7 @@ export async function addUserToShop(shopId: number, data: AddUserToShopData): Pr
                 email: normalizedEmail,
                 temporaryPassword: tempPasswordForInvite,
                 companyName: shop.name,
+                companyId: shopId,
                 loginUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/login`,
             });
 
@@ -2119,6 +2123,7 @@ export async function impersonateShop(shopId: number, superAdminUser: any, heade
         }
 
         // Create or update a temporary CompanyUser record for impersonation
+        await assertDemoOperatorMayJoinCompany(prisma, superAdminUser.id, shopId);
         const companyUser = await prisma.companyUser.upsert({
             where: {
                 company_id_user_id_role: {

@@ -7,6 +7,7 @@ import { requireActiveCompany } from '../middlewares/requireActiveCompany';
 import { requireCompanyCapability } from '../middlewares/requireCompanyCapability';
 import * as CustomerAppointments from '../services/customer-appointments.service';
 import { Request, Response } from 'express';
+import { demoBookingWriteGuard } from '../middlewares/demo-session.middleware';
 
 const router = Router();
 
@@ -62,7 +63,7 @@ router.post(
 );
 
 // PUT /api/booking/:id - Modify a booking (requires auth)
-router.put('/:id', requireAuth, async (req: Request, res: Response) => {
+router.put('/:id', demoBookingWriteGuard, requireAuth, async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
     const userId = authReq.authUser?.id;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -74,7 +75,7 @@ router.put('/:id', requireAuth, async (req: Request, res: Response) => {
 });
 
 // POST /api/booking/:id/cancel - Cancel a booking (requires auth)
-router.post('/:id/cancel', requireAuth, async (req: Request, res: Response) => {
+router.post('/:id/cancel', demoBookingWriteGuard, requireAuth, async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
     const userId = authReq.authUser?.id;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });

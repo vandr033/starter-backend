@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { CompanyUserRole, StaffProfileStatus } from '@prisma/client';
 import { ensureDefaultStaffAvailabilityFromCompanyHours } from './staff-availability-defaults.service';
+import { assertDemoOperatorMayJoinCompany } from './demo-operator-membership.service';
 
 const DEFAULT_LANGUAGE_KEY = 'default_language';
 const DEFAULT_LANGUAGE_VALUE: 'es' | 'en' = 'es';
@@ -136,6 +137,7 @@ export async function assignOwnerToCompany(params: {
     displayName: string;
     isBookable?: boolean;
 }) {
+    await assertDemoOperatorMayJoinCompany(params.tx, params.userId, params.companyId);
     const companyUser = await params.tx.companyUser.upsert({
         where: {
             company_id_user_id_role: {

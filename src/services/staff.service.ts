@@ -484,7 +484,7 @@ export async function createStaff(
 
         // Send invite email
         const inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/staff/invite/${inviteToken}`;
-        await sendStaffInviteEmail(normalizedEmail, otp, inviteLink, company?.name || 'Our Company');
+        await sendStaffInviteEmail(normalizedEmail, otp, inviteLink, company?.name || 'Our Company', companyId);
 
         // Get the complete staff profile with services
         const completeStaff = await StaffRepo.getStaffById(staff.id, companyId);
@@ -622,7 +622,8 @@ export async function resendStaffInvite(
             normalizedEmail,
             otp,
             inviteLink,
-            staff.company.name || 'Our Company'
+            staff.company.name || 'Our Company',
+            companyId,
         );
 
         if (emailStatus !== 1) {

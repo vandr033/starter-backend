@@ -1,16 +1,22 @@
 import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './requireAuth';
 import {
-  getActiveCompanyIdFromRequest,
+  getActiveCompanyCookieState,
   setActiveCompanyCookie,
 } from '../utils/active-shop-cookie';
+import { sendDemoCompanyMismatch } from './demo-session.middleware';
 
 export function requireActiveAdminCompanyContext(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction,
 ) {
-  const activeCompanyId = getActiveCompanyIdFromRequest(req);
+  const cookie = getActiveCompanyCookieState(req);
+  const demoCompanyId = req.demoSessionContext?.companyId;
+  if (demoCompanyId && cookie.present && cookie.companyId !== demoCompanyId) {
+    return sendDemoCompanyMismatch(res);
+  }
+  const activeCompanyId = demoCompanyId ?? cookie.companyId;
   const resolvedCompanyId =
     activeCompanyId
     || ((req as any).companyID as number | undefined)
@@ -25,7 +31,7 @@ export function requireActiveAdminCompanyContext(
     });
   }
 
-  if (!activeCompanyId) {
+  if (!activeCompanyId && !demoCompanyId) {
     setActiveCompanyCookie(res, resolvedCompanyId);
   }
 

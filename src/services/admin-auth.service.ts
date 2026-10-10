@@ -125,11 +125,12 @@ function summarizeAuthConfig() {
     };
 }
 
-async function getAdminCompanyUsers(userId: string) {
+async function getAdminCompanyUsers(userId: string, lockedCompanyId?: number) {
     return prisma.companyUser.findMany({
         where: {
             user_id: userId,
             deleted_at: null,
+            ...(lockedCompanyId ? { company_id: lockedCompanyId } : {}),
             role: {
                 in: ADMIN_ALLOWED_ROLES,
             },
@@ -615,6 +616,7 @@ export async function signInAdmin(
 export async function getAdminSessionData(
     userId: string,
     preferredCompanyId?: number | null,
+    lockedCompanyId?: number,
 ): Promise<AdminSignInResult> {
     try {
         // Get user from database
@@ -642,7 +644,7 @@ export async function getAdminSessionData(
 
         // Resolve memberships (multi-shop support)
         const companyUsers = await Promise.all(
-            (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary),
+            (await getAdminCompanyUsers(userId, lockedCompanyId)).map(toAdminCompanyUserSummary),
         );
         const activeCompanyUser = resolveActiveCompanyUser(companyUsers, preferredCompanyId);
 
@@ -677,10 +679,10 @@ export async function getAdminSessionData(
     }
 }
 
-export async function switchActiveShop(userId: string, companyId: number): Promise<MensajeApi> {
+export async function switchActiveShop(userId: string, companyId: number, lockedCompanyId?: number): Promise<MensajeApi> {
     try {
         const companyUsers = await Promise.all(
-            (await getAdminCompanyUsers(userId)).map(toAdminCompanyUserSummary),
+            (await getAdminCompanyUsers(userId, lockedCompanyId)).map(toAdminCompanyUserSummary),
         );
 
         const selected = companyUsers.find((companyUser) => companyUser.company_id === companyId);

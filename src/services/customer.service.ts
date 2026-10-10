@@ -8,6 +8,9 @@ import {
 import * as UserRepo from '../repositories/user.repo';
 import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
 import { queueWhatsappBatch } from '../utils/whatsappSender';
+import { isDemoCompanyId } from './demo-session.service';
+import { isDemoRequest } from './demo-request-context';
+import { assertDemoOperatorMayJoinCompany } from './demo-operator-membership.service';
 import { logger } from '../config/logger';
 import axios from 'axios';
 import * as GroupPaymentsService from './group-payments.service';
@@ -49,12 +52,14 @@ interface SendMassCustomerMessageInput {
     message: string;
     search?: string;
     segment?: CustomerSegmentKey;
+    categoryId?: number;
     idempotencyKey?: string;
 }
 
 interface CustomerExportOptions {
     search?: string;
     segment?: CustomerSegmentKey;
+    categoryId?: number;
     requestedByUserId?: string;
 }
 
@@ -263,7 +268,7 @@ function buildCustomersCsv(customers: CustomerWithStats[]): string {
         .join('\n');
 }
 
-async function triggerCustomerExportWebhook(params: {
+export async function triggerCustomerExportWebhook(params: {
     companyId: number;
     companyName: string;
     requestedByUserId?: string;
@@ -271,6 +276,7 @@ async function triggerCustomerExportWebhook(params: {
     segment?: CustomerSegmentKey;
     customers: CustomerWithStats[];
 }) {
+    if (isDemoRequest() || await isDemoCompanyId(params.companyId)) return { triggered: false };
     if (!N8N_CUSTOMER_EXPORT_WEBHOOK_URL) {
         return { triggered: false };
     }
@@ -342,9 +348,17 @@ export async function listCustomers(
     companyId: number,
     search?: string,
     segment: CustomerSegmentKey = 'ALL',
+    categoryId?: number,
 ) {
-    const customers = await getCustomersWithBookingStats(companyId, search);
+    const customers = await getCustomersWithBookingStats(companyId, search, categoryId);
     return applyCustomerSegment(customers, segment);
+}
+
+export async function companyHasCustomerCategory(companyId: number, categoryId: number): Promise<boolean> {
+    return Boolean(await prisma.category.findFirst({
+        where: { id: categoryId, company_id: companyId, deleted_at: null },
+        select: { id: true },
+    }));
 }
 
 export async function listInterestCaptureLeads(companyId: number) {
@@ -806,7 +820,7 @@ export async function exportCustomers(
     }
 
     const customers = applyCustomerSegment(
-        await getCustomersWithBookingStats(companyId, options.search || undefined),
+        await getCustomersWithBookingStats(companyId, options.search || undefined, options.categoryId),
         normalizeCustomerSegment(options.segment),
     );
     const csv = buildCustomersCsv(customers);
@@ -859,6 +873,7 @@ export async function sendMassCustomerMessage(
     const message = (payload.message || '').trim();
     const search = (payload.search || '').trim();
     const segment = normalizeCustomerSegment(payload.segment);
+    const categoryId = payload.categoryId;
 
     if (!message) {
         return {
@@ -866,6 +881,10 @@ export async function sendMassCustomerMessage(
             error: true,
             message: 'Message body is required',
         };
+    }
+
+    if (categoryId !== undefined && !(await companyHasCustomerCategory(companyId, categoryId))) {
+        return { code: 400, error: true, message: 'Category not found for this company' };
     }
 
     if (message.length > 1500) {
@@ -901,7 +920,7 @@ export async function sendMassCustomerMessage(
     const locale = (localeConfig?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
 
     const customers = applyCustomerSegment(
-        await getCustomersWithBookingStats(companyId, search || undefined),
+        await getCustomersWithBookingStats(companyId, search || undefined, categoryId),
         segment,
     );
     const seenWhatsappTargets = new Set<string>();
@@ -1153,6 +1172,8 @@ export async function importCustomersFromFile(companyId: number, fileBuffer: Buf
                     role: CompanyUserRole.CUSTOMER,
                 },
             });
+
+            await assertDemoOperatorMayJoinCompany(prisma, user.id, companyId);
 
             if (existingCompanyUser) {
                 if (existingCompanyUser.deleted_at) {

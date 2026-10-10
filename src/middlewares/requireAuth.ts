@@ -7,6 +7,7 @@ import { buildShopUnavailablePayload } from "../utils/company-availability";
 import { getActiveCompanyCookieState } from "../utils/active-shop-cookie";
 import type { EffectiveCompanyAccess } from "../services/company-access.service";
 import { resolveCompanyContextForUser } from "../services/company-access.service";
+import type { ResolvedDemoSession } from "../services/demo-session.service";
 
 export interface AuthenticatedRequest extends Request {
   authUser?: any;
@@ -14,6 +15,7 @@ export interface AuthenticatedRequest extends Request {
   companyAccess?: EffectiveCompanyAccess;
   companyUser?: any;
   companyID?: number;
+  demoSessionContext?: ResolvedDemoSession;
 }
 
 export async function requireAuth(
@@ -22,6 +24,31 @@ export async function requireAuth(
   next: NextFunction
 ) {
   try {
+    const authReq = req as AuthenticatedRequest;
+    if (authReq.demoSessionContext) {
+      const demoUser = await prisma.user.findUnique({
+        where: { id: authReq.demoSessionContext.userId },
+        select: {
+          id: true, email: true, first_name: true, last_name: true, name: true,
+          is_super_admin: true, is_active: true, must_change_password: true,
+          phone_prefix: true, phoneNumber: true, phoneNumberVerified: true,
+          emailVerified: true, image: true, createdAt: true, updatedAt: true,
+          deleted_at: true,
+        },
+      });
+      if (!demoUser?.is_active || demoUser.deleted_at) {
+        return res.status(401).json({ code: 'DEMO_SESSION_EXPIRED', message: 'La sesión de demostración venció.' });
+      }
+      const { deleted_at: _deletedAt, ...publicUser } = demoUser;
+      authReq.authUser = publicUser;
+      authReq.authSession = {
+        isDemo: true,
+        id: authReq.demoSessionContext.id,
+        expiresAt: authReq.demoSessionContext.expiresAt,
+      };
+      return next();
+    }
+
     const auth = await getAuth();
     // Remove verbose logging to reduce noise
     const session = await auth.api.getSession({
@@ -73,7 +100,6 @@ export async function requireAuth(
       });
     }
 
-    const authReq = req as AuthenticatedRequest;
     authReq.authUser = fullUser;
     authReq.authSession = session.session;
 
@@ -131,8 +157,9 @@ export function requireCompanyRole(
     }
 
     try {
+      const demoSession = req.demoSessionContext;
       const cookie = getActiveCompanyCookieState(req);
-      if (cookie.invalid) {
+      if (!demoSession && cookie.invalid) {
         return res.status(400).json({
           code: 400,
           error: true,
@@ -142,7 +169,7 @@ export function requireCompanyRole(
         });
       }
 
-      let companyId = cookie.companyId;
+      let companyId = demoSession?.companyId ?? cookie.companyId;
       if (!companyId) {
         const memberships = await prisma.companyUser.findMany({
           where: {

@@ -28,6 +28,7 @@ import { buildStorageDeleteToken, verifyStorageDeleteToken } from '../utils/stor
 import { assertStoredUpload, consumeUploadIntent, recordStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
 import { UploadSecurityError } from '../utils/upload-errors';
 import { PUBLIC_UPLOAD_MAX_BYTES, PUBLIC_UPLOAD_MIME_TYPES, validateUploadFile } from '../utils/upload-validation';
+import { assertDemoOperatorMayJoinCompany } from './demo-operator-membership.service';
 
 type ServiceResult = {
     code: number;
@@ -371,6 +372,7 @@ function serializeCommerceOrder(order: any, options?: {
 }
 
 async function ensureCustomerCompanyRole(companyId: number, userId: string): Promise<void> {
+    await assertDemoOperatorMayJoinCompany(prisma, userId, companyId);
     const existing = await prisma.companyUser.findFirst({
         where: {
             company_id: companyId,

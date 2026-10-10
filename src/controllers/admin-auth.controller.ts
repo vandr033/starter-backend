@@ -9,6 +9,9 @@ import {
     setActiveCompanyCookie,
 } from '../utils/active-shop-cookie';
 import { logger } from '../config/logger';
+import { clearDemoSessionCookie, sendDemoCompanyMismatch } from '../middlewares/demo-session.middleware';
+import { revokeDemoSession } from '../services/demo-session.service';
+import { toPublicDemoProfile } from '../config/demo-profiles';
 
 let mensaje: MensajeApi;
 
@@ -161,6 +164,14 @@ export async function completeAdminPasswordReset(req: Request, res: Response) {
  */
 export async function adminSignOut(req: Request, res: Response) {
     try {
+        const demoSession = (req as AuthenticatedRequest).demoSessionContext;
+        if (demoSession) {
+            await revokeDemoSession(demoSession.id);
+            clearDemoSessionCookie(res);
+            clearActiveCompanyCookie(res);
+            return res.json({ code: 200, message: 'Sign-out successful', error: false });
+        }
+
         const auth = await getAuth();
         // Convert Express headers to the format Better Auth expects
         const headers: Record<string, string> = {};
@@ -271,6 +282,25 @@ export async function getAdminSession(req: AuthenticatedRequest, res: Response) 
     }
 
     try {
+        if (req.demoSessionContext) {
+            const demo = req.demoSessionContext;
+            const result = await AdminAuthService.getAdminSessionData(user.id, demo.companyId, demo.companyId);
+            if (result.error) return res.status(result.code).json(result);
+            return res.json({
+                data: {
+                    user: result.data?.user,
+                    companyUser: result.data?.companyUser,
+                    companyUsers: result.data?.companyUsers ?? [],
+                    activeCompanyId: demo.companyId,
+                    demoSession: {
+                        isDemo: true,
+                        profile: toPublicDemoProfile(demo.profile),
+                        expiresAt: demo.expiresAt.toISOString(),
+                    },
+                },
+            });
+        }
+
         const auth = await getAuth();
         // Refresh session to implement sliding expiration
         const sessionHeaders: Record<string, string> = {};
@@ -364,16 +394,17 @@ export async function getMyShops(req: AuthenticatedRequest, res: Response) {
         });
     }
 
-    const preferredCompanyId = getActiveCompanyIdFromRequest(req);
-    const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId);
+    const demo = req.demoSessionContext;
+    const preferredCompanyId = demo?.companyId ?? getActiveCompanyIdFromRequest(req);
+    const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId, demo?.companyId);
     if (result.error) {
         return res.status(result.code).json(result);
     }
 
     const resolvedActiveCompanyId = result.data?.activeCompanyId ?? null;
-    if (resolvedActiveCompanyId) {
+    if (!demo && resolvedActiveCompanyId) {
         setActiveCompanyCookie(res, resolvedActiveCompanyId);
-    } else {
+    } else if (!demo) {
         clearActiveCompanyCookie(res);
     }
 
@@ -402,16 +433,17 @@ export async function getActiveShop(req: AuthenticatedRequest, res: Response) {
         });
     }
 
-    const preferredCompanyId = getActiveCompanyIdFromRequest(req);
-    const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId);
+    const demo = req.demoSessionContext;
+    const preferredCompanyId = demo?.companyId ?? getActiveCompanyIdFromRequest(req);
+    const result = await AdminAuthService.getAdminSessionData(user.id, preferredCompanyId, demo?.companyId);
     if (result.error) {
         return res.status(result.code).json(result);
     }
 
     const resolvedActiveCompanyId = result.data?.activeCompanyId ?? null;
-    if (resolvedActiveCompanyId) {
+    if (!demo && resolvedActiveCompanyId) {
         setActiveCompanyCookie(res, resolvedActiveCompanyId);
-    } else {
+    } else if (!demo) {
         clearActiveCompanyCookie(res);
     }
 
@@ -456,12 +488,15 @@ export async function setActiveShop(req: AuthenticatedRequest, res: Response) {
         });
     }
 
-    const result = await AdminAuthService.switchActiveShop(user.id, companyId);
+    const demo = req.demoSessionContext;
+    if (demo && companyId !== demo.companyId) return sendDemoCompanyMismatch(res);
+
+    const result = await AdminAuthService.switchActiveShop(user.id, companyId, demo?.companyId);
     if (result.error) {
         return res.status(result.code).json(result);
     }
 
-    setActiveCompanyCookie(res, companyId);
+    if (!demo) setActiveCompanyCookie(res, companyId);
 
     return res.status(200).json(result);
 }

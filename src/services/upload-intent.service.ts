@@ -5,6 +5,9 @@ import { isCompanyAvailableNow } from '../utils/company-availability';
 import { UploadSecurityError, UPLOAD_ERROR_CODES } from '../utils/upload-errors';
 import { PUBLIC_UPLOAD_MAX_BYTES, PUBLIC_UPLOAD_MIME_TYPES, canonicalUploadMimeType } from '../utils/upload-validation';
 import { StorageService } from './storage.service';
+import { getDemoProfileForCompanySlug } from '../config/demo-profiles';
+import { isDemoCompanyId } from './demo-session.service';
+import { isDemoRequest } from './demo-request-context';
 
 export const UPLOAD_PURPOSES = {
   BOOKING_QR_PROOF: 'BOOKING_QR_PROOF',
@@ -186,6 +189,7 @@ function parseClaims(token: string, env: NodeJS.ProcessEnv = process.env): Uploa
 }
 
 async function findAvailableCompany(slug: string) {
+  if (getDemoProfileForCompanySlug(slug)) throw invalidIntent(403);
   const company = await prisma.company.findUnique({
     where: { slug },
     select: { id: true, slug: true, is_active: true, deleted_at: true, availableUntil: true },
@@ -384,6 +388,7 @@ export async function consumeUploadIntent(
   if (!stored || stored.token_hash !== hashToken(token) || stored.company_id !== claims.companyId || stored.purpose !== claims.purpose || stored.context_id !== claims.contextId) {
     throw invalidIntent();
   }
+  if (isDemoRequest() || await isDemoCompanyId(stored.company_id)) throw invalidIntent(403);
   if (stored.expires_at.getTime() <= now.getTime()) throw new UploadSecurityError(UPLOAD_ERROR_CODES.INTENT_EXPIRED, 410);
   if (stored.consumed_at) throw new UploadSecurityError(UPLOAD_ERROR_CODES.INTENT_REPLAYED, 409);
 

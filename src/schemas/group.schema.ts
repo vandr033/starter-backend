@@ -32,6 +32,7 @@ export const staffAssignmentSchema = z.object({
 
 export const createGroupEventSchema = z.object({
     title: z.string().trim().min(1).max(255),
+    category_id: z.number().int().positive(),
     slug: z.string().trim().min(1).max(255).optional(),
     description: z.string().max(10000).nullable().optional(),
     no_availability_message: z.string().max(5000).nullable().optional(),
@@ -58,6 +59,7 @@ export const setGroupItemStatusSchema = z.object({
 
 export const createGroupClassSchema = z.object({
     title: z.string().trim().min(1).max(255),
+    category_id: z.number().int().positive(),
     slug: z.string().trim().min(1).max(255).optional(),
     description: z.string().max(10000).nullable().optional(),
     cover_image_url: imageUrlOrPathSchema.nullable().optional(),

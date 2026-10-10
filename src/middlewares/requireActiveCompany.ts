@@ -1,6 +1,8 @@
 import type { NextFunction, Response } from 'express';
 import { prisma } from '../prisma/client';
 import type { AuthenticatedRequest } from './requireAuth';
+import { getDemoProfileForCompanySlug } from '../config/demo-profiles';
+import { sendDemoCompanyMismatch, sendDemoReadOnly } from './demo-session.middleware';
 import {
   buildShopUnavailablePayload,
   isCompanyAvailableNow,
@@ -37,7 +39,13 @@ export function requireActiveCompany(options: RequireActiveCompanyOptions) {
 
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const companyId = parseCompanyId(readRawValue(req, source, key));
+      const rawRequestedCompanyId = readRawValue(req, source, key);
+      const requestedCompanyId = parseCompanyId(rawRequestedCompanyId);
+      const lockedCompanyId = req.demoSessionContext?.companyId;
+      if (lockedCompanyId && rawRequestedCompanyId != null && requestedCompanyId !== lockedCompanyId) {
+        return sendDemoCompanyMismatch(res);
+      }
+      const companyId = lockedCompanyId ?? requestedCompanyId;
 
       if (!companyId) {
         return res.status(400).json({
@@ -51,6 +59,7 @@ export function requireActiveCompany(options: RequireActiveCompanyOptions) {
         where: { id: companyId },
         select: {
           id: true,
+          slug: true,
           availableUntil: true,
           is_active: true,
           deleted_at: true,
@@ -67,6 +76,10 @@ export function requireActiveCompany(options: RequireActiveCompanyOptions) {
 
       if (!isCompanyAvailableNow(company)) {
         return res.status(403).json(buildShopUnavailablePayload(company.availableUntil));
+      }
+
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase()) && getDemoProfileForCompanySlug(company.slug)) {
+        return sendDemoReadOnly(res);
       }
 
       (req as any).companyID = company.id;

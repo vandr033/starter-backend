@@ -1,0 +1,759 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.generateSixDigitTicketCode = generateSixDigitTicketCode;
+exports.generateUniqueSixDigitCode = generateUniqueSixDigitCode;
+exports.issueEventTicketForBooking = issueEventTicketForBooking;
+exports.issueClassTicketForEnrollment = issueClassTicketForEnrollment;
+exports.resendTicketByCode = resendTicketByCode;
+exports.cancelTicketByCode = cancelTicketByCode;
+exports.cancelTicketsForEventBooking = cancelTicketsForEventBooking;
+exports.cancelTicketsForClassEnrollment = cancelTicketsForClassEnrollment;
+exports.getTicketByCode = getTicketByCode;
+exports.markEventTicketUsed = markEventTicketUsed;
+exports.listCompanyTickets = listCompanyTickets;
+const crypto_1 = require("crypto");
+const client_1 = require("@prisma/client");
+const client_2 = require("../prisma/client");
+const logger_1 = require("../config/logger");
+const plan_enforcement_service_1 = require("./plan-enforcement.service");
+const group_ticket_qr_service_1 = require("./group-ticket-qr.service");
+const sendEmail_1 = require("../utils/sendEmail");
+const whatsappSender_1 = require("../utils/whatsappSender");
+const notification_provider_service_1 = require("./notification-provider.service");
+const MAX_TICKET_CODE_ATTEMPTS = 40;
+function generateSixDigitTicketCode() {
+    return (0, crypto_1.randomInt)(0, 1000000).toString().padStart(6, '0');
+}
+async function generateUniqueSixDigitCode(params) {
+    const attempts = params.maxAttempts ?? MAX_TICKET_CODE_ATTEMPTS;
+    const candidateFactory = params.candidateFactory ?? generateSixDigitTicketCode;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const candidate = candidateFactory();
+        if (candidate.length !== 6)
+            continue;
+        if (!await params.exists(candidate))
+            return candidate;
+    }
+    throw new Error('Unable to generate a unique ticket code');
+}
+async function generateUniqueTicketCode() {
+    return generateUniqueSixDigitCode({
+        exists: async (candidate) => {
+            const existing = await client_2.prisma.groupTicket.findUnique({
+                where: { ticket_code: candidate },
+                select: { id: true },
+            });
+            return Boolean(existing);
+        },
+    });
+}
+async function canUseTickets(companyId) {
+    return (0, plan_enforcement_service_1.isFeatureEnabledForCompany)(companyId, 'GROUP_ADVANCED');
+}
+function buildFullPhone(prefix, phone) {
+    const cleanPhone = (phone ?? '').replace(/\D/g, '');
+    if (!cleanPhone)
+        return null;
+    const cleanPrefix = (prefix ?? '591').replace(/\D/g, '');
+    return `${cleanPrefix}${cleanPhone}`;
+}
+function getCustomerPortalUrl(companySlug) {
+    const base = (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+    if (companySlug) {
+        return `${base}/me/group-reservations?shop=${encodeURIComponent(companySlug)}`;
+    }
+    return `${base}/me/group-reservations`;
+}
+async function sendTicketNotification(companyId, ticketId, options) {
+    const ticket = await client_2.prisma.groupTicket.findFirst({
+        where: {
+            id: ticketId,
+            company_id: companyId,
+        },
+        include: {
+            event_booking: {
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true,
+                            phoneNumber: true,
+                            phone_prefix: true,
+                        },
+                    },
+                    group_event: {
+                        include: {
+                            company: {
+                                select: { id: true, name: true, slug: true },
+                            },
+                        },
+                    },
+                },
+            },
+            class_enrollment: {
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true,
+                            phoneNumber: true,
+                            phone_prefix: true,
+                        },
+                    },
+                    group_class: {
+                        include: {
+                            company: {
+                                select: { id: true, name: true, slug: true },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    });
+    if (!ticket || ticket.status === client_1.TicketStatus.CANCELLED || ticket.status === client_1.TicketStatus.EXPIRED) {
+        return { sent: false, queued: false, channels: [], queuedChannels: [] };
+    }
+    const settings = await client_2.prisma.companySettings.findUnique({
+        where: { company_id: companyId },
+        select: {
+            send_email_notifications: true,
+            send_whatsapp_notifications: true,
+        },
+    });
+    const sendEmail = settings?.send_email_notifications ?? true;
+    const sendWhatsapp = settings?.send_whatsapp_notifications ?? false;
+    const isEventTicket = Boolean(ticket.group_event_booking_id && ticket.event_booking);
+    const isClassTicket = Boolean(ticket.group_class_enrollment_id && ticket.class_enrollment);
+    if (!isEventTicket && !isClassTicket) {
+        return { sent: false, queued: false, channels: [], queuedChannels: [] };
+    }
+    const company = isEventTicket ? ticket.event_booking.group_event.company : ticket.class_enrollment.group_class.company;
+    const user = isEventTicket ? ticket.event_booking.user : ticket.class_enrollment.user;
+    const itemTitle = isEventTicket ? ticket.event_booking.group_event.title : ticket.class_enrollment.group_class.title;
+    const qrToken = (0, group_ticket_qr_service_1.buildGroupTicketQrToken)(ticket.company_id, ticket.ticket_code, ticket.issued_at);
+    const qrImageUrl = (0, group_ticket_qr_service_1.buildGroupTicketQrImageUrl)(qrToken);
+    const portalUrl = getCustomerPortalUrl(company.slug);
+    const formatDate = (d) => d.toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+    });
+    const emailSubject = isEventTicket
+        ? `${options?.isResend ? 'Your ticket was re-sent' : 'Your ticket'}: ${itemTitle}`
+        : `${options?.isResend ? 'Your class pass ticket was re-sent' : 'Your class pass ticket'}: ${itemTitle}`;
+    let emailHtml;
+    let whatsappCaption;
+    if (isEventTicket) {
+        const validLabel = `${formatDate(ticket.valid_from)} → ${formatDate(ticket.valid_until)}`;
+        whatsappCaption = [
+            company.name,
+            `Your event ticket ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`,
+            `Ticket code: ${ticket.ticket_code}`,
+            `Validity: ${validLabel}`,
+            `Show this QR code at the event entrance to check in.`,
+            `Manage reservations: ${portalUrl}`,
+        ].join('\n');
+        emailHtml = `
+            <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a; max-width: 640px; margin: 0 auto; padding: 20px;">
+                <h2 style="margin-top: 0;">Event ticket</h2>
+                <p>${options?.isResend ? 'We have re-sent your ticket details.' : 'Your ticket is ready.'}</p>
+                <p><strong>Business:</strong> ${company.name}</p>
+                <p><strong>Event:</strong> ${itemTitle}</p>
+                <p><strong>Ticket code:</strong> ${ticket.ticket_code}</p>
+                <p><strong>Validity:</strong> ${validLabel}</p>
+                <p><strong>Your QR code:</strong></p>
+                <p style="margin: 10px 0 16px;">
+                    <img src="${qrImageUrl}" alt="Ticket QR code" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
+                </p>
+                <p style="background:#f1f5f9; border-left:4px solid #3b82f6; padding:10px 14px; border-radius:4px; margin: 16px 0;">
+                    📋 <strong>How to check in:</strong> Show this QR code at the event entrance. Staff will scan it to confirm your entry.
+                </p>
+                <p><a href="${portalUrl}" target="_blank" rel="noopener noreferrer">View my reservations</a></p>
+            </div>
+        `;
+    }
+    else {
+        const groupClass = ticket.class_enrollment.group_class;
+        const validFrom = formatDate(ticket.valid_from);
+        const validUntil = formatDate(ticket.valid_until);
+        const sessionTime = groupClass.start_time ?? null;
+        const location = groupClass.location_text ?? null;
+        const scheduleLines = [];
+        if (sessionTime)
+            scheduleLines.push(`Session time: ${sessionTime}`);
+        if (location)
+            scheduleLines.push(`Location: ${location}`);
+        scheduleLines.push(`Pass valid: ${validFrom} – ${validUntil}`);
+        whatsappCaption = [
+            company.name,
+            `Your class pass ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`,
+            `Ticket code: ${ticket.ticket_code}`,
+            ...scheduleLines,
+            `✅ Check-in: Show this QR code to staff at the start of each class session. It will be scanned to confirm your attendance.`,
+            `Manage reservations: ${portalUrl}`,
+        ].join('\n');
+        const scheduleHtml = [
+            sessionTime ? `<p><strong>Session time:</strong> ${sessionTime}</p>` : '',
+            location ? `<p><strong>Location:</strong> ${location}</p>` : '',
+        ].join('');
+        emailHtml = `
+            <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a; max-width: 640px; margin: 0 auto; padding: 20px;">
+                <h2 style="margin-top: 0;">Class pass ticket</h2>
+                <p>${options?.isResend ? 'We have re-sent your ticket details.' : 'Your class pass is ready. Save this QR code — you will need it at every session.'}</p>
+                <p><strong>Business:</strong> ${company.name}</p>
+                <p><strong>Class:</strong> ${itemTitle}</p>
+                ${scheduleHtml}
+                <p><strong>Pass valid:</strong> ${validFrom} – ${validUntil}</p>
+                <p><strong>Ticket code:</strong> <span style="font-family: monospace; font-size: 1.1em; letter-spacing: 0.1em;">${ticket.ticket_code}</span></p>
+                <p><strong>Your QR code:</strong></p>
+                <p style="margin: 10px 0 16px;">
+                    <img src="${qrImageUrl}" alt="Class QR code" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
+                </p>
+                <div style="background:#f0fdf4; border-left:4px solid #22c55e; padding:12px 16px; border-radius:4px; margin: 16px 0;">
+                    <p style="margin:0 0 6px 0;"><strong>✅ How to check in at each session:</strong></p>
+                    <ol style="margin:0; padding-left:20px;">
+                        <li>Open this email (or your reservations portal) and show this QR code to the staff.</li>
+                        <li>Staff will scan your code to confirm your attendance.</li>
+                        <li>Repeat at every class session — your QR code stays the same for the entire pass period.</li>
+                    </ol>
+                </div>
+                <p><a href="${portalUrl}" target="_blank" rel="noopener noreferrer">View my class reservations</a></p>
+            </div>
+        `;
+    }
+    const whatsappFallbackText = `${whatsappCaption}\nQR image: ${qrImageUrl}`;
+    const sentChannels = [];
+    const queuedChannels = [];
+    if (sendEmail && user.email && !(0, sendEmail_1.isTemporaryEmailAddress)(user.email)) {
+        try {
+            const result = await (0, sendEmail_1.sendGenericEmail)(user.email, emailSubject, emailHtml, { companyId });
+            if ((0, notification_provider_service_1.isEmailDeliverySuccessful)(result)) {
+                sentChannels.push('EMAIL');
+            }
+            else {
+                logger_1.logger.error({ companyId, ticketId, reason: result.reason }, 'Group ticket email was not delivered');
+            }
+        }
+        catch (error) {
+            logger_1.logger.error({ companyId, ticketId, error }, 'Failed sending group ticket email');
+        }
+    }
+    const phoneTarget = buildFullPhone(user.phone_prefix, user.phoneNumber);
+    if (sendWhatsapp && phoneTarget) {
+        const deliveryKey = `${ticket.id}:${options?.isResend ? ticket.resend_count + 1 : ticket.resend_count}`;
+        const imageResult = await (0, whatsappSender_1.queueWhatsappImage)(phoneTarget, qrImageUrl, whatsappCaption, {
+            companyId,
+            sourceType: 'GROUP_TICKET',
+            sourceId: String(ticket.id),
+            dedupeKey: `group-ticket:${deliveryKey}:image`,
+            expiresAt: ticket.valid_until,
+            fallbackText: whatsappFallbackText,
+            fallbackDedupeKey: `group-ticket:${deliveryKey}:text-fallback`,
+            groupTicketId: ticket.id,
+        });
+        if ((0, whatsappSender_1.isWhatsappEnqueueAccepted)(imageResult)) {
+            queuedChannels.push('WHATSAPP');
+        }
+        else {
+            logger_1.logger.error({ companyId, ticketId, phoneTarget, reason: imageResult.reason }, 'Failed queueing group ticket WhatsApp message');
+        }
+    }
+    if (sentChannels.length === 0 && queuedChannels.length === 0) {
+        return { sent: false, queued: false, channels: [], queuedChannels: [] };
+    }
+    if (options?.isResend) {
+        await client_2.prisma.groupTicket.update({
+            where: { id: ticket.id },
+            data: { resend_count: { increment: 1 } },
+        });
+    }
+    // WhatsApp is durable but asynchronous. Only synchronous email delivery
+    // can update the provider-success counter at this point; the worker adds
+    // a WhatsApp delivery when it records the job as SENT.
+    if (sentChannels.length > 0) {
+        await client_2.prisma.groupTicket.update({
+            where: { id: ticket.id },
+            data: {
+                last_sent_at: new Date(),
+                delivery_count: { increment: 1 },
+            },
+        });
+    }
+    return {
+        sent: sentChannels.length > 0,
+        queued: queuedChannels.length > 0,
+        channels: [...sentChannels, ...queuedChannels],
+        queuedChannels,
+    };
+}
+function mapTicketWithQr(ticket) {
+    const qrToken = (0, group_ticket_qr_service_1.buildGroupTicketQrToken)(ticket.company_id, ticket.ticket_code, ticket.issued_at);
+    return {
+        ...ticket,
+        qr_token: qrToken,
+        qr_image_url: (0, group_ticket_qr_service_1.buildGroupTicketQrImageUrl)(qrToken),
+    };
+}
+function parseEventExtraAttendees(raw) {
+    if (!raw || !Array.isArray(raw))
+        return [];
+    const rows = [];
+    for (const item of raw) {
+        if (typeof item !== 'object' || item === null)
+            continue;
+        const record = item;
+        const fullName = typeof record.full_name === 'string' ? record.full_name.trim() : '';
+        if (!fullName)
+            continue;
+        rows.push({
+            full_name: fullName,
+            email: typeof record.email === 'string' && record.email.trim() ? record.email.trim() : null,
+            phone: typeof record.phone === 'string' && record.phone.trim() ? record.phone.trim() : null,
+        });
+    }
+    return rows;
+}
+async function issueEventTicketForBooking(companyId, bookingId) {
+    if (!(await canUseTickets(companyId))) {
+        return { code: 403, error: true, message: 'Tickets require Pro plan' };
+    }
+    const booking = await client_2.prisma.groupEventBooking.findFirst({
+        where: {
+            id: bookingId,
+            company_id: companyId,
+            status: 'CONFIRMED',
+        },
+        include: {
+            user: {
+                select: {
+                    name: true,
+                    email: true,
+                    phoneNumber: true,
+                },
+            },
+            group_event: {
+                select: {
+                    start_at: true,
+                    end_at: true,
+                },
+            },
+            tickets: {
+                where: { status: { in: [client_1.TicketStatus.ACTIVE, client_1.TicketStatus.USED] } },
+                orderBy: { created_at: 'asc' },
+            },
+        },
+    });
+    if (!booking) {
+        return { code: 404, error: true, message: 'Confirmed event booking not found' };
+    }
+    const targetTicketCount = Math.max(1, booking.booked_spots);
+    const extraAttendees = parseEventExtraAttendees(booking.extra_attendees_json);
+    const holderBySeat = new Map();
+    holderBySeat.set(1, {
+        name: booking.user.name?.trim() || null,
+        email: booking.user.email?.trim() || null,
+        phone: booking.user.phoneNumber?.trim() || null,
+    });
+    for (let seat = 2; seat <= targetTicketCount; seat += 1) {
+        const extra = extraAttendees[seat - 2];
+        holderBySeat.set(seat, {
+            name: extra?.full_name ?? null,
+            email: extra?.email ?? null,
+            phone: extra?.phone ?? null,
+        });
+    }
+    const createdTickets = await client_2.prisma.$transaction(async (tx) => {
+        const currentTickets = await tx.groupTicket.findMany({
+            where: {
+                company_id: companyId,
+                group_event_booking_id: booking.id,
+                status: { in: [client_1.TicketStatus.ACTIVE, client_1.TicketStatus.USED] },
+            },
+            orderBy: { created_at: 'asc' },
+        });
+        const seatToTicket = new Map();
+        const unseated = [];
+        for (const ticket of currentTickets) {
+            if (ticket.seat_number
+                && ticket.seat_number >= 1
+                && ticket.seat_number <= targetTicketCount
+                && !seatToTicket.has(ticket.seat_number)) {
+                seatToTicket.set(ticket.seat_number, ticket);
+            }
+            else {
+                unseated.push(ticket);
+            }
+        }
+        const availableSeats = [];
+        for (let seat = 1; seat <= targetTicketCount; seat += 1) {
+            if (!seatToTicket.has(seat)) {
+                availableSeats.push(seat);
+            }
+        }
+        for (const [seat, ticket] of seatToTicket.entries()) {
+            const holder = holderBySeat.get(seat);
+            const nextName = holder?.name ?? null;
+            const nextEmail = holder?.email ?? null;
+            const nextPhone = holder?.phone ?? null;
+            if (ticket.holder_name !== nextName
+                || ticket.holder_email !== nextEmail
+                || ticket.holder_phone !== nextPhone) {
+                await tx.groupTicket.update({
+                    where: { id: ticket.id },
+                    data: {
+                        holder_name: nextName,
+                        holder_email: nextEmail,
+                        holder_phone: nextPhone,
+                    },
+                });
+            }
+        }
+        const assignableCount = Math.min(unseated.length, availableSeats.length);
+        for (let idx = 0; idx < assignableCount; idx += 1) {
+            const ticket = unseated[idx];
+            const seat = availableSeats[idx];
+            const holder = holderBySeat.get(seat);
+            await tx.groupTicket.update({
+                where: { id: ticket.id },
+                data: {
+                    seat_number: seat,
+                    holder_name: holder?.name ?? null,
+                    holder_email: holder?.email ?? null,
+                    holder_phone: holder?.phone ?? null,
+                },
+            });
+            seatToTicket.set(seat, ticket);
+        }
+        const remainingSeats = [];
+        for (let seat = 1; seat <= targetTicketCount; seat += 1) {
+            if (!seatToTicket.has(seat)) {
+                remainingSeats.push(seat);
+            }
+        }
+        const rows = [];
+        for (const seat of remainingSeats) {
+            const holder = holderBySeat.get(seat);
+            const created = await tx.groupTicket.create({
+                data: {
+                    company_id: companyId,
+                    group_event_booking_id: booking.id,
+                    ticket_code: await generateUniqueTicketCode(),
+                    seat_number: seat,
+                    holder_name: holder?.name ?? null,
+                    holder_email: holder?.email ?? null,
+                    holder_phone: holder?.phone ?? null,
+                    status: client_1.TicketStatus.ACTIVE,
+                    valid_from: booking.group_event.start_at,
+                    valid_until: booking.group_event.end_at,
+                },
+            });
+            rows.push(created);
+        }
+        return rows;
+    });
+    if (createdTickets[0]) {
+        void sendTicketNotification(companyId, createdTickets[0].id).catch((error) => {
+            logger_1.logger.error({ companyId, bookingId, ticketId: createdTickets[0].id, error }, 'Failed sending event ticket notification');
+        });
+    }
+    const allTickets = await client_2.prisma.groupTicket.findMany({
+        where: {
+            company_id: companyId,
+            group_event_booking_id: booking.id,
+            status: { in: [client_1.TicketStatus.ACTIVE, client_1.TicketStatus.USED] },
+        },
+        orderBy: [
+            { seat_number: 'asc' },
+            { created_at: 'asc' },
+        ],
+    });
+    return {
+        code: createdTickets.length > 0 ? 201 : 200,
+        error: false,
+        message: createdTickets.length === 0
+            ? 'Tickets already exist'
+            : createdTickets.length === 1
+                ? 'Event ticket issued'
+                : `${createdTickets.length} event tickets issued`,
+        data: allTickets.map((ticket) => mapTicketWithQr(ticket)),
+    };
+}
+async function issueClassTicketForEnrollment(companyId, enrollmentId) {
+    if (!(await canUseTickets(companyId))) {
+        return { code: 403, error: true, message: 'Tickets require Pro plan' };
+    }
+    const enrollment = await client_2.prisma.groupClassEnrollment.findFirst({
+        where: {
+            id: enrollmentId,
+            company_id: companyId,
+            status: 'CONFIRMED',
+        },
+        include: {
+            tickets: {
+                where: { status: { in: [client_1.TicketStatus.ACTIVE, client_1.TicketStatus.USED] } },
+                orderBy: { created_at: 'desc' },
+                take: 1,
+            },
+        },
+    });
+    if (!enrollment) {
+        return { code: 404, error: true, message: 'Confirmed class enrollment not found' };
+    }
+    const existingTicket = enrollment.tickets[0];
+    if (existingTicket) {
+        return { code: 200, error: false, message: 'Ticket already exists', data: mapTicketWithQr(existingTicket) };
+    }
+    let classSessionId = null;
+    if (enrollment.pricing_mode === 'PER_SESSION') {
+        const matchedSession = await client_2.prisma.groupClassSession.findFirst({
+            where: {
+                company_id: companyId,
+                group_class_id: enrollment.group_class_id,
+                cancelled_at: null,
+                start_at: enrollment.valid_from,
+                end_at: enrollment.valid_until,
+            },
+            select: { id: true },
+        });
+        classSessionId = matchedSession?.id ?? null;
+    }
+    const ticket = await client_2.prisma.groupTicket.create({
+        data: {
+            company_id: companyId,
+            group_class_enrollment_id: enrollment.id,
+            group_class_session_id: classSessionId,
+            ticket_code: await generateUniqueTicketCode(),
+            status: client_1.TicketStatus.ACTIVE,
+            valid_from: enrollment.valid_from,
+            valid_until: enrollment.valid_until,
+        },
+    });
+    void sendTicketNotification(companyId, ticket.id).catch((error) => {
+        logger_1.logger.error({ companyId, ticketId: ticket.id, error }, 'Failed sending class ticket notification');
+    });
+    return { code: 201, error: false, message: 'Class pass ticket issued', data: mapTicketWithQr(ticket) };
+}
+async function resendTicketByCode(companyId, ticketCode) {
+    if (!(await canUseTickets(companyId))) {
+        return { code: 403, error: true, message: 'Tickets require Pro plan' };
+    }
+    const ticket = await client_2.prisma.groupTicket.findFirst({
+        where: {
+            company_id: companyId,
+            ticket_code: ticketCode,
+        },
+    });
+    if (!ticket) {
+        return { code: 404, error: true, message: 'Ticket not found' };
+    }
+    if (ticket.status === client_1.TicketStatus.CANCELLED || ticket.status === client_1.TicketStatus.EXPIRED) {
+        return { code: 400, error: true, message: `Cannot resend a ${ticket.status.toLowerCase()} ticket` };
+    }
+    const delivery = await sendTicketNotification(companyId, ticket.id, { isResend: true });
+    if (!delivery.sent && !delivery.queued) {
+        return { code: 400, error: true, message: 'Ticket could not be delivered. Verify customer contact info and notification settings.' };
+    }
+    return {
+        code: 200,
+        error: false,
+        message: delivery.queued && !delivery.sent ? 'Ticket queued' : 'Ticket re-sent',
+        data: {
+            ticket_code: ticket.ticket_code,
+            channels: delivery.channels,
+            sent_channels: delivery.sent ? delivery.channels.filter((channel) => !delivery.queuedChannels.includes(channel)) : [],
+            queued_channels: delivery.queuedChannels,
+            status: delivery.queued && !delivery.sent ? 'PENDING' : 'SENT',
+        },
+    };
+}
+async function cancelTicketByCode(companyId, ticketCode) {
+    if (!(await canUseTickets(companyId))) {
+        return { code: 403, error: true, message: 'Tickets require Pro plan' };
+    }
+    const ticket = await client_2.prisma.groupTicket.findFirst({
+        where: {
+            company_id: companyId,
+            ticket_code: ticketCode,
+        },
+    });
+    if (!ticket) {
+        return { code: 404, error: true, message: 'Ticket not found' };
+    }
+    if (ticket.status === client_1.TicketStatus.CANCELLED) {
+        return { code: 400, error: true, message: 'Ticket is already cancelled' };
+    }
+    const updated = await client_2.prisma.groupTicket.update({
+        where: { id: ticket.id },
+        data: {
+            status: client_1.TicketStatus.CANCELLED,
+            cancelled_at: new Date(),
+        },
+    });
+    return {
+        code: 200,
+        error: false,
+        message: 'Ticket cancelled',
+        data: mapTicketWithQr(updated),
+    };
+}
+async function cancelTicketsForEventBooking(companyId, bookingId) {
+    await client_2.prisma.groupTicket.updateMany({
+        where: {
+            company_id: companyId,
+            group_event_booking_id: bookingId,
+            status: { in: [client_1.TicketStatus.ACTIVE, client_1.TicketStatus.USED] },
+        },
+        data: {
+            status: client_1.TicketStatus.CANCELLED,
+            cancelled_at: new Date(),
+        },
+    });
+}
+async function cancelTicketsForClassEnrollment(companyId, enrollmentId) {
+    await client_2.prisma.groupTicket.updateMany({
+        where: {
+            company_id: companyId,
+            group_class_enrollment_id: enrollmentId,
+            status: { in: [client_1.TicketStatus.ACTIVE, client_1.TicketStatus.USED] },
+        },
+        data: {
+            status: client_1.TicketStatus.CANCELLED,
+            cancelled_at: new Date(),
+        },
+    });
+}
+async function getTicketByCode(companyId, ticketCode) {
+    const ticket = await client_2.prisma.groupTicket.findFirst({
+        where: { company_id: companyId, ticket_code: ticketCode },
+        include: {
+            event_booking: {
+                include: {
+                    user: {
+                        select: { id: true, name: true, email: true, phoneNumber: true },
+                    },
+                    group_event: {
+                        select: { id: true, title: true, start_at: true, end_at: true },
+                    },
+                },
+            },
+            class_enrollment: {
+                include: {
+                    user: {
+                        select: { id: true, name: true, email: true, phoneNumber: true },
+                    },
+                    group_class: {
+                        select: { id: true, title: true },
+                    },
+                },
+            },
+            class_session: {
+                select: { id: true, start_at: true, end_at: true },
+            },
+        },
+    });
+    if (!ticket) {
+        return { code: 404, error: true, message: 'Ticket not found' };
+    }
+    const now = new Date();
+    if (ticket.status === client_1.TicketStatus.ACTIVE && ticket.valid_until < now) {
+        const expired = await client_2.prisma.groupTicket.update({
+            where: { id: ticket.id },
+            data: { status: client_1.TicketStatus.EXPIRED },
+            include: {
+                event_booking: {
+                    include: {
+                        user: {
+                            select: { id: true, name: true, email: true, phoneNumber: true },
+                        },
+                        group_event: {
+                            select: { id: true, title: true, start_at: true, end_at: true },
+                        },
+                    },
+                },
+                class_enrollment: {
+                    include: {
+                        user: {
+                            select: { id: true, name: true, email: true, phoneNumber: true },
+                        },
+                        group_class: {
+                            select: { id: true, title: true },
+                        },
+                    },
+                },
+                class_session: {
+                    select: { id: true, start_at: true, end_at: true },
+                },
+            },
+        });
+        return { code: 200, error: false, message: 'Ticket is expired', data: mapTicketWithQr(expired) };
+    }
+    return { code: 200, error: false, message: 'Ticket retrieved', data: mapTicketWithQr(ticket) };
+}
+async function markEventTicketUsed(companyId, ticketCode) {
+    const ticket = await client_2.prisma.groupTicket.findFirst({
+        where: {
+            company_id: companyId,
+            ticket_code: ticketCode,
+            group_event_booking_id: { not: null },
+        },
+    });
+    if (!ticket) {
+        return { code: 404, error: true, message: 'Event ticket not found' };
+    }
+    if (ticket.status === client_1.TicketStatus.USED) {
+        return { code: 200, error: false, message: 'Ticket already used', data: ticket };
+    }
+    if (ticket.status !== client_1.TicketStatus.ACTIVE) {
+        return { code: 400, error: true, message: `Ticket is ${ticket.status.toLowerCase()}` };
+    }
+    const now = new Date();
+    if (now < ticket.valid_from || now > ticket.valid_until) {
+        await client_2.prisma.groupTicket.update({
+            where: { id: ticket.id },
+            data: {
+                status: client_1.TicketStatus.EXPIRED,
+            },
+        });
+        return { code: 400, error: true, message: 'Ticket is outside validity window' };
+    }
+    const updated = await client_2.prisma.groupTicket.update({
+        where: { id: ticket.id },
+        data: {
+            status: client_1.TicketStatus.USED,
+            used_at: now,
+        },
+    });
+    return { code: 200, error: false, message: 'Ticket marked as used', data: updated };
+}
+async function listCompanyTickets(companyId, filters) {
+    const tickets = await client_2.prisma.groupTicket.findMany({
+        where: {
+            company_id: companyId,
+            ...(filters?.status ? { status: filters.status } : {}),
+            ...(filters?.eventBookingId ? { group_event_booking_id: filters.eventBookingId } : {}),
+            ...(filters?.classEnrollmentId ? { group_class_enrollment_id: filters.classEnrollmentId } : {}),
+        },
+        include: {
+            event_booking: {
+                include: {
+                    group_event: { select: { id: true, title: true } },
+                    user: { select: { id: true, name: true, email: true, phoneNumber: true } },
+                },
+            },
+            class_enrollment: {
+                include: {
+                    group_class: { select: { id: true, title: true } },
+                    user: { select: { id: true, name: true, email: true, phoneNumber: true } },
+                },
+            },
+        },
+        orderBy: { created_at: 'desc' },
+    });
+    return {
+        code: 200,
+        error: false,
+        message: 'Tickets retrieved',
+        data: tickets.map((ticket) => mapTicketWithQr(ticket)),
+    };
+}

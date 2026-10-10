@@ -3,6 +3,7 @@ import { CompanyUserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { hash } from '../utils/password';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
+import { assertDemoOperatorMayJoinCompany } from './demo-operator-membership.service';
 import { isTemporaryEmailAddress, sendCustomerPortalAccessEmail } from '../utils/sendEmail';
 import {
     BETTER_AUTH_CREDENTIAL_PROVIDER_ID,
@@ -20,12 +21,14 @@ export type CustomerAccountInviteContext =
         mode: 'TEMP_PASSWORD';
         email: string;
         companyName: string;
+        companyId: number;
         temporaryPassword: string;
     }
     | {
         mode: 'EXISTING_ACCOUNT';
         email: string;
         companyName: string;
+        companyId: number;
     };
 
 export type EnsuredCustomerProfile = {
@@ -98,6 +101,7 @@ function buildPhoneCandidates(phonePrefix?: string | null, phoneNumber?: string 
 }
 
 async function ensureCustomerRole(companyId: number, userId: string): Promise<void> {
+    await assertDemoOperatorMayJoinCompany(prisma, userId, companyId);
     const existingCompanyUser = await prisma.companyUser.findFirst({
         where: {
             company_id: companyId,
@@ -302,6 +306,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                 mode: 'TEMP_PASSWORD',
                 email: normalizedEmail,
                 companyName: company.name,
+                companyId: company.id,
                 temporaryPassword,
             };
         }
@@ -398,6 +403,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                     mode: 'TEMP_PASSWORD',
                     email: currentEmail,
                     companyName: company.name,
+                    companyId: company.id,
                     temporaryPassword,
                 };
             }
@@ -406,6 +412,7 @@ export async function ensureCustomerProfileWithAccount(params: {
                 mode: 'EXISTING_ACCOUNT',
                 email: currentEmail,
                 companyName: company.name,
+                companyId: company.id,
             };
         }
     }
@@ -430,6 +437,7 @@ export async function sendCustomerPortalInvite(inviteContext: CustomerAccountInv
         return sendCustomerPortalAccessEmail({
             email: inviteContext.email,
             companyName: inviteContext.companyName,
+            companyId: inviteContext.companyId,
             temporaryPassword: inviteContext.temporaryPassword,
         });
     }
@@ -437,5 +445,6 @@ export async function sendCustomerPortalInvite(inviteContext: CustomerAccountInv
     return sendCustomerPortalAccessEmail({
         email: inviteContext.email,
         companyName: inviteContext.companyName,
+        companyId: inviteContext.companyId,
     });
 }

@@ -1,6 +1,8 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { env } from '../config/env';
+import { isDemoCompanyId } from './demo-session.service';
+import { isDemoRequest } from './demo-request-context';
 
 export class StorageService {
   private static safeCompanyId(companyId: number): string {
@@ -96,6 +98,7 @@ export class StorageService {
   }
 
   static async ensureCompanyDirectories(companyId: number): Promise<void> {
+    if (isDemoRequest() || await isDemoCompanyId(companyId)) throw new Error('DEMO_READ_ONLY');
     const companyPath = this.getCompanyPath(companyId);
     
     await fs.mkdir(companyPath, { recursive: true });
@@ -215,7 +218,11 @@ export class StorageService {
   }
 
   static async deleteFile(relativePath: string): Promise<void> {
-    const { fullPath } = this.safeRelativePath(relativePath);
+    const { fullPath, normalized } = this.safeRelativePath(relativePath);
+    const companyId = Number(normalized.split('/')[1]);
+    if (isDemoRequest() || (Number.isInteger(companyId) && companyId > 0 && await isDemoCompanyId(companyId))) {
+      throw new Error('DEMO_READ_ONLY');
+    }
     try {
       await fs.unlink(fullPath);
     } catch (error) {

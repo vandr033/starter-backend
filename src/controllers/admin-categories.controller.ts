@@ -306,6 +306,8 @@ export const deleteCategory = async (req: AuthenticatedRequest, res: Response) =
                 deleted_at: null,
               },
             },
+            group_events: { where: { deleted_at: null } },
+            group_classes: { where: { deleted_at: null } },
           },
         },
       },
@@ -318,11 +320,10 @@ export const deleteCategory = async (req: AuthenticatedRequest, res: Response) =
       });
     }
 
-    // Check if category has services
-    if (existingCategory._count.services > 0) {
+    if (existingCategory._count.services + existingCategory._count.group_events + existingCategory._count.group_classes > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot delete category with associated services. Please delete or reassign the services first.',
+        message: 'Cannot delete a category used by services, events, or classes. Please reassign them first.',
       });
     }
 

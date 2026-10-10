@@ -1,0 +1,14 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const requireAuth_1 = require("../middlewares/requireAuth");
+const business_pricing_controller_1 = require("../controllers/business-pricing.controller");
+const router = (0, express_1.Router)();
+router.use(requireAuth_1.requireAuth);
+router.use(requireAuth_1.requireSuperAdmin);
+router.get('/business-pricing', business_pricing_controller_1.getSuperAdminPricing);
+router.get('/product-features', business_pricing_controller_1.getSuperAdminFeatures);
+router.put('/business-pricing/products/:productKey', business_pricing_controller_1.updateSuperAdminProductPricing);
+router.put('/business-pricing/discounts', business_pricing_controller_1.updateSuperAdminDiscountPricing);
+router.put('/business-pricing/settings', business_pricing_controller_1.updateSuperAdminPricingSettings);
+exports.default = router;

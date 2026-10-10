@@ -432,6 +432,7 @@ export async function createTimeOffRequest(params: {
             for (const owner of owners) {
                 if (!owner.user.email) continue;
                 await sendStaffTimeOffRequestEmail({
+                    companyId,
                     ownerEmail: owner.user.email,
                     ownerName: owner.user.name || 'Owner',
                     companyName: owner.company?.name || 'Your company',

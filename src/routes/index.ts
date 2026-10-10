@@ -50,6 +50,7 @@ import adminGroupBookingRoutes from './admin-group-booking.routes';
 import publicGroupRoutes from './public-group.routes';
 import businessSignupRoutes from './business-signup.routes';
 import businessPricingRoutes from './business-pricing.routes';
+import demoRoutes from './demo.routes';
 import { requireAuth, requireSuperAdmin } from '../middlewares/requireAuth';
 import {
     superAdminListInterestedHandler,
@@ -57,6 +58,7 @@ import {
 } from '../controllers/free-event-registration.controller';
 
 export const router = Router();
+router.use('/demo', demoRoutes);
 router.use('/v1/auth', authRoutes);
 router.use('/v1/auth', profileRoutes);
 router.use('/business-signup', businessSignupRoutes);
