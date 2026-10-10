@@ -32,6 +32,7 @@ export interface CustomerWithStats {
     favoriteStaffBookingCount: number;
     preferredServiceName: string | null;
     preferredCategoryName: string | null;
+    categories: string[];
     preferredServiceBookingCount: number;
     bookingFrequencyPerMonth: number;
     recentActivity: {
@@ -246,6 +247,9 @@ function toFinalCustomer(row: CustomerAggregateMutable): CustomerWithStats {
         favoriteStaffBookingCount: topStaff.count,
         preferredServiceName: topService.key,
         preferredCategoryName: topCategory.key,
+        categories: Array.from(row.categoryCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([category]) => category),
         preferredServiceBookingCount: topService.count,
         bookingFrequencyPerMonth,
         recentActivity: row.recentActivity,
