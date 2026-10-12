@@ -323,6 +323,7 @@ export interface CreateServiceInput {
     promo_ends_at?: Date | null;
     promo_label?: string | null;
     duration_minutes: number;
+    booking_time_granularity_minutes?: number | null;
     is_multi_session?: boolean;
     session_count?: number | null;
     session_duration_minutes?: number | null;
@@ -379,6 +380,7 @@ export async function createService(
             price_cents: input.price_cents,
             ...promotionConfig,
             duration_minutes: multiSessionConfig.duration_minutes,
+            booking_time_granularity_minutes: input.booking_time_granularity_minutes,
             is_multi_session: multiSessionConfig.is_multi_session,
             session_count: multiSessionConfig.session_count,
             session_duration_minutes: multiSessionConfig.session_duration_minutes,
@@ -429,6 +431,7 @@ export interface UpdateServiceInput {
     promo_ends_at?: Date | null;
     promo_label?: string | null;
     duration_minutes?: number;
+    booking_time_granularity_minutes?: number | null;
     is_multi_session?: boolean;
     session_count?: number | null;
     session_duration_minutes?: number | null;

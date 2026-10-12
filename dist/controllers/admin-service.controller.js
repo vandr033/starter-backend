@@ -50,6 +50,10 @@ function parseOptionalDate(value) {
     }
     return parsed;
 }
+function isValidBookingTimeGranularity(value) {
+    return value === undefined || value === null ||
+        (typeof value === 'number' && Number.isInteger(value) && value >= 5);
+}
 /**
  * GET /api/admin/services
  * List all services for the admin's company
@@ -81,7 +85,7 @@ async function createService(req, res) {
         };
         return res.status(400).json(mensaje);
     }
-    const { category_id, name, description, price_cents, promo_price_cents, promo_starts_at, promo_ends_at, promo_label, duration_minutes, is_multi_session, session_count, session_duration_minutes, position, global_type_id, required_resource_ids, is_invite_only, notify_customer, notify_assigned_staff, notify_management, } = req.body;
+    const { category_id, name, description, price_cents, promo_price_cents, promo_starts_at, promo_ends_at, promo_label, duration_minutes, booking_time_granularity_minutes, is_multi_session, session_count, session_duration_minutes, position, global_type_id, required_resource_ids, is_invite_only, notify_customer, notify_assigned_staff, notify_management, } = req.body;
     // Validate required fields
     if (!category_id || typeof category_id !== 'number') {
         mensaje = {
@@ -115,6 +119,13 @@ async function createService(req, res) {
         };
         return res.status(400).json(mensaje);
     }
+    if (!isValidBookingTimeGranularity(booking_time_granularity_minutes)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'booking_time_granularity_minutes must be an integer of at least 5, or null to use the business default.',
+            error: true,
+        });
+    }
     const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
     if (promo_starts_at !== undefined && parsedPromoStartsAt === undefined) {
         return res.status(400).json({
@@ -143,6 +154,7 @@ async function createService(req, res) {
         promo_ends_at: parsedPromoEndsAt,
         promo_label: typeof promo_label === 'string' ? promo_label : undefined,
         duration_minutes,
+        booking_time_granularity_minutes,
         is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
         session_count: typeof session_count === 'number' ? session_count : undefined,
         session_duration_minutes: typeof session_duration_minutes === 'number'
@@ -181,7 +193,7 @@ async function updateService(req, res) {
         };
         return res.status(400).json(mensaje);
     }
-    const { name, description, price_cents, promo_price_cents, promo_starts_at, promo_ends_at, promo_label, duration_minutes, is_multi_session, session_count, session_duration_minutes, position, is_active, category_id, global_type_id, required_resource_ids, is_invite_only, notify_customer, notify_assigned_staff, notify_management, } = req.body;
+    const { name, description, price_cents, promo_price_cents, promo_starts_at, promo_ends_at, promo_label, duration_minutes, booking_time_granularity_minutes, is_multi_session, session_count, session_duration_minutes, position, is_active, category_id, global_type_id, required_resource_ids, is_invite_only, notify_customer, notify_assigned_staff, notify_management, } = req.body;
     const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
     if (promo_starts_at !== undefined && parsedPromoStartsAt === undefined) {
         return res.status(400).json({
@@ -198,6 +210,13 @@ async function updateService(req, res) {
             error: true,
         });
     }
+    if (!isValidBookingTimeGranularity(booking_time_granularity_minutes)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'booking_time_granularity_minutes must be an integer of at least 5, or null to use the business default.',
+            error: true,
+        });
+    }
     const result = await ServiceService.updateService(companyId, serviceId, {
         name,
         description,
@@ -209,6 +228,7 @@ async function updateService(req, res) {
         promo_ends_at: parsedPromoEndsAt,
         promo_label: typeof promo_label === 'string' ? promo_label : undefined,
         duration_minutes,
+        booking_time_granularity_minutes,
         is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
         session_count: typeof session_count === 'number' ? session_count : undefined,
         session_duration_minutes: typeof session_duration_minutes === 'number'

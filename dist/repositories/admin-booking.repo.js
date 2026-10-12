@@ -183,6 +183,7 @@ async function getBookingById(bookingId, companyId) {
                             name: true,
                             price_cents: true,
                             duration_minutes: true,
+                            booking_time_granularity_minutes: true,
                         },
                     },
                 },

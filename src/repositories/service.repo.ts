@@ -108,6 +108,7 @@ export interface CreateServiceData {
     promo_ends_at?: Date | null;
     promo_label?: string | null;
     duration_minutes: number;
+    booking_time_granularity_minutes?: number | null;
     is_multi_session?: boolean;
     session_count?: number | null;
     session_duration_minutes?: number | null;
@@ -133,6 +134,7 @@ export async function createService(data: CreateServiceData) {
             promo_ends_at: data.promo_ends_at ?? null,
             promo_label: data.promo_label ?? null,
             duration_minutes: data.duration_minutes,
+            booking_time_granularity_minutes: data.booking_time_granularity_minutes ?? null,
             is_multi_session: data.is_multi_session ?? false,
             session_count: data.session_count ?? null,
             session_duration_minutes: data.session_duration_minutes ?? null,
@@ -168,6 +170,7 @@ export interface UpdateServiceData {
     promo_ends_at?: Date | null;
     promo_label?: string | null;
     duration_minutes?: number;
+    booking_time_granularity_minutes?: number | null;
     is_multi_session?: boolean;
     session_count?: number | null;
     session_duration_minutes?: number | null;

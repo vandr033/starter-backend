@@ -274,6 +274,7 @@ async function createService(companyId, input) {
             price_cents: input.price_cents,
             ...promotionConfig,
             duration_minutes: multiSessionConfig.duration_minutes,
+            booking_time_granularity_minutes: input.booking_time_granularity_minutes,
             is_multi_session: multiSessionConfig.is_multi_session,
             session_count: multiSessionConfig.session_count,
             session_duration_minutes: multiSessionConfig.session_duration_minutes,

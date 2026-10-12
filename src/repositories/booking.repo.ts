@@ -101,6 +101,7 @@ export async function getServicesByIds(serviceIds: number[], companyId: number) 
             id: true,
             name: true,
             duration_minutes: true,
+            booking_time_granularity_minutes: true,
             price_cents: true,
             promo_price_cents: true,
             promo_starts_at: true,

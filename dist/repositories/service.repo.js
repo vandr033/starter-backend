@@ -113,6 +113,7 @@ async function createService(data) {
             promo_ends_at: data.promo_ends_at ?? null,
             promo_label: data.promo_label ?? null,
             duration_minutes: data.duration_minutes,
+            booking_time_granularity_minutes: data.booking_time_granularity_minutes ?? null,
             is_multi_session: data.is_multi_session ?? false,
             session_count: data.session_count ?? null,
             session_duration_minutes: data.session_duration_minutes ?? null,

@@ -335,7 +335,8 @@ async function getAvailableSlots(params) {
         // 3. Get company settings
         const settings = await BookingRepo.getCompanySettings(company_id);
         const bufferMinutes = settings?.booking_buffer_minutes ?? 10;
-        const granularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+        const defaultGranularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+        const granularityMinutes = Math.min(...services.map((service) => service.booking_time_granularity_minutes ?? defaultGranularityMinutes));
         const companyTimezone = company.timezone || 'America/La_Paz';
         const dateParts = parseDateOnlyParts(date);
         if (!dateParts) {

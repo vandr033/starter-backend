@@ -17,6 +17,11 @@ function parseOptionalDate(value: unknown): Date | null | undefined {
     return parsed;
 }
 
+function isValidBookingTimeGranularity(value: unknown): boolean {
+    return value === undefined || value === null ||
+        (typeof value === 'number' && Number.isInteger(value) && value >= 5);
+}
+
 /**
  * GET /api/admin/services
  * List all services for the admin's company
@@ -63,6 +68,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         promo_ends_at,
         promo_label,
         duration_minutes,
+        booking_time_granularity_minutes,
         is_multi_session,
         session_count,
         session_duration_minutes,
@@ -112,6 +118,14 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         return res.status(400).json(mensaje);
     }
 
+    if (!isValidBookingTimeGranularity(booking_time_granularity_minutes)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'booking_time_granularity_minutes must be an integer of at least 5, or null to use the business default.',
+            error: true,
+        });
+    }
+
     const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
     if (promo_starts_at !== undefined && parsedPromoStartsAt === undefined) {
         return res.status(400).json({
@@ -143,6 +157,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         promo_ends_at: parsedPromoEndsAt,
         promo_label: typeof promo_label === 'string' ? promo_label : undefined,
         duration_minutes,
+        booking_time_granularity_minutes,
         is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
         session_count: typeof session_count === 'number' ? session_count : undefined,
         session_duration_minutes:
@@ -196,6 +211,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         promo_ends_at,
         promo_label,
         duration_minutes,
+        booking_time_granularity_minutes,
         is_multi_session,
         session_count,
         session_duration_minutes,
@@ -228,6 +244,14 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         });
     }
 
+    if (!isValidBookingTimeGranularity(booking_time_granularity_minutes)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'booking_time_granularity_minutes must be an integer of at least 5, or null to use the business default.',
+            error: true,
+        });
+    }
+
     const result = await ServiceService.updateService(companyId, serviceId, {
         name,
         description,
@@ -240,6 +264,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         promo_ends_at: parsedPromoEndsAt,
         promo_label: typeof promo_label === 'string' ? promo_label : undefined,
         duration_minutes,
+        booking_time_granularity_minutes,
         is_multi_session: typeof is_multi_session === 'boolean' ? is_multi_session : undefined,
         session_count: typeof session_count === 'number' ? session_count : undefined,
         session_duration_minutes:

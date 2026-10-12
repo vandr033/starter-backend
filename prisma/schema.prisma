@@ -1469,6 +1469,7 @@ model Service {
   promo_ends_at            DateTime?
   promo_label              String?                   @db.VarChar(120)
   duration_minutes         Int
+  booking_time_granularity_minutes Int?
   is_multi_session         Boolean                   @default(false)
   session_count            Int?
   session_duration_minutes Int?

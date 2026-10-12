@@ -295,6 +295,9 @@ function getBookingServiceIds(booking) {
         .map((bs) => Number(bs.service_id ?? bs.service?.id))
         .filter((id) => Number.isInteger(id) && id > 0)));
 }
+function getBookingServiceSlotIntervals(booking) {
+    return (booking.booking_services || []).map((bs) => bs.service?.booking_time_granularity_minutes ?? null);
+}
 async function getRequiredSecondaryResourceIds(companyId, booking) {
     const serviceIds = getBookingServiceIds(booking);
     const resourceIds = new Set();
@@ -497,7 +500,10 @@ async function validateRescheduleSlot(params) {
 async function buildRescheduleSuggestions(params) {
     const limit = params.limit ?? 6;
     const settings = await BookingRepo.getCompanySettings(params.companyId);
-    const granularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+    const defaultGranularityMinutes = settings?.booking_time_granularity_minutes ?? 15;
+    const granularityMinutes = params.serviceIntervals.length
+        ? Math.min(...params.serviceIntervals.map((interval) => interval ?? defaultGranularityMinutes))
+        : defaultGranularityMinutes;
     const preferredInfo = getDateKeyAndMinutesInTimeZone(params.preferredStartAt, params.timezone);
     const now = new Date();
     const nowInfo = getDateKeyAndMinutesInTimeZone(now, params.timezone);
@@ -1546,6 +1552,7 @@ async function getBookingRescheduleOptions(params) {
             staffId: existingBooking.staff_id,
             secondaryResourceIds,
             durationMinutes,
+            serviceIntervals: getBookingServiceSlotIntervals(existingBooking),
             preferredStartAt,
             timezone: timeZone,
             limit: 8,
@@ -1611,6 +1618,7 @@ async function rescheduleBookingDateTime(bookingId, companyId, input, updatedByU
                 staffId: existingBooking.staff_id,
                 secondaryResourceIds,
                 durationMinutes: getBookingDurationMinutes(existingBooking),
+                serviceIntervals: getBookingServiceSlotIntervals(existingBooking),
                 preferredStartAt: now,
                 timezone: timeZone,
                 limit: 6,
@@ -1631,6 +1639,7 @@ async function rescheduleBookingDateTime(bookingId, companyId, input, updatedByU
                 staffId: existingBooking.staff_id,
                 secondaryResourceIds,
                 durationMinutes: getBookingDurationMinutes(existingBooking),
+                serviceIntervals: getBookingServiceSlotIntervals(existingBooking),
                 preferredStartAt: startAt,
                 timezone: timeZone,
                 limit: 6,
@@ -1672,6 +1681,7 @@ async function rescheduleBookingDateTime(bookingId, companyId, input, updatedByU
                 staffId: existingBooking.staff_id,
                 secondaryResourceIds,
                 durationMinutes,
+                serviceIntervals: getBookingServiceSlotIntervals(existingBooking),
                 preferredStartAt: startAt,
                 timezone: timeZone,
                 limit: 6,
