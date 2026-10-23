@@ -73,7 +73,7 @@ function parseEventMassMessagePayload(body: unknown): {
     message: string;
     delivery_mode?: 'AUTO' | 'WHATSAPP' | 'EMAIL' | 'BOTH';
     idempotency_key?: string;
-    selected_targets?: Array<{ source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number }>;
+    selected_targets?: Array<{ source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number }>;
 } {
     const { message, delivery_mode, selected_targets, idempotency_key } = (body ?? {}) as {
         message?: string;
@@ -95,12 +95,14 @@ function parseEventMassMessagePayload(body: unknown): {
         selected_targets: Array.isArray(selected_targets)
             ? selected_targets
                 .filter((target) =>
-                    (target?.source === 'GROUP_EVENT_BOOKING' || target?.source === 'FREE_REGISTRATION')
+                    (target?.source === 'GROUP_EVENT_BOOKING'
+                    || target?.source === 'FREE_REGISTRATION'
+                    || target?.source === 'GROUP_EVENT_TICKET')
                     && Number.isInteger(target?.id)
                     && Number(target.id) > 0,
                 )
                 .map((target) => ({
-                    source: target.source as 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION',
+                    source: target.source as 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET',
                     id: Number(target.id),
                 }))
             : undefined,

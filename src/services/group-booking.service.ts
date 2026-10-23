@@ -5,6 +5,7 @@ import {
     GroupItemStatus,
     Prisma,
     ClassEnrollmentSource,
+    TicketStatus,
 } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { logger } from '../config/logger';
@@ -63,7 +64,7 @@ export type EventMassMessageProgress = {
 
 type EventMassMessageFailedChannel = 'WHATSAPP' | 'EMAIL';
 type EventMassMessageFailedTarget = {
-    source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
+    source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
     id: number;
     failed_channels: EventMassMessageFailedChannel[];
 };
@@ -75,9 +76,17 @@ type EventMassMessagePayload = {
     delivery_mode?: EventMassMessageDeliveryMode;
     idempotency_key?: string;
     selected_targets?: Array<{
-        source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION';
+        source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
         id: number;
     }>;
+};
+
+type EventMassMessageRecipient = {
+    source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
+    id: number;
+    email: string | null;
+    phone: string | null;
+    phonePrefix: string | null;
 };
 
 type ClassMassMessagePayload = {
@@ -731,14 +740,22 @@ async function runEventMassMessage(
             ? payload.delivery_mode
             : 'AUTO';
     const requestedTargets = Array.isArray(payload.selected_targets) ? payload.selected_targets : [];
-    const selectedTargetKeys =
-        requestedTargets.length > 0
-            ? new Set(
-                requestedTargets
-                    .filter((target) => Number.isInteger(target.id) && target.id > 0)
-                    .map((target) => `${target.source}:${target.id}`),
-            )
-            : null;
+    const hasSelectedTargets = requestedTargets.length > 0;
+    const selectedBookingIds = new Set(
+        requestedTargets
+            .filter((target) => target.source === 'GROUP_EVENT_BOOKING' && Number.isInteger(target.id) && target.id > 0)
+            .map((target) => target.id),
+    );
+    const selectedFreeRegistrationIds = new Set(
+        requestedTargets
+            .filter((target) => target.source === 'FREE_REGISTRATION' && Number.isInteger(target.id) && target.id > 0)
+            .map((target) => target.id),
+    );
+    const selectedTicketIds = new Set(
+        requestedTargets
+            .filter((target) => target.source === 'GROUP_EVENT_TICKET' && Number.isInteger(target.id) && target.id > 0)
+            .map((target) => target.id),
+    );
 
     const [bookings, freeRegistrations] = await Promise.all([
         prisma.groupEventBooking.findMany({
@@ -781,28 +798,83 @@ async function runEventMassMessage(
         }),
     ]);
 
+    const tickets = bookings.length > 0
+        ? await prisma.groupTicket.findMany({
+            where: {
+                company_id: companyId,
+                group_event_booking_id: { in: bookings.map((booking) => booking.id) },
+                status: { in: [TicketStatus.ACTIVE, TicketStatus.USED] },
+            },
+            select: {
+                id: true,
+                group_event_booking_id: true,
+                seat_number: true,
+                holder_email: true,
+                holder_phone: true,
+            },
+        })
+        : [];
+    const ticketsByBookingId = new Map<number, typeof tickets>();
+    for (const ticket of tickets) {
+        if (!ticket.group_event_booking_id) continue;
+        const bookingTickets = ticketsByBookingId.get(ticket.group_event_booking_id) ?? [];
+        bookingTickets.push(ticket);
+        ticketsByBookingId.set(ticket.group_event_booking_id, bookingTickets);
+    }
+
+    const isBookerTicket = (ticket: (typeof tickets)[number], booking: (typeof bookings)[number]) => {
+        const bookingEmail = normalizeEmail(booking.user?.email);
+        const ticketEmail = normalizeEmail(ticket.holder_email);
+        const bookingPhone = buildFullPhone(booking.user?.phone_prefix, booking.user?.phoneNumber);
+        const ticketPhone = buildFullPhone(booking.user?.phone_prefix, ticket.holder_phone);
+        return ticket.seat_number === 1
+            || Boolean(bookingEmail && ticketEmail && bookingEmail === ticketEmail)
+            || Boolean(bookingPhone && ticketPhone && bookingPhone === ticketPhone);
+    };
+
     const recipients = [
-        ...bookings.map((booking) => ({
-            source: 'GROUP_EVENT_BOOKING' as const,
-            id: booking.id,
-            email: normalizeEmail(booking.user?.email),
-            phone: booking.user?.phoneNumber || null,
-            phonePrefix: booking.user?.phone_prefix || null,
-        })),
-        ...freeRegistrations.map((registration) => ({
+        ...bookings.flatMap((booking) => {
+            const bookingSelected = !hasSelectedTargets || selectedBookingIds.has(booking.id);
+            const bookingTickets = ticketsByBookingId.get(booking.id) ?? [];
+            const bookerHasTicket = bookingTickets.some((ticket) => isBookerTicket(ticket, booking));
+            const selectedTickets = bookingTickets.filter(
+                (ticket) => bookingSelected || selectedTicketIds.has(ticket.id),
+            );
+            const ticketRecipients: EventMassMessageRecipient[] = selectedTickets.map((ticket) => {
+                const isBooker = isBookerTicket(ticket, booking);
+                return {
+                    source: 'GROUP_EVENT_TICKET' as const,
+                    id: ticket.id,
+                    email: normalizeEmail(ticket.holder_email || (isBooker ? booking.user?.email : null)),
+                    phone: ticket.holder_phone || (isBooker ? booking.user?.phoneNumber : null),
+                    phonePrefix: booking.user?.phone_prefix || null,
+                };
+            });
+            if (bookingSelected && !bookerHasTicket) {
+                ticketRecipients.push({
+                    source: 'GROUP_EVENT_BOOKING' as const,
+                    id: booking.id,
+                    email: normalizeEmail(booking.user?.email),
+                    phone: booking.user?.phoneNumber || null,
+                    phonePrefix: booking.user?.phone_prefix || null,
+                });
+            }
+            return ticketRecipients;
+        }),
+        ...freeRegistrations.filter((registration) =>
+            !hasSelectedTargets || selectedFreeRegistrationIds.has(registration.id),
+        ).map((registration) => ({
             source: 'FREE_REGISTRATION' as const,
             id: registration.id,
             email: normalizeEmail(registration.user?.email || registration.email),
             phone: registration.user?.phoneNumber || registration.phone_number,
             phonePrefix: registration.user?.phone_prefix || registration.phone_prefix,
         })),
-    ].filter((recipient) =>
-        selectedTargetKeys ? selectedTargetKeys.has(`${recipient.source}:${recipient.id}`) : true,
-    );
+    ];
 
     const seenWhatsappTargets = new Set<string>();
     const seenEmailTargets = new Set<string>();
-    const failedTargets = new Map<string, { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number; failed_channels: Set<EventMassMessageFailedChannel> }>();
+    const failedTargets = new Map<string, { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number; failed_channels: Set<EventMassMessageFailedChannel> }>();
     let whatsappSent = 0;
     let emailSent = 0;
     let noContact = 0;
@@ -872,7 +944,7 @@ async function runEventMassMessage(
     };
 
     const markFailedTarget = (
-        recipient: { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION'; id: number },
+        recipient: { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number },
         channel: EventMassMessageFailedChannel,
     ) => {
         const key = `${recipient.source}:${recipient.id}`;
