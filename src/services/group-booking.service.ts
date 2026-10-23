@@ -64,7 +64,7 @@ export type EventMassMessageProgress = {
 
 type EventMassMessageFailedChannel = 'WHATSAPP' | 'EMAIL';
 type EventMassMessageFailedTarget = {
-    source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
+    source: 'GROUP_EVENT_BOOKING' | 'GROUP_EVENT_BOOKER' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
     id: number;
     failed_channels: EventMassMessageFailedChannel[];
 };
@@ -76,13 +76,13 @@ type EventMassMessagePayload = {
     delivery_mode?: EventMassMessageDeliveryMode;
     idempotency_key?: string;
     selected_targets?: Array<{
-        source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
+        source: 'GROUP_EVENT_BOOKING' | 'GROUP_EVENT_BOOKER' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
         id: number;
     }>;
 };
 
 type EventMassMessageRecipient = {
-    source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
+    source: 'GROUP_EVENT_BOOKING' | 'GROUP_EVENT_BOOKER' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET';
     id: number;
     email: string | null;
     phone: string | null;
@@ -751,6 +751,11 @@ async function runEventMassMessage(
             .filter((target) => target.source === 'FREE_REGISTRATION' && Number.isInteger(target.id) && target.id > 0)
             .map((target) => target.id),
     );
+    const selectedBookerIds = new Set(
+        requestedTargets
+            .filter((target) => target.source === 'GROUP_EVENT_BOOKER' && Number.isInteger(target.id) && target.id > 0)
+            .map((target) => target.id),
+    );
     const selectedTicketIds = new Set(
         requestedTargets
             .filter((target) => target.source === 'GROUP_EVENT_TICKET' && Number.isInteger(target.id) && target.id > 0)
@@ -850,9 +855,9 @@ async function runEventMassMessage(
                     phonePrefix: booking.user?.phone_prefix || null,
                 };
             });
-            if (bookingSelected && !bookerHasTicket) {
+            if ((bookingSelected && !bookerHasTicket) || selectedBookerIds.has(booking.id)) {
                 ticketRecipients.push({
-                    source: 'GROUP_EVENT_BOOKING' as const,
+                    source: 'GROUP_EVENT_BOOKER' as const,
                     id: booking.id,
                     email: normalizeEmail(booking.user?.email),
                     phone: booking.user?.phoneNumber || null,
@@ -874,7 +879,7 @@ async function runEventMassMessage(
 
     const seenWhatsappTargets = new Set<string>();
     const seenEmailTargets = new Set<string>();
-    const failedTargets = new Map<string, { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number; failed_channels: Set<EventMassMessageFailedChannel> }>();
+    const failedTargets = new Map<string, { source: 'GROUP_EVENT_BOOKING' | 'GROUP_EVENT_BOOKER' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number; failed_channels: Set<EventMassMessageFailedChannel> }>();
     let whatsappSent = 0;
     let emailSent = 0;
     let noContact = 0;
@@ -944,7 +949,7 @@ async function runEventMassMessage(
     };
 
     const markFailedTarget = (
-        recipient: { source: 'GROUP_EVENT_BOOKING' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number },
+        recipient: { source: 'GROUP_EVENT_BOOKING' | 'GROUP_EVENT_BOOKER' | 'FREE_REGISTRATION' | 'GROUP_EVENT_TICKET'; id: number },
         channel: EventMassMessageFailedChannel,
     ) => {
         const key = `${recipient.source}:${recipient.id}`;
