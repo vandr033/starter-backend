@@ -7,6 +7,7 @@ test('service notification audience keeps the established defaults without servi
     assert.deepEqual(combineServiceNotificationAudiences([]), {
         customer: true,
         assignedStaff: true,
+        assignedStaffProfileIds: null,
         management: true,
     });
 });
@@ -17,17 +18,20 @@ test('multi-service bookings include a group when any selected service enables i
             {
                 notify_customer: false,
                 notify_assigned_staff: true,
+                notify_assigned_staff_ids: null,
                 notify_management: false,
             },
             {
                 notify_customer: true,
                 notify_assigned_staff: false,
+                notify_assigned_staff_ids: null,
                 notify_management: false,
             },
         ]),
         {
             customer: true,
             assignedStaff: true,
+            assignedStaffProfileIds: null,
             management: false,
         },
     );
@@ -39,12 +43,14 @@ test('a service can disable every new-booking recipient group', () => {
             {
                 notify_customer: false,
                 notify_assigned_staff: false,
+                notify_assigned_staff_ids: null,
                 notify_management: false,
             },
         ]),
         {
             customer: false,
             assignedStaff: false,
+            assignedStaffProfileIds: [],
             management: false,
         },
     );

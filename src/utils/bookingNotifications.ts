@@ -66,12 +66,14 @@ interface InternalRecipient {
 type NotificationAudiencePolicy = {
     customer: boolean;
     assignedStaff: boolean;
+    assignedStaffProfileIds: number[] | null;
     management: boolean;
 };
 
 const DEFAULT_NOTIFICATION_AUDIENCE: NotificationAudiencePolicy = {
     customer: true,
     assignedStaff: true,
+    assignedStaffProfileIds: null,
     management: true,
 };
 
@@ -79,14 +81,27 @@ export function combineServiceNotificationAudiences(
     services: Array<{
         notify_customer: boolean;
         notify_assigned_staff: boolean;
+        notify_assigned_staff_ids?: unknown;
         notify_management: boolean;
     }>,
 ): NotificationAudiencePolicy {
     if (services.length === 0) return { ...DEFAULT_NOTIFICATION_AUDIENCE };
 
+    const assignedStaffServices = services.filter((service) => service.notify_assigned_staff);
+    const assignedStaffIds = assignedStaffServices.map((service) => {
+        if (service.notify_assigned_staff_ids == null) return null;
+        if (!Array.isArray(service.notify_assigned_staff_ids)) return [];
+        return service.notify_assigned_staff_ids.filter(
+            (id): id is number => Number.isInteger(id) && id > 0,
+        );
+    });
+
     return {
         customer: services.some((service) => service.notify_customer),
-        assignedStaff: services.some((service) => service.notify_assigned_staff),
+        assignedStaff: assignedStaffServices.length > 0,
+        assignedStaffProfileIds: assignedStaffIds.some((ids) => ids === null)
+            ? null
+            : Array.from(new Set(assignedStaffIds.flatMap((ids) => ids ?? []))),
         management: services.some((service) => service.notify_management),
     };
 }
@@ -112,6 +127,7 @@ async function getNotificationAudiencePolicy(
         select: {
             notify_customer: true,
             notify_assigned_staff: true,
+            notify_assigned_staff_ids: true,
             notify_management: true,
         },
     });
@@ -870,7 +886,10 @@ export async function notifyBookingCreated(data: BookingNotificationData): Promi
                     continue;
                 }
                 const includedByPolicy =
-                    (recipient.isAssignedStaff && audience.assignedStaff) ||
+                    (recipient.isAssignedStaff && audience.assignedStaff && (
+                        audience.assignedStaffProfileIds === null ||
+                        audience.assignedStaffProfileIds.includes(data.staffId ?? -1)
+                    )) ||
                     (recipient.isManagement && audience.management);
                 if (!includedByPolicy) {
                     continue;
@@ -948,7 +967,12 @@ export async function notifyBookingConfirmedForStaff(data: BookingNotificationDa
         getNotificationSettings(data.companyId),
         getNotificationAudiencePolicy(data.companyId, data.serviceIds),
     ]);
-    if (!data.staffId || !audience.assignedStaff || (!doEmail && !doWa)) return;
+    if (
+        !data.staffId ||
+        !audience.assignedStaff ||
+        (audience.assignedStaffProfileIds !== null && !audience.assignedStaffProfileIds.includes(data.staffId)) ||
+        (!doEmail && !doWa)
+    ) return;
 
     try {
         const recipients = (await getInternalRecipients(data.companyId, data.staffId)).filter(

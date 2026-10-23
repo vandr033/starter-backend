@@ -1479,6 +1479,7 @@ model Service {
   invite_token             String?                   @unique @db.VarChar(255)
   notify_customer          Boolean                   @default(true)
   notify_assigned_staff    Boolean                   @default(true)
+  notify_assigned_staff_ids Json?
   notify_management        Boolean                   @default(true)
   created_at               DateTime                  @default(now())
   updated_at               DateTime                  @updatedAt

@@ -118,6 +118,7 @@ export interface CreateServiceData {
     invite_token?: string | null;
     notify_customer?: boolean;
     notify_assigned_staff?: boolean;
+    notify_assigned_staff_ids?: number[];
     notify_management?: boolean;
 }
 
@@ -144,6 +145,7 @@ export async function createService(data: CreateServiceData) {
             invite_token: data.invite_token ?? null,
             notify_customer: data.notify_customer ?? true,
             notify_assigned_staff: data.notify_assigned_staff ?? true,
+            notify_assigned_staff_ids: data.notify_assigned_staff_ids,
             notify_management: data.notify_management ?? true,
         },
         include: {
@@ -182,6 +184,7 @@ export interface UpdateServiceData {
     invite_token?: string | null;
     notify_customer?: boolean;
     notify_assigned_staff?: boolean;
+    notify_assigned_staff_ids?: number[];
     notify_management?: boolean;
 }
 

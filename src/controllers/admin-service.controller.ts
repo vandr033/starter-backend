@@ -3,6 +3,13 @@ import { MensajeApi } from '../types/MensajeApi';
 import * as ServiceService from '../services/service.service';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 
+function isValidNotificationStaffIds(value: unknown): value is number[] | undefined {
+    return value === undefined || (
+        Array.isArray(value) &&
+        value.every((id) => Number.isInteger(id) && id > 0)
+    );
+}
+
 let mensaje: MensajeApi;
 
 function parseOptionalDate(value: unknown): Date | null | undefined {
@@ -78,8 +85,17 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         is_invite_only,
         notify_customer,
         notify_assigned_staff,
+        notify_assigned_staff_ids,
         notify_management,
     } = req.body;
+
+    if (!isValidNotificationStaffIds(notify_assigned_staff_ids)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'notify_assigned_staff_ids must contain positive staff IDs.',
+            error: true,
+        });
+    }
 
     // Validate required fields
     if (!category_id || typeof category_id !== 'number') {
@@ -170,6 +186,7 @@ export async function createService(req: AuthenticatedRequest, res: Response) {
         is_invite_only: typeof is_invite_only === 'boolean' ? is_invite_only : undefined,
         notify_customer: typeof notify_customer === 'boolean' ? notify_customer : undefined,
         notify_assigned_staff: typeof notify_assigned_staff === 'boolean' ? notify_assigned_staff : undefined,
+        notify_assigned_staff_ids,
         notify_management: typeof notify_management === 'boolean' ? notify_management : undefined,
     });
 
@@ -223,8 +240,17 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         is_invite_only,
         notify_customer,
         notify_assigned_staff,
+        notify_assigned_staff_ids,
         notify_management,
     } = req.body;
+
+    if (!isValidNotificationStaffIds(notify_assigned_staff_ids)) {
+        return res.status(400).json({
+            code: 400,
+            message: 'notify_assigned_staff_ids must contain positive staff IDs.',
+            error: true,
+        });
+    }
 
     const parsedPromoStartsAt = parseOptionalDate(promo_starts_at);
     if (promo_starts_at !== undefined && parsedPromoStartsAt === undefined) {
@@ -279,6 +305,7 @@ export async function updateService(req: AuthenticatedRequest, res: Response) {
         is_invite_only: typeof is_invite_only === 'boolean' ? is_invite_only : undefined,
         notify_customer: typeof notify_customer === 'boolean' ? notify_customer : undefined,
         notify_assigned_staff: typeof notify_assigned_staff === 'boolean' ? notify_assigned_staff : undefined,
+        notify_assigned_staff_ids,
         notify_management: typeof notify_management === 'boolean' ? notify_management : undefined,
     });
 

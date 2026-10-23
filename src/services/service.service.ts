@@ -1,6 +1,7 @@
 import { MensajeApi } from '../types/MensajeApi';
 import * as ServiceRepo from '../repositories/service.repo';
 import { companyHasCapability } from './company-entitlements.service';
+import { prisma } from '../prisma/client';
 import crypto from 'node:crypto';
 import {
     resolveEffectiveServicePrice,
@@ -33,6 +34,7 @@ type InviteOnlyConfig = {
 type NotificationAudienceConfig = {
     notify_customer?: boolean;
     notify_assigned_staff?: boolean;
+    notify_assigned_staff_ids?: number[];
     notify_management?: boolean;
 };
 
@@ -43,9 +45,22 @@ async function normalizeNotificationAudienceInput(
     const hasAudienceField =
         input.notify_customer !== undefined ||
         input.notify_assigned_staff !== undefined ||
+        input.notify_assigned_staff_ids !== undefined ||
         input.notify_management !== undefined;
 
     if (!hasAudienceField) return {};
+
+    if (
+        input.notify_assigned_staff_ids !== undefined &&
+        (!Array.isArray(input.notify_assigned_staff_ids) ||
+            input.notify_assigned_staff_ids.some((id) => !Number.isInteger(id) || id <= 0))
+    ) {
+        return {
+            code: 400,
+            message: 'Los profesionales seleccionados no son válidos.',
+            error: true,
+        };
+    }
 
     const hasMessagingPro = await companyHasCapability(companyId, 'MENSAJERIA_PRO');
     if (!hasMessagingPro) {
@@ -56,12 +71,37 @@ async function normalizeNotificationAudienceInput(
         };
     }
 
+    const notifyAssignedStaffIds = input.notify_assigned_staff_ids === undefined
+        ? undefined
+        : Array.from(new Set(input.notify_assigned_staff_ids));
+    if (notifyAssignedStaffIds?.length) {
+        const companyStaff = await prisma.staffProfile.findMany({
+            where: {
+                id: { in: notifyAssignedStaffIds },
+                company_id: companyId,
+                resource_type: 'PERSON',
+                deleted_at: null,
+            },
+            select: { id: true },
+        });
+        if (companyStaff.length !== notifyAssignedStaffIds.length) {
+            return {
+                code: 400,
+                message: 'Los profesionales seleccionados no pertenecen a tu equipo.',
+                error: true,
+            };
+        }
+    }
+
     return {
         ...(input.notify_customer !== undefined
             ? { notify_customer: input.notify_customer }
             : {}),
         ...(input.notify_assigned_staff !== undefined
             ? { notify_assigned_staff: input.notify_assigned_staff }
+            : {}),
+        ...(notifyAssignedStaffIds !== undefined
+            ? { notify_assigned_staff_ids: notifyAssignedStaffIds }
             : {}),
         ...(input.notify_management !== undefined
             ? { notify_management: input.notify_management }
@@ -333,6 +373,7 @@ export interface CreateServiceInput {
     is_invite_only?: boolean;
     notify_customer?: boolean;
     notify_assigned_staff?: boolean;
+    notify_assigned_staff_ids?: number[];
     notify_management?: boolean;
 }
 
@@ -443,6 +484,7 @@ export interface UpdateServiceInput {
     is_invite_only?: boolean;
     notify_customer?: boolean;
     notify_assigned_staff?: boolean;
+    notify_assigned_staff_ids?: number[];
     notify_management?: boolean;
 }
 
@@ -515,6 +557,7 @@ export async function updateService(
             is_invite_only: _isInviteOnly,
             notify_customer: _notifyCustomer,
             notify_assigned_staff: _notifyAssignedStaff,
+            notify_assigned_staff_ids: _notifyAssignedStaffIds,
             notify_management: _notifyManagement,
             ...coreInput
         } = input;
