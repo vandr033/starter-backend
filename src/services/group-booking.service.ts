@@ -879,7 +879,7 @@ async function runEventMassMessage(
             || Boolean(bookingPhone && ticketPhone && bookingPhone === ticketPhone);
     };
 
-    const recipients = [
+    const recipients: EventMassMessageRecipient[] = [
         ...bookings.flatMap((booking) => {
             const bookingSelected = !hasSelectedTargets || selectedBookingIds.has(booking.id);
             const bookingTickets = ticketsByBookingId.get(booking.id) ?? [];

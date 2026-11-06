@@ -146,7 +146,7 @@ type PaidAttendeeInput = {
     email: string | null;
     phone: string | null;
     confirmation_token: string;
-    confirmation_status: EventAttendanceStatus.PENDING;
+    confirmation_status: 'PENDING';
 };
 
 async function ensurePaidAttendees(tx: Transaction, bookingId: number): Promise<ConfirmationRecipient[]> {
@@ -478,7 +478,7 @@ export async function submitEventAttendanceConfirmation(
 
     if (response.error) return response;
     if (response.alreadyResponded) return { code: 200, error: false, message: 'Your response is already saved', data: { confirmation_status: action } };
-    if (response.decline) {
+    if (response.decline && response.companyId !== undefined && response.event && response.attendeeName !== undefined && response.reason !== undefined && response.attendeeId !== undefined) {
         try {
             await sendDeclineAlert({
                 companyId: response.companyId,
