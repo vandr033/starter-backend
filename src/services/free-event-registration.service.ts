@@ -16,6 +16,7 @@ import { getAuth } from '../config/auth';
 import crypto from 'crypto';
 import { generateUniqueSixDigitCode } from './group-ticket.service';
 import { canonicalizePhoneParts, normalizePhoneDigits as normalizePhoneDigitsShared } from '../utils/phoneNormalization';
+import { getEventConfirmationLinks } from './group-event-confirmation.service';
 
 // ─────────────────────────────────────────────
 // Types
@@ -67,6 +68,7 @@ export interface FreeRegistrationResult {
             canManualSignIn?: boolean;
         };
         reservationCode?: string | null;
+        confirmationToken?: string | null;
         messageKey: string;
         registrationId: number;
         soldOut: boolean;
@@ -81,6 +83,8 @@ export interface FreeRegistrationStateResult {
     data?: {
         hasRegistration: boolean;
         status: FreeEventRegistrationStatus | null;
+        confirmationStatus?: string | null;
+        confirmationToken?: string | null;
         prefill: {
             firstName: string;
             lastName: string;
@@ -271,17 +275,18 @@ async function countUsedCapacity(groupEventId: number): Promise<number> {
                 group_event_id: groupEventId,
                 status: { in: ['CONFIRMED', 'PENDING'] },
             },
-            _sum: { booked_spots: true },
+            _sum: { booked_spots: true, declined_spots: true },
         }),
         prisma.freeEventRegistration.count({
             where: {
                 group_event_id: groupEventId,
                 status: { in: ['CONFIRMED', 'PENDING'] },
+                confirmation_status: { not: 'NOT_ATTENDING' },
             },
         }),
     ]);
 
-    return (bookingResult._sum.booked_spots ?? 0) + freeRegResult;
+    return (bookingResult._sum.booked_spots ?? 0) - (bookingResult._sum.declined_spots ?? 0) + freeRegResult;
 }
 
 type AccountCandidateUser = {
@@ -789,13 +794,20 @@ export function buildFreeEventConfirmationContent(params: {
     eventTitle: string;
     firstName: string;
     reservationCode: string;
+    eventSlug: string;
+    eventId: number;
+    confirmationToken?: string | null;
 }) {
+    const eventUrl = `${(process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '')}/shop/${encodeURIComponent(params.eventSlug)}/events/${params.eventId}`;
+    const confirmationLinks = params.confirmationToken
+        ? getEventConfirmationLinks(params.eventSlug, params.eventId, params.confirmationToken)
+        : null;
     const checkInHint = params.locale === 'en'
         ? 'Please present it at check-in.'
         : 'Preséntalo al momento del check-in.';
     const whatsappMessage = params.locale === 'en'
-        ? `Congratulations! You have been successfully registered for ${params.eventTitle}. Your reservation code is: ${params.reservationCode}. ${checkInHint}`
-        : `¡Felicitaciones! Has sido registrado exitosamente al evento ${params.eventTitle}. Tu código de reserva es: ${params.reservationCode}. ${checkInHint}`;
+        ? `Congratulations! You have been successfully registered for ${params.eventTitle}. Your reservation code is: ${params.reservationCode}. ${checkInHint}${confirmationLinks ? `\nConfirm: ${confirmationLinks.confirm}\nDecline: ${confirmationLinks.decline}` : ''}\nEvent details: ${eventUrl}`
+        : `¡Felicitaciones! Has sido registrado exitosamente al evento ${params.eventTitle}. Tu código de reserva es: ${params.reservationCode}. ${checkInHint}${confirmationLinks ? `\nConfirmar asistencia: ${confirmationLinks.confirm}\nNo podré asistir: ${confirmationLinks.decline}` : ''}\nDetalles del evento: ${eventUrl}`;
     const emailSubject = params.locale === 'en'
         ? `Registration confirmed: ${params.eventTitle}`
         : `Registro confirmado: ${params.eventTitle}`;
@@ -807,7 +819,10 @@ export function buildFreeEventConfirmationContent(params: {
     const emailCheckInLine = params.locale === 'en'
         ? 'Save this code and present it at event check-in.'
         : 'Guarda este código y preséntalo al momento del check-in del evento.';
-    const emailHtml = `<p>${emailGreeting} ${params.firstName},</p><p>${emailBodyLine}</p><p><strong>${emailCodeLabel}:</strong> ${params.reservationCode}</p><p>${emailCheckInLine}</p>`;
+    const emailActions = confirmationLinks
+        ? `<p><a href="${confirmationLinks.confirm}">${params.locale === 'en' ? 'Yes, I will attend' : 'Sí, asistiré'}</a></p><p><a href="${confirmationLinks.decline}">${params.locale === 'en' ? 'I cannot attend' : 'No podré asistir'}</a></p>`
+        : '';
+    const emailHtml = `<p>${emailGreeting} ${params.firstName},</p><p>${emailBodyLine}</p><p><strong>${emailCodeLabel}:</strong> ${params.reservationCode}</p><p>${emailCheckInLine}</p>${emailActions}<p><a href="${eventUrl}">${params.locale === 'en' ? 'Event details' : 'Detalles del evento'}</a></p>`;
 
     return {
         checkInHint,
@@ -930,6 +945,10 @@ export async function getFreeRegistrationState(
         data: {
             hasRegistration: !!existing,
             status: existing?.status ?? null,
+            confirmationStatus: existing?.confirmation_status ?? null,
+            confirmationToken: userId && existing?.user_id === userId && existing.confirmation_status === 'PENDING'
+                ? existing.confirmation_token
+                : null,
             prefill,
         },
     };
@@ -1050,12 +1069,13 @@ export async function submitFreeRegistration(
             max_capacity: number;
             registration_question_text: string | null;
             registration_question_required: boolean;
+            confirmations_enabled: boolean;
             start_at: Date;
             end_at: Date;
             deleted_at: Date | null;
             company_id: number;
         }>>`
-            SELECT id, is_free, status, max_capacity, registration_question_text, registration_question_required, start_at, end_at, deleted_at, company_id
+            SELECT id, is_free, status, max_capacity, registration_question_text, registration_question_required, confirmations_enabled, start_at, end_at, deleted_at, company_id
             FROM group_event WHERE id = ${eventId} FOR UPDATE
         `;
 
@@ -1080,14 +1100,14 @@ export async function submitFreeRegistration(
         const [bookingResult, freeCount] = await Promise.all([
             tx.groupEventBooking.aggregate({
                 where: { group_event_id: eventId, status: { in: ['CONFIRMED', 'PENDING'] } },
-                _sum: { booked_spots: true },
+                _sum: { booked_spots: true, declined_spots: true },
             }),
             tx.freeEventRegistration.count({
-                where: { group_event_id: eventId, status: { in: ['CONFIRMED', 'PENDING'] } },
+                where: { group_event_id: eventId, status: { in: ['CONFIRMED', 'PENDING'] }, confirmation_status: { not: 'NOT_ATTENDING' } },
             }),
         ]);
 
-        const usedCapacity = (bookingResult._sum.booked_spots ?? 0) + freeCount;
+        const usedCapacity = (bookingResult._sum.booked_spots ?? 0) - (bookingResult._sum.declined_spots ?? 0) + freeCount;
         const soldOut = usedCapacity >= ev.max_capacity;
         const status = soldOut ? FreeEventRegistrationStatus.INTERESTED : FreeEventRegistrationStatus.CONFIRMED;
 
@@ -1118,6 +1138,8 @@ export async function submitFreeRegistration(
                         tos_accepted: input.tosAccepted,
                         source: 'free_event_form',
                         status,
+                        confirmation_token: status !== FreeEventRegistrationStatus.INTERESTED && ev.confirmations_enabled ? crypto.randomBytes(32).toString('hex') : null,
+                        confirmation_status: status !== FreeEventRegistrationStatus.INTERESTED && ev.confirmations_enabled ? 'PENDING' : 'NOT_REQUESTED',
                         create_account_requested: input.createAccount ?? false,
                         account_created: accountResolution.accountCreated,
                         account_verification_status: accountResolution.accountVerificationStatus,
@@ -1161,6 +1183,7 @@ export async function submitFreeRegistration(
             phonePrefix: trimmed.phonePrefix,
             phoneNumber: trimmed.phoneNumber,
             reservationCode: result.registration.reservation_code,
+            confirmationToken: result.registration.confirmation_token,
             eventId,
             companyId,
         });
@@ -1182,6 +1205,7 @@ export async function submitFreeRegistration(
             otpSection: accountResolution.otpSection,
             nextActions: accountResolution.nextActions,
             reservationCode: result.registration.reservation_code,
+            confirmationToken: result.registration.confirmation_token,
             messageKey,
             registrationId: result.registration.id,
             soldOut: result.soldOut,
@@ -1239,6 +1263,7 @@ async function sendRegistrationNotifications(opts: {
     phonePrefix: string;
     phoneNumber: string;
     reservationCode?: string | null;
+    confirmationToken?: string | null;
     eventId: number;
     companyId: number;
 }): Promise<void> {
@@ -1250,7 +1275,7 @@ async function sendRegistrationNotifications(opts: {
 
         const event = await prisma.groupEvent.findUnique({
             where: { id: opts.eventId },
-            select: { title: true, start_at: true },
+            select: { id: true, title: true, start_at: true, company: { select: { slug: true } } },
         });
         if (!event) return;
 
@@ -1276,6 +1301,9 @@ async function sendRegistrationNotifications(opts: {
             eventTitle: event.title,
             firstName: opts.firstName,
             reservationCode: opts.reservationCode,
+            eventSlug: event.company.slug,
+            eventId: event.id,
+            confirmationToken: opts.confirmationToken,
         });
 
         // ── Email notification (placeholder hook) ──
@@ -1343,6 +1371,7 @@ export async function getFreeRegistrationByReservationCode(
             group_event_id: eventId,
             reservation_code: code,
             status: { in: ['CONFIRMED', 'PENDING'] },
+            confirmation_status: { not: 'NOT_ATTENDING' },
         },
         include: {
             user: {
@@ -1415,6 +1444,8 @@ export async function checkInFreeEventByReservationCode(
             checked_in_at: true,
             checked_in_method: true,
             status: true,
+            confirmation_status: true,
+            confirmation_reason: true,
             first_name: true,
             last_name: true,
             email: true,
@@ -1559,6 +1590,8 @@ export async function listFreeEventRegistrations(companyId: number, eventId: num
             gender: true,
             age: true,
             status: true,
+            confirmation_status: true,
+            confirmation_reason: true,
             reservation_code: true,
             checked_in_at: true,
             created_at: true,
@@ -1580,6 +1613,8 @@ export async function listFreeEventRegistrations(companyId: number, eventId: num
             gender: r.gender,
             age: r.age,
             status: r.status,
+            confirmationStatus: r.confirmation_status,
+            confirmationReason: r.confirmation_reason,
             reservationCode: r.reservation_code,
             checkedInAt: r.checked_in_at,
             createdAt: r.created_at,
@@ -1674,7 +1709,7 @@ export async function inviteInterestedRegistration(
 ) {
     const event = await prisma.groupEvent.findFirst({
         where: { id: eventId, company_id: companyId, deleted_at: null },
-        select: { id: true, is_free: true, title: true, max_capacity: true, start_at: true },
+        select: { id: true, is_free: true, title: true, max_capacity: true, start_at: true, confirmations_enabled: true, company: { select: { slug: true } } },
     });
     if (!event || !event.is_free) {
         return { code: 404, error: true, message: 'Free event not found' };
@@ -1702,6 +1737,10 @@ export async function inviteInterestedRegistration(
                 data: {
                     status: FreeEventRegistrationStatus.CONFIRMED,
                     reservation_code: reservationCode,
+                    confirmation_token: event.confirmations_enabled ? crypto.randomBytes(32).toString('hex') : null,
+                    confirmation_status: event.confirmations_enabled ? 'PENDING' : 'NOT_REQUESTED',
+                    confirmation_reason: null,
+                    confirmation_responded_at: null,
                 },
             });
             break;
@@ -1731,6 +1770,9 @@ export async function inviteInterestedRegistration(
         eventTitle: event.title,
         firstName: registration.first_name,
         reservationCode,
+        eventSlug: event.company.slug,
+        eventId: event.id,
+        confirmationToken: updated.confirmation_token,
     });
 
     // Send notifications according to admin-selected channels

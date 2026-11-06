@@ -8,6 +8,7 @@ import { buildGroupTicketQrImageUrl, buildGroupTicketQrToken } from './group-tic
 import { isTemporaryEmailAddress, sendGenericEmail } from '../utils/sendEmail';
 import { isWhatsappEnqueueAccepted, queueWhatsappImage } from '../utils/whatsappSender';
 import { isEmailDeliverySuccessful } from './notification-provider.service';
+import { getEventConfirmationLinks } from './group-event-confirmation.service';
 
 type ServiceResult = MensajeApi & { data?: unknown };
 
@@ -86,6 +87,7 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
                             phone_prefix: true,
                         },
                     },
+                    attendees: { select: { seat_number: true, confirmation_status: true, confirmation_token: true } },
                     group_event: {
                         include: {
                             company: {
@@ -146,46 +148,65 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
     const qrToken = buildGroupTicketQrToken(ticket.company_id, ticket.ticket_code, ticket.issued_at);
     const qrImageUrl = buildGroupTicketQrImageUrl(qrToken);
     const portalUrl = getCustomerPortalUrl(company.slug);
+    const localeConfig = isEventTicket
+        ? await prisma.configMessage.findUnique({ where: { company_id_key: { company_id: companyId, key: 'default_language' } }, select: { value: true } })
+        : null;
+    const locale: 'es' | 'en' = (localeConfig?.value ?? '').trim().toLowerCase() === 'en' ? 'en' : 'es';
 
-    const formatDate = (d: Date) => d.toLocaleDateString('en-US', {
+    const formatDate = (d: Date) => d.toLocaleDateString(isEventTicket && locale === 'es' ? 'es-ES' : 'en-US', {
         year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
     });
 
     const emailSubject = isEventTicket
-        ? `${options?.isResend ? 'Your ticket was re-sent' : 'Your ticket'}: ${itemTitle}`
+        ? locale === 'en'
+            ? `${options?.isResend ? 'Your ticket was re-sent' : 'Your ticket'}: ${itemTitle}`
+            : `${options?.isResend ? 'Tu entrada fue reenviada' : 'Tu entrada'}: ${itemTitle}`
         : `${options?.isResend ? 'Your class pass ticket was re-sent' : 'Your class pass ticket'}: ${itemTitle}`;
 
     let emailHtml: string;
     let whatsappCaption: string;
 
     if (isEventTicket) {
+        const event = ticket.event_booking!.group_event;
+        const eventUrl = `${(process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '')}/shop/${encodeURIComponent(company.slug)}/events/${event.id}`;
+        const attendee = ticket.event_booking!.attendees.find((row) => row.seat_number === ticket.seat_number);
+        const confirmationLinks = attendee?.confirmation_status === 'PENDING'
+            ? getEventConfirmationLinks(company.slug, event.id, attendee.confirmation_token)
+            : null;
         const validLabel = `${formatDate(ticket.valid_from)} → ${formatDate(ticket.valid_until)}`;
 
         whatsappCaption = [
             company.name,
-            `Your event ticket ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}`,
-            `Ticket code: ${ticket.ticket_code}`,
-            `Validity: ${validLabel}`,
-            `Show this QR code at the event entrance to check in.`,
-            `Manage reservations: ${portalUrl}`,
+            locale === 'en' ? `Your event ticket ${options?.isResend ? 'was re-sent' : 'is ready'}: ${itemTitle}` : `${options?.isResend ? 'Reenviamos tu entrada al evento' : 'Tu entrada al evento está lista'}: ${itemTitle}`,
+            `${locale === 'en' ? 'Ticket code' : 'Código de entrada'}: ${ticket.ticket_code}`,
+            `${locale === 'en' ? 'Validity' : 'Vigencia'}: ${validLabel}`,
+            locale === 'en' ? 'Show this QR code at the event entrance to check in.' : 'Muestra este código QR en la entrada del evento para registrarte.',
+            confirmationLinks ? `${locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}: ${confirmationLinks.confirm}` : null,
+            confirmationLinks ? `${locale === 'en' ? 'Cannot attend' : 'No podré asistir'}: ${confirmationLinks.decline}` : null,
+            `${locale === 'en' ? 'Event details' : 'Detalles del evento'}: ${eventUrl}`,
         ].join('\n');
+
+        const confirmationLinksHtml = confirmationLinks
+            ? `<p><a href="${confirmationLinks.confirm}">${locale === 'en' ? 'Yes, I will attend' : 'Sí, asistiré'}</a></p><p><a href="${confirmationLinks.decline}">${locale === 'en' ? 'I cannot attend' : 'No podré asistir'}</a></p>`
+            : '';
 
         emailHtml = `
             <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a; max-width: 640px; margin: 0 auto; padding: 20px;">
-                <h2 style="margin-top: 0;">Event ticket</h2>
-                <p>${options?.isResend ? 'We have re-sent your ticket details.' : 'Your ticket is ready.'}</p>
-                <p><strong>Business:</strong> ${company.name}</p>
-                <p><strong>Event:</strong> ${itemTitle}</p>
-                <p><strong>Ticket code:</strong> ${ticket.ticket_code}</p>
-                <p><strong>Validity:</strong> ${validLabel}</p>
-                <p><strong>Your QR code:</strong></p>
+                <h2 style="margin-top: 0;">${locale === 'en' ? 'Event ticket' : 'Entrada al evento'}</h2>
+                <p>${locale === 'en' ? (options?.isResend ? 'We have re-sent your ticket details.' : 'Your ticket is ready.') : (options?.isResend ? 'Reenviamos los datos de tu entrada.' : 'Tu entrada está lista.')}</p>
+                <p><strong>${locale === 'en' ? 'Business' : 'Negocio'}:</strong> ${company.name}</p>
+                <p><strong>${locale === 'en' ? 'Event' : 'Evento'}:</strong> ${itemTitle}</p>
+                <p><strong>${locale === 'en' ? 'Ticket code' : 'Código de entrada'}:</strong> ${ticket.ticket_code}</p>
+                <p><strong>${locale === 'en' ? 'Validity' : 'Vigencia'}:</strong> ${validLabel}</p>
+                <p><strong>${locale === 'en' ? 'Your QR code' : 'Tu código QR'}:</strong></p>
                 <p style="margin: 10px 0 16px;">
-                    <img src="${qrImageUrl}" alt="Ticket QR code" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
+                    <img src="${qrImageUrl}" alt="${locale === 'en' ? 'Ticket QR code' : 'Código QR de entrada'}" style="display:block; width: 260px; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; background: #ffffff;" />
                 </p>
                 <p style="background:#f1f5f9; border-left:4px solid #3b82f6; padding:10px 14px; border-radius:4px; margin: 16px 0;">
-                    📋 <strong>How to check in:</strong> Show this QR code at the event entrance. Staff will scan it to confirm your entry.
+                    📋 <strong>${locale === 'en' ? 'How to check in' : 'Cómo registrarte'}:</strong> ${locale === 'en' ? 'Show this QR code at the event entrance. Staff will scan it to confirm your entry.' : 'Muestra este código QR en la entrada del evento. El equipo lo escaneará para confirmar tu asistencia.'}
                 </p>
-                <p><a href="${portalUrl}" target="_blank" rel="noopener noreferrer">View my reservations</a></p>
+                ${confirmationLinksHtml}
+                <p><a href="${eventUrl}" target="_blank" rel="noopener noreferrer">${locale === 'en' ? 'Event details' : 'Detalles del evento'}</a></p>
             </div>
         `;
     } else {
@@ -244,10 +265,11 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
 
     const sentChannels: string[] = [];
     const queuedChannels: string[] = [];
+    const emailTarget = isEventTicket ? ticket.holder_email?.trim() || user.email : user.email;
 
-    if (sendEmail && user.email && !isTemporaryEmailAddress(user.email)) {
+    if (sendEmail && emailTarget && !isTemporaryEmailAddress(emailTarget)) {
         try {
-            const result = await sendGenericEmail(user.email, emailSubject, emailHtml, { companyId });
+            const result = await sendGenericEmail(emailTarget, emailSubject, emailHtml, { companyId });
             if (isEmailDeliverySuccessful(result)) {
                 sentChannels.push('EMAIL');
             } else {
@@ -264,7 +286,10 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
         }
     }
 
-    const phoneTarget = buildFullPhone(user.phone_prefix, user.phoneNumber);
+    const ticketPhone = isEventTicket ? ticket.holder_phone || user.phoneNumber : user.phoneNumber;
+    const phoneTarget = ticketPhone?.trim().startsWith('+')
+        ? ticketPhone.replace(/\D/g, '')
+        : buildFullPhone(user.phone_prefix, ticketPhone);
     if (sendWhatsapp && phoneTarget) {
         const deliveryKey = `${ticket.id}:${options?.isResend ? ticket.resend_count + 1 : ticket.resend_count}`;
         const imageResult = await queueWhatsappImage(phoneTarget, qrImageUrl, whatsappCaption, {
@@ -381,6 +406,7 @@ export async function issueEventTicketForBooking(companyId: number, bookingId: n
                     end_at: true,
                 },
             },
+            attendees: { select: { seat_number: true, confirmation_status: true } },
             tickets: {
                 where: { status: { in: [TicketStatus.ACTIVE, TicketStatus.USED] } },
                 orderBy: { created_at: 'asc' },
@@ -392,7 +418,9 @@ export async function issueEventTicketForBooking(companyId: number, bookingId: n
         return { code: 404, error: true, message: 'Confirmed event booking not found' };
     }
 
-    const targetTicketCount = Math.max(1, booking.booked_spots);
+    const declinedSeats = new Set(booking.attendees.filter((attendee) => attendee.confirmation_status === 'NOT_ATTENDING').map((attendee) => attendee.seat_number));
+    const targetSeats = Array.from({ length: booking.booked_spots }, (_, index) => index + 1)
+        .filter((seat) => !declinedSeats.has(seat));
     const extraAttendees = parseEventExtraAttendees(booking.extra_attendees_json as Prisma.JsonValue | null);
     const holderBySeat = new Map<number, { name: string | null; email: string | null; phone: string | null }>();
 
@@ -401,7 +429,7 @@ export async function issueEventTicketForBooking(companyId: number, bookingId: n
         email: booking.user.email?.trim() || null,
         phone: booking.user.phoneNumber?.trim() || null,
     });
-    for (let seat = 2; seat <= targetTicketCount; seat += 1) {
+    for (let seat = 2; seat <= booking.booked_spots; seat += 1) {
         const extra = extraAttendees[seat - 2];
         holderBySeat.set(seat, {
             name: extra?.full_name ?? null,
@@ -427,7 +455,7 @@ export async function issueEventTicketForBooking(companyId: number, bookingId: n
             if (
                 ticket.seat_number
                 && ticket.seat_number >= 1
-                && ticket.seat_number <= targetTicketCount
+                && targetSeats.includes(ticket.seat_number)
                 && !seatToTicket.has(ticket.seat_number)
             ) {
                 seatToTicket.set(ticket.seat_number, ticket);
@@ -437,7 +465,7 @@ export async function issueEventTicketForBooking(companyId: number, bookingId: n
         }
 
         const availableSeats: number[] = [];
-        for (let seat = 1; seat <= targetTicketCount; seat += 1) {
+        for (const seat of targetSeats) {
             if (!seatToTicket.has(seat)) {
                 availableSeats.push(seat);
             }
@@ -483,7 +511,7 @@ export async function issueEventTicketForBooking(companyId: number, bookingId: n
         }
 
         const remainingSeats: number[] = [];
-        for (let seat = 1; seat <= targetTicketCount; seat += 1) {
+        for (const seat of targetSeats) {
             if (!seatToTicket.has(seat)) {
                 remainingSeats.push(seat);
             }

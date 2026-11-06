@@ -79,6 +79,7 @@ export async function getGroupMetrics(companyId: number, filters: GroupMetricsFi
                     group_event_id: true,
                     status: true,
                     booked_spots: true,
+                    declined_spots: true,
                     total_price_cents: true,
                 },
             }),
@@ -131,10 +132,10 @@ export async function getGroupMetrics(companyId: number, filters: GroupMetricsFi
         const bookings = bookingsByEvent.get(event.id) ?? [];
         const confirmedSpots = bookings
             .filter((booking) => booking.status === 'CONFIRMED')
-            .reduce((sum, booking) => sum + booking.booked_spots, 0);
+            .reduce((sum, booking) => sum + Math.max(booking.booked_spots - booking.declined_spots, 0), 0);
         const pendingSpots = bookings
             .filter((booking) => booking.status === 'PENDING')
-            .reduce((sum, booking) => sum + booking.booked_spots, 0);
+            .reduce((sum, booking) => sum + Math.max(booking.booked_spots - booking.declined_spots, 0), 0);
         const waitlistSize = bookings.filter((booking) => booking.status === 'WAITLISTED').length;
         const checkedInCount = checkedInByEvent.get(event.id) ?? 0;
         const occupancyRate = event.max_capacity > 0 ? toPercent((confirmedSpots / event.max_capacity) * 100) : 0;

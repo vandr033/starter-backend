@@ -59,7 +59,7 @@ export interface StaffAssignmentInput {
 }
 
 type ServiceResult = MensajeApi & { data?: any };
-type EventBookingSpots = { confirmed: number; pending: number };
+type EventBookingSpots = { confirmed: number; pending: number; offered: number };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -394,7 +394,7 @@ export async function listGroupEvents(companyId: number, filters?: {
 
     const spotsByEvent = await getEventBookingSpots(companyId, events.map((event) => event.id));
     const withBookingSpots = events.map((event) => {
-        const spots = spotsByEvent.get(event.id) ?? { confirmed: 0, pending: 0 };
+        const spots = spotsByEvent.get(event.id) ?? { confirmed: 0, pending: 0, offered: 0 };
         return {
             ...event,
             description: sanitizeRichText(event.description) ?? null,
@@ -405,6 +405,7 @@ export async function listGroupEvents(companyId: number, filters?: {
             },
             booked_spots_confirmed: spots.confirmed,
             booked_spots_pending: spots.pending,
+            booked_spots_offered: spots.offered,
         };
     });
 
@@ -441,7 +442,7 @@ async function getEventWithRelations(eventId: number, companyId: number) {
     if (!event) return null;
 
     const spotsByEvent = await getEventBookingSpots(companyId, [event.id]);
-    const spots = spotsByEvent.get(event.id) ?? { confirmed: 0, pending: 0 };
+    const spots = spotsByEvent.get(event.id) ?? { confirmed: 0, pending: 0, offered: 0 };
 
     return {
         ...event,
@@ -452,6 +453,7 @@ async function getEventWithRelations(eventId: number, companyId: number) {
         },
         booked_spots_confirmed: spots.confirmed,
         booked_spots_pending: spots.pending,
+        booked_spots_offered: spots.offered,
     };
 }
 
@@ -459,7 +461,7 @@ async function getEventBookingSpots(companyId: number, eventIds: number[]): Prom
     const result = new Map<number, EventBookingSpots>();
     if (eventIds.length === 0) return result;
 
-    const [bookingRows, freeRegistrationRows] = await Promise.all([
+    const [bookingRows, offerRows, freeRegistrationRows] = await Promise.all([
         prisma.groupEventBooking.groupBy({
             by: ['group_event_id', 'status'],
             where: {
@@ -467,7 +469,17 @@ async function getEventBookingSpots(companyId: number, eventIds: number[]): Prom
                 group_event_id: { in: eventIds },
                 status: { in: ['CONFIRMED', 'PENDING'] },
             },
-            _sum: { booked_spots: true },
+            _sum: { booked_spots: true, declined_spots: true },
+        }),
+        prisma.groupEventBooking.groupBy({
+            by: ['group_event_id'],
+            where: {
+                company_id: companyId,
+                group_event_id: { in: eventIds },
+                status: 'WAITLISTED',
+                waitlist_offer_expires_at: { gt: new Date() },
+            },
+            _count: { _all: true },
         }),
         prisma.freeEventRegistration.groupBy({
             by: ['group_event_id', 'status'],
@@ -475,14 +487,15 @@ async function getEventBookingSpots(companyId: number, eventIds: number[]): Prom
                 company_id: companyId,
                 group_event_id: { in: eventIds },
                 status: { in: ['CONFIRMED', 'PENDING'] },
+                confirmation_status: { not: 'NOT_ATTENDING' },
             },
             _count: { _all: true },
         }),
     ]);
 
     for (const row of bookingRows) {
-        const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0 };
-        const spots = row._sum.booked_spots ?? 0;
+        const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0, offered: 0 };
+        const spots = Math.max((row._sum.booked_spots ?? 0) - (row._sum.declined_spots ?? 0), 0);
         if (row.status === 'CONFIRMED') {
             current.confirmed += spots;
         } else if (row.status === 'PENDING') {
@@ -491,8 +504,14 @@ async function getEventBookingSpots(companyId: number, eventIds: number[]): Prom
         result.set(row.group_event_id, current);
     }
 
+    for (const row of offerRows) {
+        const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0, offered: 0 };
+        current.offered += row._count._all;
+        result.set(row.group_event_id, current);
+    }
+
     for (const row of freeRegistrationRows) {
-        const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0 };
+        const current = result.get(row.group_event_id) ?? { confirmed: 0, pending: 0, offered: 0 };
         const spots = row._count._all ?? 0;
         if (row.status === 'CONFIRMED') {
             current.confirmed += spots;

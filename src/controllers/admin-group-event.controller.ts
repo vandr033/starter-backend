@@ -6,6 +6,7 @@ import * as GroupBookingService from '../services/group-booking.service';
 import * as GroupAttendanceService from '../services/group-attendance.service';
 import { prisma } from '../prisma/client';
 import { createWhatsappGroup, isWhatsappEnqueueAccepted, queueWhatsappGroupMessage } from '../utils/whatsappSender';
+import * as EventConfirmationService from '../services/group-event-confirmation.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -27,6 +28,15 @@ function requireCompanyId(req: AuthenticatedRequest, res: Response): number | nu
         return null;
     }
     return companyId;
+}
+
+export async function enableEventAttendanceConfirmations(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+    const eventId = parseId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
+    const result = await EventConfirmationService.enableEventAttendanceConfirmations(companyId, eventId);
+    return res.status(result.code).json(result);
 }
 
 export async function createEvent(req: AuthenticatedRequest, res: Response) {
@@ -220,15 +230,25 @@ export async function sendMessageToWhatsappGroup(req: AuthenticatedRequest, res:
         where: { id: groupId, group_event_id: eventId, group_event: { company_id: companyId } },
     });
     if (!group) return res.status(404).json({ message: 'Group not found' });
+    const [event, language] = await Promise.all([
+        prisma.groupEvent.findFirst({ where: { id: eventId, company_id: companyId }, select: { id: true, slug: true } }),
+        prisma.configMessage.findUnique({ where: { company_id_key: { company_id: companyId, key: 'default_language' } }, select: { value: true } }),
+    ]);
+    if (!event) return res.status(404).json({ message: 'Event not found' });
 
     const { message } = req.body as { message?: string };
     if (!message?.trim()) return res.status(400).json({ message: 'Message is required' });
 
-    const result = await queueWhatsappGroupMessage(group.group_jid, message.trim(), {
+    const locale = (language?.value || '').trim().toLowerCase() === 'en' ? 'en' : 'es';
+    const eventUrl = `${(process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '')}/shop/${encodeURIComponent(event.slug)}/events/${event.id}`;
+    const eventLinkLabel = locale === 'en' ? 'Event details and actions' : 'Detalles y acciones del evento';
+    const text = `${message.trim()}\n\n${eventLinkLabel}: ${eventUrl}`;
+
+    const result = await queueWhatsappGroupMessage(group.group_jid, text, {
         companyId,
         sourceType: 'EVENT_GROUP_MESSAGE',
         sourceId: String(group.id),
-        dedupeKey: `event-group-message:${group.id}:${message.trim()}`,
+        dedupeKey: `event-group-message:${group.id}:${text}`,
     });
     if (!isWhatsappEnqueueAccepted(result)) {
         return res.status(502).json({ ok: false, message: 'WhatsApp message could not be queued', reason: result.reason });

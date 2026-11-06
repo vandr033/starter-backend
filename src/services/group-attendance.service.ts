@@ -48,11 +48,15 @@ export async function checkInEventAttendance(
             id: true,
             group_event_id: true,
             customer_profile_id: true,
+            attendees: { where: { seat_number: 1 }, select: { confirmation_status: true } },
         },
     });
 
     if (!booking) {
         return { code: 404, error: true, message: 'Confirmed event booking not found for this user' };
+    }
+    if (booking.attendees[0]?.confirmation_status === 'NOT_ATTENDING') {
+        return { code: 409, error: true, message: 'This attendee declined the event invitation' };
     }
 
     const existing = await prisma.groupSessionAttendance.findFirst({

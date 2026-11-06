@@ -79,6 +79,7 @@ model Company {
   group_class_enrollments                  GroupClassEnrollment[]
   group_session_attendances                GroupSessionAttendance[]
   group_tickets                            GroupTicket[]
+  group_event_attendees                    GroupEventAttendee[]
   group_event_interests                    GroupEventInterest[]
   group_class_interests                    GroupClassInterest[]
   free_event_registrations                 FreeEventRegistration[]
@@ -2879,6 +2880,13 @@ enum FreeEventRegistrationStatus {
   INTERESTED
 }
 
+enum EventAttendanceStatus {
+  NOT_REQUESTED
+  PENDING
+  ATTENDING
+  NOT_ATTENDING
+}
+
 enum AccountVerificationStatus {
   NOT_REQUESTED
   PENDING_VERIFICATION
@@ -2903,6 +2911,7 @@ model GroupEvent {
   price_cents                    Int             @default(0)
   max_capacity                   Int
   capacity_visible               Boolean         @default(false)
+  confirmations_enabled          Boolean         @default(false)
   registration_question_text     String?         @db.VarChar(500)
   registration_question_required Boolean         @default(false)
   start_at                       DateTime
@@ -2918,6 +2927,7 @@ model GroupEvent {
   created_by                         User?                           @relation("GroupEventCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
   staff_assignments                  GroupStaffAssignment[]
   bookings                           GroupEventBooking[]
+  attendees                          GroupEventAttendee[]
   attendances                        GroupSessionAttendance[]
   interests                          GroupEventInterest[]
   free_registrations                 FreeEventRegistration[]
@@ -3051,6 +3061,7 @@ model GroupEventBooking {
   user_id                      String
   status                       GroupBookingStatus @default(PENDING)
   booked_spots                 Int                @default(1)
+  declined_spots               Int                @default(0)
   payment_method               PaymentMethod      @default(NONE)
   payment_status               PaymentStatus      @default(UNPAID)
   qr_proof_image_url           String?            @db.VarChar(512)
@@ -3061,6 +3072,7 @@ model GroupEventBooking {
   created_at                   DateTime           @default(now())
   updated_at                   DateTime           @updatedAt
   cancelled_at                 DateTime?
+  waitlist_offer_expires_at    DateTime?
 
   company          Company                  @relation(fields: [company_id], references: [id])
   group_event      GroupEvent               @relation(fields: [group_event_id], references: [id])
@@ -3068,12 +3080,39 @@ model GroupEventBooking {
   user             User                     @relation(fields: [user_id], references: [id])
   attendances      GroupSessionAttendance[]
   tickets          GroupTicket[]
+  attendees        GroupEventAttendee[]
 
   @@index([company_id, group_event_id, status])
   @@index([company_id, group_event_id, user_id, status])
   @@index([user_id, group_event_id])
   @@index([customer_profile_id])
   @@map("group_event_booking")
+}
+
+model GroupEventAttendee {
+  id                      Int                  @id @default(autoincrement())
+  company_id              Int
+  group_event_id          Int
+  group_event_booking_id  Int
+  seat_number             Int
+  full_name               String               @db.VarChar(255)
+  email                   String?              @db.VarChar(254)
+  phone                   String?              @db.VarChar(64)
+  confirmation_token      String               @unique @db.VarChar(64)
+  confirmation_status     EventAttendanceStatus @default(PENDING)
+  confirmation_reason     String?              @db.VarChar(500)
+  confirmation_responded_at DateTime?
+  created_at              DateTime             @default(now())
+  updated_at              DateTime             @updatedAt
+
+  company       Company           @relation(fields: [company_id], references: [id])
+  group_event   GroupEvent        @relation(fields: [group_event_id], references: [id], onDelete: Cascade)
+  event_booking GroupEventBooking @relation(fields: [group_event_booking_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_event_booking_id, seat_number])
+  @@index([company_id, group_event_id, confirmation_status])
+  @@index([group_event_booking_id])
+  @@map("group_event_attendee")
 }
 
 // ─── Class Enrollment (pass/subscription for a class) ───────────────────────
@@ -3338,6 +3377,10 @@ model FreeEventRegistration {
   tos_accepted                 Boolean                     @default(false)
   source                       String                      @default("free_event_form") @db.VarChar(50)
   status                       FreeEventRegistrationStatus @default(CONFIRMED)
+  confirmation_token           String?                      @unique @db.VarChar(64)
+  confirmation_status          EventAttendanceStatus        @default(NOT_REQUESTED)
+  confirmation_reason          String?                      @db.VarChar(500)
+  confirmation_responded_at    DateTime?
   create_account_requested     Boolean                     @default(false)
   account_created              Boolean                     @default(false)
   account_verification_status  AccountVerificationStatus   @default(NOT_REQUESTED)

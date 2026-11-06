@@ -110,6 +110,11 @@ export const createEventBookingSchema = z.object({
     path: ['extra_attendees'],
 });
 
+export const eventAttendanceConfirmationSchema = z.object({
+    action: z.enum(['ATTENDING', 'NOT_ATTENDING']),
+    reason: z.string().trim().max(500).nullable().optional(),
+});
+
 export const createClassEnrollmentSchema = z.object({
     company_id: z.number().int().positive(),
     group_class_id: z.number().int().positive(),

@@ -10,6 +10,7 @@ import { resendTicketByCode } from '../services/group-ticket.service';
 import * as PaidEventGuestCheckoutService from '../services/paid-event-guest-checkout.service';
 import * as ClassGuestEnrollmentService from '../services/class-guest-enrollment.service';
 import * as PublicSessionAttendanceService from '../services/public-class-session-attendance.service';
+import * as EventConfirmationService from '../services/group-event-confirmation.service';
 
 function parseId(raw: string | string[] | undefined): number | null {
     if (!raw) return null;
@@ -25,6 +26,21 @@ function requireCompanyId(req: AuthenticatedRequest, res: Response): number | nu
         return null;
     }
     return companyId;
+}
+
+export async function getEventAttendanceConfirmation(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token : '';
+    if (!/^[a-f0-9]{64}$/i.test(token)) return res.status(404).json({ code: 404, error: true, message: 'Confirmation link not found' });
+    const result = await EventConfirmationService.getEventAttendanceConfirmation(token);
+    return res.status(result.code).json(result);
+}
+
+export async function submitEventAttendanceConfirmation(req: AuthenticatedRequest, res: Response) {
+    const token = typeof req.params.token === 'string' ? req.params.token : '';
+    if (!/^[a-f0-9]{64}$/i.test(token)) return res.status(404).json({ code: 404, error: true, message: 'Confirmation link not found' });
+    const input = (req as any).validated ?? req.body;
+    const result = await EventConfirmationService.submitEventAttendanceConfirmation(token, input.action, input.reason);
+    return res.status(result.code).json(result);
 }
 
 export async function listPublicEvents(req: AuthenticatedRequest, res: Response) {

@@ -4,6 +4,7 @@ import { logger } from './config/logger';
 import { startWahaDisconnectMonitor } from './services/waha-disconnect-monitor.service';
 import { assertWahaConfiguration, getWahaProviderState, warnIfWahaSessionMissing } from './services/waha.service';
 import { startWhatsappWorker, stopWhatsappWorker } from './services/whatsapp-worker.service';
+import { startEventWaitlistOfferWorker, stopEventWaitlistOfferWorker } from './services/group-event-confirmation.service';
 import { prisma } from './prisma/client';
 
 const wahaProviderState = getWahaProviderState();
@@ -17,6 +18,8 @@ if (wahaProviderState.mode === 'remote' && wahaProviderState.configured) {
 
 const server = app.listen(env.port, () => {
     logger.info(`Server is running on port ${env.port}`);
+
+    startEventWaitlistOfferWorker();
 
     // WhatsApp background worker
     if (process.env.ENABLE_WHATSAPP_WORKER !== 'false') {
@@ -49,6 +52,7 @@ async function shutdown(signal: string) {
     shuttingDown = true;
     logger.info({ event: 'server_shutdown_started', signal }, 'Graceful shutdown started');
     await stopWhatsappWorker();
+    stopEventWaitlistOfferWorker();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await prisma.$disconnect();
     logger.info({ event: 'server_shutdown_completed', signal }, 'Graceful shutdown completed');

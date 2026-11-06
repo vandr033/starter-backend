@@ -19,15 +19,15 @@ import {
     issueEventTicketForBooking,
 } from './group-ticket.service';
 import { generateInstallmentsForEnrollment } from './enrollment-installment.service';
-import { buildWaitlistSpotOpenedTemplate, notifyGroupBookingCreated } from '../utils/groupNotifications';
-import { isTemporaryEmailAddress, sendCustomerMassMessageEmail, sendGenericEmail } from '../utils/sendEmail';
-import { queueWhatsappBatch, isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
-import { isEmailDeliverySuccessful } from './notification-provider.service';
+import { notifyGroupBookingCreated } from '../utils/groupNotifications';
+import { sendCustomerMassMessageEmail } from '../utils/sendEmail';
+import { queueWhatsappBatch } from '../utils/whatsappSender';
 import { ensureCustomerProfileWithAccount, sendCustomerPortalInvite, type CustomerAccountInviteContext } from './customer-account.service';
 import { buildCustomerKey } from '../repositories/customer.repo';
 import { assertStoredUpload, UPLOAD_PURPOSES } from './upload-intent.service';
 import { UploadSecurityError } from '../utils/upload-errors';
 import { StorageService } from './storage.service';
+import { ensurePaidBookingAttendees, getEventConfirmationLinks, offerPaidWaitlistSpots, sendPaidBookingConfirmationInvites } from './group-event-confirmation.service';
 
 type ServiceResult = MensajeApi & { data?: any };
 type TxClient = Prisma.TransactionClient;
@@ -87,6 +87,8 @@ type EventMassMessageRecipient = {
     email: string | null;
     phone: string | null;
     phonePrefix: string | null;
+    confirmationToken?: string | null;
+    confirmationName?: string | null;
 };
 
 type ClassMassMessagePayload = {
@@ -182,15 +184,6 @@ export function canSafelyMatchOrphanFreeRegistration(params: {
     return false;
 }
 
-function getFrontendBaseUrl(): string {
-    return (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
-}
-
-function getEventBookingUrl(companySlug: string | null | undefined, eventId: number): string | null {
-    if (!companySlug) return null;
-    return `${getFrontendBaseUrl()}/shop/${encodeURIComponent(companySlug)}/events/${eventId}`;
-}
-
 function buildDisplayPhone(prefix?: string | null, phone?: string | null): string | null {
     const digits = buildFullPhone(prefix, phone);
     return digits ? `+${digits}` : null;
@@ -199,6 +192,12 @@ function buildDisplayPhone(prefix?: string | null, phone?: string | null): strin
 function normalizeEmail(email?: string | null): string | null {
     const value = (email || '').trim().toLowerCase();
     return value || null;
+}
+
+function getEventBookingUrl(companySlug: string | null | undefined, eventId: number): string | null {
+    if (!companySlug) return null;
+    const base = (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+    return `${base}/shop/${encodeURIComponent(companySlug)}/events/${eventId}`;
 }
 
 function formatDateRange(startAt?: Date | null, endAt?: Date | null): string | null {
@@ -419,6 +418,7 @@ export async function createEventBooking(
 
     const canCustomize = await isFeatureEnabledForCompany(companyId, 'BOOKING_FLOW_CUSTOMIZATION');
 
+    let attendanceConfirmationsEnabled = false;
     const result = await prisma.$transaction(async (tx) => {
         await lockEventRow(tx, companyId, input.group_event_id);
 
@@ -433,6 +433,7 @@ export async function createEventBooking(
         if (!event) {
             return { code: 404, error: true, message: 'Event not found or not published' } as ServiceResult;
         }
+        attendanceConfirmationsEnabled = event.confirmations_enabled;
 
         if (new Date() > event.end_at) {
             return { code: 400, error: true, message: 'This event has already ended' } as ServiceResult;
@@ -463,8 +464,12 @@ export async function createEventBooking(
                 user_id: userId,
                 status: 'WAITLISTED',
             },
-            select: { id: true, customer_profile_id: true },
+            select: { id: true, customer_profile_id: true, waitlist_offer_expires_at: true },
         });
+
+        if (!event.is_free && existingWaitlist && (!existingWaitlist.waitlist_offer_expires_at || existingWaitlist.waitlist_offer_expires_at <= new Date())) {
+            return { code: 409, error: true, message: 'A paid waitlist offer is required to claim this spot' } as ServiceResult;
+        }
 
         const bookedCount = await tx.groupEventBooking.aggregate({
             where: {
@@ -472,10 +477,14 @@ export async function createEventBooking(
                 group_event_id: event.id,
                 status: 'CONFIRMED',
             },
-            _sum: { booked_spots: true },
+            _sum: { booked_spots: true, declined_spots: true },
         });
 
-        const currentlyBooked = bookedCount._sum.booked_spots ?? 0;
+        const activeOffers = await tx.groupEventBooking.count({
+            where: { company_id: companyId, group_event_id: event.id, status: 'WAITLISTED', waitlist_offer_expires_at: { gt: new Date() } },
+        });
+        const ownOffer = existingWaitlist?.waitlist_offer_expires_at && existingWaitlist.waitlist_offer_expires_at > new Date() ? 1 : 0;
+        const currentlyBooked = (bookedCount._sum.booked_spots ?? 0) - (bookedCount._sum.declined_spots ?? 0) + activeOffers - ownOffer;
         const remaining = event.max_capacity - currentlyBooked;
 
         if (spots > remaining) {
@@ -525,6 +534,8 @@ export async function createEventBooking(
                     customer_profile_id: existingWaitlist.customer_profile_id ?? customerProfile.id,
                     status,
                     booked_spots: spots,
+                    declined_spots: 0,
+                    waitlist_offer_expires_at: null,
                     payment_method: event.is_free ? PaymentMethod.NONE : (input.payment_method as PaymentMethod),
                     payment_status: paymentStatus,
                     qr_proof_image_url: qrProofImageUrl,
@@ -561,15 +572,32 @@ export async function createEventBooking(
         } as ServiceResult;
     });
 
-    if (!result.error && result.data && (result.data as { status?: GroupBookingStatus }).status === GroupBookingStatus.CONFIRMED) {
-        const bookingId = (result.data as { id: number }).id;
-        void issueEventTicketForBooking(companyId, bookingId).catch((error) => {
-            logger.error({ companyId, bookingId, error }, 'Failed to issue event ticket after booking creation');
-        });
-    }
-
     if (!result.error && result.data) {
         const bookingId = (result.data as { id: number }).id;
+        const shouldIssueTicket = (result.data as { status?: GroupBookingStatus }).status === GroupBookingStatus.CONFIRMED;
+        if (attendanceConfirmationsEnabled) {
+            try {
+                await ensurePaidBookingAttendees(bookingId);
+            } catch (error) {
+                logger.error({ companyId, bookingId, error }, 'Failed to prepare event attendance confirmations');
+            }
+        }
+        void (async () => {
+            if (attendanceConfirmationsEnabled) {
+                try {
+                    await sendPaidBookingConfirmationInvites(companyId, bookingId);
+                } catch (error) {
+                    logger.error({ companyId, bookingId, error }, 'Failed to send event attendee confirmation invites');
+                }
+            }
+            if (shouldIssueTicket) {
+                try {
+                    await issueEventTicketForBooking(companyId, bookingId);
+                } catch (error) {
+                    logger.error({ companyId, bookingId, error }, 'Failed to issue event ticket after booking creation');
+                }
+            }
+        })();
         void notifyInternalEventBookingCreated(companyId, bookingId).catch((error) => {
             logger.error({ companyId, bookingId, error }, 'Failed to notify internal event booking recipients');
         });
@@ -586,8 +614,9 @@ export async function listEventBookings(companyId: number, eventId: number): Pro
         prisma.groupEventBooking.findMany({
             where: { company_id: companyId, group_event_id: eventId },
             include: {
-                user: { select: { id: true, name: true, email: true, phoneNumber: true } },
+                user: { select: { id: true, name: true, email: true, phoneNumber: true, phone_prefix: true } },
                 customer_profile: { select: { id: true, notes: true } },
+                attendees: { select: { id: true, seat_number: true, full_name: true, confirmation_status: true, confirmation_reason: true, confirmation_responded_at: true }, orderBy: { seat_number: 'asc' } },
             },
             orderBy: { created_at: 'desc' },
         }),
@@ -646,6 +675,11 @@ export async function listEventBookings(companyId: number, eventId: number): Pro
                 user_id: registration.user_id ?? fallbackUserId,
                 status: registration.status === 'CONFIRMED' ? GroupBookingStatus.CONFIRMED : GroupBookingStatus.PENDING,
                 booked_spots: 1,
+                declined_spots: registration.confirmation_status === 'NOT_ATTENDING' ? 1 : 0,
+                waitlist_offer_expires_at: null,
+                attendees: [],
+                confirmation_status: registration.confirmation_status,
+                confirmation_reason: registration.confirmation_reason,
                 payment_method: PaymentMethod.NONE,
                 payment_status: PaymentStatus.PAID,
                 qr_proof_image_url: null,
@@ -699,7 +733,7 @@ async function runEventMassMessage(
     const [company, event, localeConfig] = await Promise.all([
         prisma.company.findUnique({
             where: { id: companyId, deleted_at: null },
-            select: { id: true, name: true },
+            select: { id: true, name: true, slug: true },
         }),
         prisma.groupEvent.findFirst({
             where: { id: eventId, company_id: companyId, deleted_at: null },
@@ -770,6 +804,7 @@ async function runEventMassMessage(
                 status: { in: [GroupBookingStatus.PENDING, GroupBookingStatus.CONFIRMED, GroupBookingStatus.WAITLISTED] },
             },
             include: {
+                attendees: { where: { seat_number: 1 }, select: { confirmation_status: true } },
                 user: {
                     select: {
                         id: true,
@@ -787,6 +822,7 @@ async function runEventMassMessage(
                 company_id: companyId,
                 group_event_id: eventId,
                 status: { in: ['PENDING', 'CONFIRMED'] },
+                confirmation_status: { not: 'NOT_ATTENDING' },
             },
             include: {
                 user: {
@@ -819,6 +855,12 @@ async function runEventMassMessage(
             },
         })
         : [];
+    const confirmationAttendees = bookings.length > 0
+        ? await prisma.groupEventAttendee.findMany({
+            where: { group_event_booking_id: { in: bookings.map((booking) => booking.id) }, confirmation_status: 'PENDING' },
+            select: { group_event_booking_id: true, seat_number: true, confirmation_token: true, full_name: true },
+        })
+        : [];
     const ticketsByBookingId = new Map<number, typeof tickets>();
     for (const ticket of tickets) {
         if (!ticket.group_event_booking_id) continue;
@@ -842,6 +884,7 @@ async function runEventMassMessage(
             const bookingSelected = !hasSelectedTargets || selectedBookingIds.has(booking.id);
             const bookingTickets = ticketsByBookingId.get(booking.id) ?? [];
             const bookerHasTicket = bookingTickets.some((ticket) => isBookerTicket(ticket, booking));
+            const bookerDeclined = booking.attendees[0]?.confirmation_status === 'NOT_ATTENDING';
             const selectedTickets = bookingTickets.filter(
                 (ticket) => bookingSelected || selectedTicketIds.has(ticket.id),
             );
@@ -855,7 +898,7 @@ async function runEventMassMessage(
                     phonePrefix: booking.user?.phone_prefix || null,
                 };
             });
-            if ((bookingSelected && !bookerHasTicket) || selectedBookerIds.has(booking.id)) {
+            if (((bookingSelected && !bookerHasTicket) || selectedBookerIds.has(booking.id)) && !bookerDeclined) {
                 ticketRecipients.push({
                     source: 'GROUP_EVENT_BOOKER' as const,
                     id: booking.id,
@@ -876,6 +919,27 @@ async function runEventMassMessage(
             phonePrefix: registration.user?.phone_prefix || registration.phone_prefix,
         })),
     ];
+    const freeRegistrationById = new Map(freeRegistrations.map((registration) => [registration.id, registration]));
+    const ticketById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+    const confirmationAttendeeBySeat = new Map(confirmationAttendees.map((attendee) => [`${attendee.group_event_booking_id}:${attendee.seat_number}`, attendee]));
+    for (const recipient of recipients) {
+        if (recipient.source === 'FREE_REGISTRATION') {
+            const registration = freeRegistrationById.get(recipient.id);
+            recipient.confirmationToken = registration?.confirmation_status === 'PENDING' ? registration.confirmation_token : null;
+            recipient.confirmationName = registration ? `${registration.first_name} ${registration.last_name}`.trim() : null;
+        } else if (recipient.source === 'GROUP_EVENT_TICKET') {
+            const ticket = ticketById.get(recipient.id);
+            const attendee = ticket?.group_event_booking_id && ticket.seat_number
+                ? confirmationAttendeeBySeat.get(`${ticket.group_event_booking_id}:${ticket.seat_number}`)
+                : null;
+            recipient.confirmationToken = attendee?.confirmation_token ?? null;
+            recipient.confirmationName = attendee?.full_name ?? null;
+        } else {
+            const attendee = confirmationAttendeeBySeat.get(`${recipient.id}:1`);
+            recipient.confirmationToken = attendee?.confirmation_token ?? null;
+            recipient.confirmationName = attendee?.full_name ?? null;
+        }
+    }
 
     const seenWhatsappTargets = new Set<string>();
     const seenEmailTargets = new Set<string>();
@@ -887,10 +951,25 @@ async function runEventMassMessage(
     let duplicatesSkipped = 0;
     let processed = 0;
 
-    const whatsappText =
-        locale === 'en'
-            ? `${company.name} · ${event.title}\n\n${message}`
-            : `${company.name} · ${event.title}\n\n${message}`;
+    const eventUrl = getEventBookingUrl(company.slug, event.id);
+    const confirmationLinksByWhatsappTarget = new Map<string, string[]>();
+    if (company.slug) {
+        for (const recipient of recipients) {
+            const target = buildFullPhone(recipient.phonePrefix, recipient.phone);
+            if (!target || !recipient.confirmationToken) continue;
+            const links = getEventConfirmationLinks(company.slug, event.id, recipient.confirmationToken);
+            const name = recipient.confirmationName?.trim();
+            const label = name ? `${locale === 'en' ? 'For' : 'Para'} ${name}: ` : '';
+            const rows = confirmationLinksByWhatsappTarget.get(target) ?? [];
+            rows.push(`${label}${locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}: ${links.confirm}\n${label}${locale === 'en' ? 'Cannot attend' : 'No podré asistir'}: ${links.decline}`);
+            confirmationLinksByWhatsappTarget.set(target, rows);
+        }
+    }
+    const whatsappText = [
+        `${company.name} · ${event.title}`,
+        message,
+        eventUrl ? `${locale === 'en' ? 'Event details' : 'Detalles del evento'}: ${eventUrl}` : null,
+    ].filter(Boolean).join('\n\n');
 
     const wantsWhatsapp = deliveryMode === 'AUTO' || deliveryMode === 'WHATSAPP' || deliveryMode === 'BOTH';
     const whatsappItems = [] as Array<{
@@ -909,9 +988,11 @@ async function runEventMassMessage(
                 continue;
             }
             seenWhatsappTargets.add(whatsappTarget);
+            const confirmationLinks = confirmationLinksByWhatsappTarget.get(whatsappTarget) ?? [];
+            const text = confirmationLinks.length ? `${whatsappText}\n\n${confirmationLinks.join('\n')}` : whatsappText;
             whatsappItems.push({
                 recipient: whatsappTarget,
-                text: whatsappText,
+                text,
                 sourceType: 'GROUP_EVENT_MASS_MESSAGE',
                 sourceId: `${recipient.source}:${recipient.id}`,
                 dedupeKey: `${payload.idempotency_key ?? `event:${eventId}:${deliveryMode}:${message}`}:${recipient.source}:${recipient.id}`,
@@ -1526,12 +1607,15 @@ export async function confirmEventBooking(companyId: number, bookingId: number):
                 group_event_id: booking.group_event_id,
                 status: 'CONFIRMED',
             },
-            _sum: { booked_spots: true },
+            _sum: { booked_spots: true, declined_spots: true },
         });
-        const usedCapacity = confirmedCount._sum.booked_spots ?? 0;
+        const activeOffers = await tx.groupEventBooking.count({
+            where: { company_id: companyId, group_event_id: booking.group_event_id, status: 'WAITLISTED', waitlist_offer_expires_at: { gt: new Date() } },
+        });
+        const usedCapacity = (confirmedCount._sum.booked_spots ?? 0) - (confirmedCount._sum.declined_spots ?? 0) + activeOffers;
         const remaining = booking.group_event.max_capacity - usedCapacity;
 
-        if (booking.booked_spots > remaining) {
+        if (booking.booked_spots - booking.declined_spots > remaining) {
             return {
                 code: 409,
                 error: true,
@@ -1586,12 +1670,15 @@ export async function approveEventBookingQrPayment(companyId: number, bookingId:
                 group_event_id: booking.group_event_id,
                 status: 'CONFIRMED',
             },
-            _sum: { booked_spots: true },
+            _sum: { booked_spots: true, declined_spots: true },
         });
-        const usedCapacity = confirmedCount._sum.booked_spots ?? 0;
+        const activeOffers = await tx.groupEventBooking.count({
+            where: { company_id: companyId, group_event_id: booking.group_event_id, status: 'WAITLISTED', waitlist_offer_expires_at: { gt: new Date() } },
+        });
+        const usedCapacity = (confirmedCount._sum.booked_spots ?? 0) - (confirmedCount._sum.declined_spots ?? 0) + activeOffers;
         const remaining = booking.group_event.max_capacity - usedCapacity;
 
-        if (booking.booked_spots > remaining) {
+        if (booking.booked_spots - booking.declined_spots > remaining) {
             return {
                 code: 409,
                 error: true,
@@ -1643,7 +1730,7 @@ export async function unconfirmEventBooking(companyId: number, bookingId: number
     await cancelTicketsForEventBooking(companyId, bookingId);
 
     if (!booking.group_event.is_free) {
-        await notifyWaitlistOfOpenSpot(companyId, booking.group_event_id);
+        await offerPaidWaitlistSpots(companyId, booking.group_event_id);
     }
 
     return { code: 200, error: false, message: 'Booking moved back to pending' };
@@ -1671,7 +1758,7 @@ export async function cancelEventBooking(companyId: number, bookingId: number): 
 
     // Trigger waitlist notification if paid event + PRO plan
     if (!booking.group_event.is_free && booking.status === 'CONFIRMED') {
-        await notifyWaitlistOfOpenSpot(companyId, booking.group_event_id);
+        await offerPaidWaitlistSpots(companyId, booking.group_event_id);
     }
 
     return { code: 200, error: false, message: 'Booking cancelled' };
@@ -1700,10 +1787,13 @@ export async function joinWaitlist(companyId: number, userId: string, eventId: n
             group_event_id: eventId,
             status: 'CONFIRMED',
         },
-        _sum: { booked_spots: true },
+        _sum: { booked_spots: true, declined_spots: true },
     });
 
-    const usedCapacity = confirmedCount._sum.booked_spots ?? 0;
+    const activeOffers = await prisma.groupEventBooking.count({
+        where: { company_id: companyId, group_event_id: eventId, status: 'WAITLISTED', waitlist_offer_expires_at: { gt: new Date() } },
+    });
+    const usedCapacity = (confirmedCount._sum.booked_spots ?? 0) - (confirmedCount._sum.declined_spots ?? 0) + activeOffers;
     if (usedCapacity < event.max_capacity) {
         return { code: 400, error: true, message: 'Event still has available seats' };
     }
@@ -1763,119 +1853,14 @@ export async function leaveWaitlist(companyId: number, userId: string, eventId: 
         return { code: 404, error: true, message: 'Waitlist entry not found' };
     }
 
-    await prisma.groupEventBooking.delete({
+    await prisma.groupEventBooking.update({
         where: { id: waitlistEntry.id },
+        data: { status: 'CANCELLED', cancelled_at: new Date() },
     });
 
+    await offerPaidWaitlistSpots(companyId, eventId);
+
     return { code: 200, error: false, message: 'Removed from waitlist' };
-}
-
-/**
- * Notify all waitlisted users that a spot has opened.
- * First successful booking takes the seat.
- */
-async function notifyWaitlistOfOpenSpot(companyId: number, eventId: number): Promise<void> {
-    try {
-        const canUse = await companyHasCapability(companyId, 'EVENTOS_PRO');
-        if (!canUse) return;
-
-        const event = await prisma.groupEvent.findFirst({
-            where: { id: eventId, company_id: companyId },
-            include: { company: { select: { name: true, slug: true } } },
-        });
-        if (!event) return;
-
-        const waitlisted = await prisma.groupEventBooking.findMany({
-            where: {
-                company_id: companyId,
-                group_event_id: eventId,
-                status: 'WAITLISTED',
-            },
-            include: {
-                user: {
-                    select: {
-                        email: true,
-                        phoneNumber: true,
-                        phone_prefix: true,
-                        name: true,
-                    },
-                },
-            },
-            orderBy: { created_at: 'asc' },
-        });
-
-        if (waitlisted.length === 0) return;
-
-        const settings = await prisma.companySettings.findUnique({
-            where: { company_id: companyId },
-            select: {
-                send_email_notifications: true,
-                send_whatsapp_notifications: true,
-            },
-        });
-
-        const sendEmail = settings?.send_email_notifications ?? true;
-        const sendWhatsapp = settings?.send_whatsapp_notifications ?? false;
-        const bookingUrl = getEventBookingUrl(event.company.slug, event.id);
-
-        const template = buildWaitlistSpotOpenedTemplate({
-            eventTitle: event.title,
-            companyName: event.company.name,
-            eventStartAt: event.start_at,
-            bookingUrl,
-        });
-
-        const deliveries = await Promise.allSettled(
-            waitlisted.map(async (entry) => {
-                let delivered = false;
-                let queued = false;
-
-                if (sendEmail && entry.user.email && !isTemporaryEmailAddress(entry.user.email)) {
-                    const html = `<p>${template.text.replace(/\n/g, '<br/>')}</p>`;
-                    const result = await sendGenericEmail(entry.user.email, template.subject, html, { companyId });
-                    delivered = isEmailDeliverySuccessful(result);
-                }
-
-                const fullPhone = buildFullPhone(entry.user.phone_prefix, entry.user.phoneNumber);
-                if (sendWhatsapp && fullPhone) {
-                    const result = await queueWhatsappText(fullPhone, template.text, {
-                        companyId,
-                        sourceType: 'EVENT_WAITLIST_NOTIFICATION',
-                        sourceId: String(entry.id),
-                        dedupeKey: `event-waitlist:${event.id}:${entry.id}:${template.text}`,
-                        expiresAt: event.start_at,
-                    });
-                    if (isWhatsappEnqueueAccepted(result)) {
-                        queued = true;
-                    }
-                }
-
-                return { delivered, queued };
-            }),
-        );
-
-        const deliveredCount = deliveries.filter(
-            (result) => result.status === 'fulfilled' && result.value.delivered,
-        ).length;
-        const queuedCount = deliveries.filter(
-            (result) => result.status === 'fulfilled' && result.value.queued,
-        ).length;
-        const failedCount = deliveries.filter((result) => result.status === 'rejected').length;
-
-        logger.info(
-            {
-                companyId,
-                eventId,
-                waitlistedCount: waitlisted.length,
-                deliveredCount,
-                queuedCount,
-                failedCount,
-            },
-            'Waitlist notification batch completed',
-        );
-    } catch (error) {
-        logger.error({ companyId, eventId, error }, 'Error notifying waitlist');
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1909,9 +1894,9 @@ export async function captureEventInterest(companyId: number, userId: string, ev
         // Capture interest only while sold out based on confirmed spots.
         const bookedCount = await tx.groupEventBooking.aggregate({
             where: { company_id: companyId, group_event_id: eventId, status: 'CONFIRMED' },
-            _sum: { booked_spots: true },
+            _sum: { booked_spots: true, declined_spots: true },
         });
-        const currentlyBooked = bookedCount._sum.booked_spots ?? 0;
+        const currentlyBooked = (bookedCount._sum.booked_spots ?? 0) - (bookedCount._sum.declined_spots ?? 0);
         if (currentlyBooked < event.max_capacity) {
             return { code: 409, error: true, message: 'Event is no longer sold out' } as ServiceResult;
         }
@@ -2730,6 +2715,11 @@ export async function getMyEventBookings(userId: string): Promise<ServiceResult>
                         company: { select: { id: true, name: true, slug: true } },
                     },
                 },
+                attendees: {
+                    where: { seat_number: 1 },
+                    select: { confirmation_token: true, confirmation_status: true },
+                    take: 1,
+                },
             },
             orderBy: { created_at: 'desc' },
         }),
@@ -2811,6 +2801,7 @@ export async function getMyEventBookings(userId: string): Promise<ServiceResult>
             user_id: registration.user_id ?? userId,
             status: registration.status === 'CONFIRMED' ? GroupBookingStatus.CONFIRMED : GroupBookingStatus.PENDING,
             booked_spots: 1,
+            declined_spots: registration.confirmation_status === 'NOT_ATTENDING' ? 1 : 0,
             payment_method: PaymentMethod.NONE,
             payment_status: PaymentStatus.PAID,
             qr_proof_image_url: null,
@@ -2821,9 +2812,18 @@ export async function getMyEventBookings(userId: string): Promise<ServiceResult>
             updated_at: registration.updated_at,
             cancelled_at: null,
             group_event: registration.group_event,
+            confirmation_status: registration.confirmation_status,
+            confirmation_token: (registration.user_id === userId || (!registration.user_id && registration.create_account_requested)) && registration.confirmation_status === 'PENDING'
+                ? registration.confirmation_token
+                : null,
         }));
 
-    const allBookings = [...bookings, ...mappedFreeRegistrations].sort(
+    const mappedBookings = bookings.map(({ attendees, ...booking }) => ({
+        ...booking,
+        confirmation_status: attendees[0]?.confirmation_status ?? null,
+        confirmation_token: attendees[0]?.confirmation_status === 'PENDING' ? attendees[0].confirmation_token : null,
+    }));
+    const allBookings = [...mappedBookings, ...mappedFreeRegistrations].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
     );
 

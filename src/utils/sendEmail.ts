@@ -85,29 +85,34 @@ export async function sendEmailCode(
   email: string,
   code: string,
   companyId?: number,
+  options?: { locale?: 'es' | 'en'; actionUrl?: string | null },
 ) {
   if (isTemporaryEmailAddress(email)) {
     logger.info({ event: "email_skipped_temp_address", to: maskEmail(email) }, "Skipping email delivery for temporary address");
     return 1;
   }
   try {
+    const english = options?.locale === 'en';
+    const title = english ? 'Verification code' : 'Código de verificación';
+    const actionUrl = options?.actionUrl?.trim();
     const html = await brandedEmailHtml({
-      title: "Código de verificación",
-      preheader: "Tu código de verificación de Priconpri",
+      title,
+      preheader: english ? 'Your Priconpri verification code' : 'Tu código de verificación de Priconpri',
       bodyHtml: `
-        <h2 style="margin-top:0;">¡Hola!</h2>
-        <p>Gracias por usar Priconpri. Para completar tu verificación, utiliza el siguiente código:</p>
+        <h2 style="margin-top:0;">${english ? 'Hello!' : '¡Hola!'}</h2>
+        <p>${english ? 'To complete your verification, use this code:' : 'Gracias por usar Priconpri. Para completar tu verificación, utiliza el siguiente código:'}</p>
         <div style="background:#fdf2f8;border:2px dashed #9f145b;padding:20px;text-align:center;margin:20px 0;border-radius:10px;">
           <div style="font-size:32px;font-weight:bold;letter-spacing:5px;color:#9f145b;font-family:monospace;">${escapeHtml(code)}</div>
         </div>
-        <p><strong>Importante:</strong> Este código expirará en 15 minutos por razones de seguridad.</p>
-        <p>Si no solicitaste este código, puedes ignorar este correo.</p>
+        <p><strong>${english ? 'Important:' : 'Importante:'}</strong> ${english ? 'This code expires in 15 minutes for security reasons.' : 'Este código expirará en 15 minutos por razones de seguridad.'}</p>
+        ${actionUrl ? `<p><a href="${escapeHtml(actionUrl)}">${english ? 'Continue to event booking' : 'Continuar con la reserva del evento'}</a></p>` : ''}
+        <p>${english ? 'If you did not request this code, you can ignore this email.' : 'Si no solicitaste este código, puedes ignorar este correo.'}</p>
       `,
     });
     const info = await transporter.sendMail({
       to: email,
       from: process.env.MAIL_FROM!,
-      subject: "Código de verificación",
+      subject: title,
       html,
       companyId,
     });  

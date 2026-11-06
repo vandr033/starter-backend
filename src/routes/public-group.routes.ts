@@ -8,6 +8,7 @@ import {
     companyScopedActionSchema,
     createClassEnrollmentSchema,
     createEventBookingSchema,
+    eventAttendanceConfirmationSchema,
     publicSessionAttendanceResendSchema,
     publicSessionAttendanceStartSchema,
     publicSessionAttendanceSubmitSchema,
@@ -21,6 +22,13 @@ import {
 } from '../controllers/free-event-registration.controller';
 
 const router = Router();
+
+router.get('/events/attendance-confirmations/:token', PublicGroupController.getEventAttendanceConfirmation);
+router.post(
+    '/events/attendance-confirmations/:token',
+    validate(eventAttendanceConfirmationSchema),
+    PublicGroupController.submitEventAttendanceConfirmation,
+);
 
 router.get(
     '/events',

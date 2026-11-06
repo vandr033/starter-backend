@@ -7,7 +7,7 @@ import { getAuth } from '../config/auth';
 import { OTP_RESEND_COOLDOWN_SECONDS, OTP_TTL_MINUTES, generateNumericCode } from '../utils/verification';
 import { canonicalizePhoneParts } from '../utils/phoneNormalization';
 import { sendEmailCode } from '../utils/sendEmail';
-import { getWhatsappEnqueueLifecycleStatus, queueWhatsappCode } from '../utils/whatsappSender';
+import { getWhatsappEnqueueLifecycleStatus, queueWhatsappText } from '../utils/whatsappSender';
 import { syncWhatsappOtpSessionDelivery } from './outbound-message.repository';
 import { ensureCustomerProfileWithAccount } from './customer-account.service';
 import * as UserRepo from '../repositories/user.repo';
@@ -50,6 +50,7 @@ type PaidEventLookup = {
     title: string;
     end_at: Date;
     company_id: number;
+    company_slug: string;
     is_free: boolean;
     status: GroupItemStatus;
 };
@@ -138,6 +139,7 @@ async function getPaidEvent(
             company_id: true,
             is_free: true,
             status: true,
+            company: { select: { slug: true } },
         },
     });
 
@@ -149,7 +151,7 @@ async function getPaidEvent(
         return { error: true, result: { code: 400, error: true, message: 'This event has already ended' } as ServiceResult };
     }
 
-    return { error: false, event };
+    return { error: false, event: { ...event, company_slug: event.company.slug } };
 }
 
 async function classifyAccount(params: {
@@ -251,6 +253,7 @@ async function dispatchSharedCode(params: {
     code: string;
     expiresAt?: Date;
     sourceId?: string;
+    event: PaidEventLookup;
 }): Promise<{
     emailSent: boolean;
     phoneSent: boolean;
@@ -260,12 +263,22 @@ async function dispatchSharedCode(params: {
     maskedEmail: string | null;
     maskedPhone: string | null;
 }> {
+    const language = await prisma.configMessage.findUnique({
+        where: { company_id_key: { company_id: params.companyId, key: 'default_language' } },
+        select: { value: true },
+    });
+    const locale = language?.value?.trim().toLowerCase() === 'en' ? 'en' : 'es';
+    const eventUrl = `${(process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '')}/shop/${encodeURIComponent(params.event.company_slug)}/events/${params.event.id}`;
+    const message = locale === 'en'
+        ? `Priconpri\n\nYour verification code is: ${params.code}\nContinue to event booking: ${eventUrl}`
+        : `Priconpri\n\nTu código de verificación es: ${params.code}\nContinúa con la reserva del evento: ${eventUrl}`;
     const [emailResult, phoneResult] = await Promise.all([
-        sendEmailCode(params.email, params.code, params.companyId).catch(() => -1),
-        queueWhatsappCode(params.phoneFull, params.code, {
+        sendEmailCode(params.email, params.code, params.companyId, { locale, actionUrl: eventUrl }).catch(() => -1),
+        queueWhatsappText(params.phoneFull, message, {
             companyId: params.companyId,
             sourceType: 'PAID_EVENT_GUEST_CHECKOUT_OTP',
             sourceId: params.sourceId ?? params.phoneFull,
+            dedupeKey: `PAID_EVENT_GUEST_CHECKOUT_OTP:${params.sourceId ?? params.phoneFull}:${params.code}`,
             expiresAt: params.expiresAt ?? new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
         }).catch(() => null),
     ]);
@@ -475,6 +488,7 @@ export async function startPaidEventGuestCheckout(
         code: sharedCode,
         expiresAt,
         sourceId: `start:${phoneFull}`,
+        event: eventResult.event,
     });
     const resendAvailableAt = new Date(Date.now() + getResendCooldownSeconds() * 1000);
 
@@ -558,6 +572,7 @@ export async function resendPaidEventGuestCheckoutCode(
         code: sharedCode,
         expiresAt,
         sourceId: `resend:${session.id}`,
+        event: eventResult.event,
     });
     const resendAvailableAt = new Date(Date.now() + getResendCooldownSeconds() * 1000);
 
