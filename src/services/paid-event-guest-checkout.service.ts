@@ -280,6 +280,7 @@ async function dispatchSharedCode(params: {
             sourceId: params.sourceId ?? params.phoneFull,
             dedupeKey: `PAID_EVENT_GUEST_CHECKOUT_OTP:${params.sourceId ?? params.phoneFull}:${params.code}`,
             expiresAt: params.expiresAt ?? new Date(Date.now() + OTP_TTL_MINUTES * 60_000),
+            includeCompanyContactLine: false,
         }).catch(() => null),
     ]);
 

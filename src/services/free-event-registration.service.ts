@@ -806,8 +806,8 @@ export function buildFreeEventConfirmationContent(params: {
         ? 'Please present it at check-in.'
         : 'Preséntalo al momento del check-in.';
     const whatsappMessage = params.locale === 'en'
-        ? `Congratulations! You have been successfully registered for ${params.eventTitle}. Your reservation code is: ${params.reservationCode}. ${checkInHint}${confirmationLinks ? `\nConfirm: ${confirmationLinks.confirm}\nDecline: ${confirmationLinks.decline}` : ''}\nEvent details: ${eventUrl}`
-        : `¡Felicitaciones! Has sido registrado exitosamente al evento ${params.eventTitle}. Tu código de reserva es: ${params.reservationCode}. ${checkInHint}${confirmationLinks ? `\nConfirmar asistencia: ${confirmationLinks.confirm}\nNo podré asistir: ${confirmationLinks.decline}` : ''}\nDetalles del evento: ${eventUrl}`;
+        ? `Congratulations! You have been successfully registered for ${params.eventTitle}. Your reservation code is: ${params.reservationCode}. ${checkInHint}${confirmationLinks ? `\nConfirm attendance: ${confirmationLinks.confirm}` : ''}\nEvent details: ${eventUrl}`
+        : `¡Felicitaciones! Has sido registrado exitosamente al evento ${params.eventTitle}. Tu código de reserva es: ${params.reservationCode}. ${checkInHint}${confirmationLinks ? `\nConfirmar asistencia: ${confirmationLinks.confirm}` : ''}\nDetalles del evento: ${eventUrl}`;
     const emailSubject = params.locale === 'en'
         ? `Registration confirmed: ${params.eventTitle}`
         : `Registro confirmado: ${params.eventTitle}`;
@@ -820,7 +820,7 @@ export function buildFreeEventConfirmationContent(params: {
         ? 'Save this code and present it at event check-in.'
         : 'Guarda este código y preséntalo al momento del check-in del evento.';
     const emailActions = confirmationLinks
-        ? `<p><a href="${confirmationLinks.confirm}">${params.locale === 'en' ? 'Yes, I will attend' : 'Sí, asistiré'}</a></p><p><a href="${confirmationLinks.decline}">${params.locale === 'en' ? 'I cannot attend' : 'No podré asistir'}</a></p>`
+        ? `<p><a href="${confirmationLinks.confirm}">${params.locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}</a></p>`
         : '';
     const emailHtml = `<p>${emailGreeting} ${params.firstName},</p><p>${emailBodyLine}</p><p><strong>${emailCodeLabel}:</strong> ${params.reservationCode}</p><p>${emailCheckInLine}</p>${emailActions}<p><a href="${eventUrl}">${params.locale === 'en' ? 'Event details' : 'Detalles del evento'}</a></p>`;
 
@@ -1314,7 +1314,7 @@ async function sendRegistrationNotifications(opts: {
                     opts.email,
                     content.emailSubject,
                     content.emailHtml,
-                    { companyId: opts.companyId },
+                    { companyId: opts.companyId, includeCompanyContactLine: false },
                 );
                 if (!isEmailDeliverySuccessful(result)) {
                     logger.warn({ eventId: opts.eventId, reason: result.reason }, 'Free event: email notification was not delivered');
@@ -1335,6 +1335,7 @@ async function sendRegistrationNotifications(opts: {
                     sourceId: opts.reservationCode,
                     dedupeKey: `free-event-confirmation:${opts.eventId}:${opts.reservationCode}`,
                     expiresAt: event.start_at,
+                    includeCompanyContactLine: false,
                 });
                 if (!isWhatsappEnqueueAccepted(result)) {
                     logger.warn({ eventId: opts.eventId, reason: result.reason ?? 'WHATSAPP_ENQUEUE_FAILED' }, 'Free event: WhatsApp notification was not queued');
@@ -1778,7 +1779,7 @@ export async function inviteInterestedRegistration(
     // Send notifications according to admin-selected channels
     if (channels.email && !isTemporaryEmailAddress(registration.email)) {
         try {
-            const result = await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml, { companyId });
+            const result = await sendGenericEmail(registration.email, content.emailSubject, content.emailHtml, { companyId, includeCompanyContactLine: false });
             if (!isEmailDeliverySuccessful(result)) {
                 logger.warn({ eventId, registrationId, reason: result.reason }, 'Invite: email was not delivered');
             }
@@ -1796,6 +1797,7 @@ export async function inviteInterestedRegistration(
                 sourceId: String(registrationId),
                 dedupeKey: `free-event-invite:${eventId}:${registrationId}:${reservationCode}`,
                 expiresAt: event.start_at,
+                includeCompanyContactLine: false,
             });
             if (!isWhatsappEnqueueAccepted(result)) {
                 logger.warn({ eventId, registrationId, reason: result.reason ?? 'WHATSAPP_ENQUEUE_FAILED' }, 'Invite: WhatsApp was not queued');

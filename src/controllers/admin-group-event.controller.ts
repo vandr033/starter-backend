@@ -35,7 +35,23 @@ export async function enableEventAttendanceConfirmations(req: AuthenticatedReque
     if (!companyId) return;
     const eventId = parseId(req.params.eventId);
     if (!eventId) return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
-    const result = await EventConfirmationService.enableEventAttendanceConfirmations(companyId, eventId);
+    const customMessage = req.body?.custom_message;
+    if (customMessage !== undefined && customMessage !== null && typeof customMessage !== 'string') {
+        return res.status(400).json({ code: 400, error: true, message: 'custom_message must be a string' });
+    }
+    if (typeof customMessage === 'string' && customMessage.length > 10000) {
+        return res.status(400).json({ code: 400, error: true, message: 'custom_message must be 10000 characters or fewer' });
+    }
+    const result = await EventConfirmationService.enableEventAttendanceConfirmations(companyId, eventId, customMessage);
+    return res.status(result.code).json(result);
+}
+
+export async function resendEventAttendanceConfirmations(req: AuthenticatedRequest, res: Response) {
+    const companyId = requireCompanyId(req, res);
+    if (!companyId) return;
+    const eventId = parseId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ code: 400, error: true, message: 'Invalid eventId' });
+    const result = await EventConfirmationService.resendEventAttendanceConfirmations(companyId, eventId);
     return res.status(result.code).json(result);
 }
 
@@ -249,6 +265,7 @@ export async function sendMessageToWhatsappGroup(req: AuthenticatedRequest, res:
         sourceType: 'EVENT_GROUP_MESSAGE',
         sourceId: String(group.id),
         dedupeKey: `event-group-message:${group.id}:${text}`,
+        includeCompanyContactLine: false,
     });
     if (!isWhatsappEnqueueAccepted(result)) {
         return res.status(502).json({ ok: false, message: 'WhatsApp message could not be queued', reason: result.reason });

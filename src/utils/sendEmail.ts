@@ -58,6 +58,7 @@ function escapeHtml(input: string): string {
 type EmailBrandingOptions = {
     companyId?: number;
     branding?: NotificationBranding | null;
+    includeCompanyContactLine?: boolean;
 };
 
 async function resolveEmailBranding(options?: EmailBrandingOptions): Promise<NotificationBranding | null> {
@@ -78,6 +79,7 @@ async function brandedEmailHtml(params: {
         bodyHtml: params.bodyHtml,
         preheader: params.preheader,
         branding: await resolveEmailBranding(params.options),
+        includeCompanyContactLine: params.options?.includeCompanyContactLine,
     });
 }
 

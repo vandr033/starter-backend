@@ -60,6 +60,7 @@ export interface WhatsappBatchEnqueueResult {
 export interface WhatsappQueueOptions {
   companyId?: number;
   branding?: NotificationBranding | null;
+  includeCompanyContactLine?: boolean;
   sourceType?: string;
   sourceId?: string | null;
   dedupeKey?: string;
@@ -89,6 +90,7 @@ export interface WhatsappBatchItem {
 export interface WhatsappBatchOptions {
   companyId?: number;
   branding?: NotificationBranding | null;
+  includeCompanyContactLine?: boolean;
   sourceType: string;
   sourceId?: string | null;
   idempotencyKey: string;
@@ -132,11 +134,11 @@ function buildDedupeKey(value: string | undefined, fallback: string): string {
   return hashDedupeKey(value?.trim() || fallback);
 }
 
-function buildBrandedTextWithBranding(text: string, branding?: NotificationBranding | null): string {
+function buildBrandedTextWithBranding(text: string, branding?: NotificationBranding | null, includeCompanyContactLine = true): string {
   const trimmedText = text.trim();
   if (!trimmedText) throw new Error('WhatsApp message text is required.');
 
-  return branding
+  return branding && includeCompanyContactLine
     ? appendCompanyContactLine(trimmedText, branding)
     : trimmedText.includes('Priconpri')
       ? trimmedText
@@ -145,12 +147,12 @@ function buildBrandedTextWithBranding(text: string, branding?: NotificationBrand
 
 async function buildBrandedText(
   text: string,
-  options?: { companyId?: number; branding?: NotificationBranding | null },
+  options?: { companyId?: number; branding?: NotificationBranding | null; includeCompanyContactLine?: boolean },
 ): Promise<string> {
   const companyBranding = options?.companyId
     ? await getCompanyNotificationBranding(options.companyId)
     : null;
-  return buildBrandedTextWithBranding(text, mergeBranding(companyBranding, options?.branding));
+  return buildBrandedTextWithBranding(text, mergeBranding(companyBranding, options?.branding), options?.includeCompanyContactLine);
 }
 
 function resolveRecipient(recipient: string): string {
@@ -322,9 +324,9 @@ export async function queueWhatsappImage(
       ? await getCompanyNotificationBranding(options.companyId)
       : null;
     const branding = mergeBranding(companyBranding, options.branding);
-    const brandedCaption = caption ? buildBrandedTextWithBranding(caption, branding) : undefined;
+    const brandedCaption = caption ? buildBrandedTextWithBranding(caption, branding, options.includeCompanyContactLine) : undefined;
     const fallbackText = options.fallbackText
-      ? buildBrandedTextWithBranding(options.fallbackText, branding)
+      ? buildBrandedTextWithBranding(options.fallbackText, branding, options.includeCompanyContactLine)
       : undefined;
     const sourceType = safeSourceType(options.sourceType);
     const dedupeKey = buildDedupeKey(
@@ -456,7 +458,7 @@ export async function queueWhatsappBatch(
   for (const item of items) {
     try {
       const chatId = resolveRecipient(item.recipient);
-      const brandedText = buildBrandedTextWithBranding(item.text, branding);
+      const brandedText = buildBrandedTextWithBranding(item.text, branding, options.includeCompanyContactLine);
       const sourceType = safeSourceType(item.sourceType ?? options.sourceType);
       const dedupeKey = buildDedupeKey(
         item.dedupeKey,

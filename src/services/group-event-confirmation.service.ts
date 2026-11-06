@@ -12,6 +12,7 @@ import { prisma } from '../prisma/client';
 import { isEmailDeliverySuccessful } from './notification-provider.service';
 import { isTemporaryEmailAddress, sendGenericEmail } from '../utils/sendEmail';
 import { isWhatsappEnqueueAccepted, queueWhatsappText } from '../utils/whatsappSender';
+import { sanitizeRichText } from '../utils/richText';
 
 type Locale = 'es' | 'en';
 type Transaction = Prisma.TransactionClient;
@@ -23,8 +24,6 @@ type ConfirmationRecipient = {
     reservationCode?: string | null;
 };
 
-const CONFIRMATION_URL_ACTIONS = ['confirm', 'decline'] as const;
-
 function frontendBaseUrl(): string {
     return (process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
@@ -33,8 +32,7 @@ export function getEventConfirmationLinks(slug: string, eventId: number, token: 
     const page = `${frontendBaseUrl()}/shop/${encodeURIComponent(slug)}/events/${eventId}/confirmation`;
     return {
         event: `${frontendBaseUrl()}/shop/${encodeURIComponent(slug)}/events/${eventId}`,
-        confirm: `${page}?token=${encodeURIComponent(token)}&action=${CONFIRMATION_URL_ACTIONS[0]}`,
-        decline: `${page}?token=${encodeURIComponent(token)}&action=${CONFIRMATION_URL_ACTIONS[1]}`,
+        confirm: `${page}?token=${encodeURIComponent(token)}&action=confirm`,
     };
 }
 
@@ -65,11 +63,43 @@ function escapeHtml(value: string): string {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function richTextToWhatsappText(html: string): string {
+    return html
+        .replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '$2 ($1)')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<li\b[^>]*>/gi, '• ')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<\/(?:p|blockquote|h[1-6])>/gi, '\n\n')
+        .replace(/<\/?(?:strong|b)>/gi, '*')
+        .replace(/<\/?(?:em|i)>/gi, '_')
+        .replace(/<\/?s>/gi, '~')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/&#(\d+);/g, (_, code: string) => {
+            const point = Number(code);
+            return point <= 0x10ffff ? String.fromCodePoint(point) : '';
+        })
+        .replace(/&#x([\da-f]+);/gi, (_, code: string) => {
+            const point = Number.parseInt(code, 16);
+            return point <= 0x10ffff ? String.fromCodePoint(point) : '';
+        })
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 async function sendConfirmationInvites(
     companyId: number,
     event: { id: number; title: string; start_at: Date; company: { slug: string } },
     recipients: ConfirmationRecipient[],
     locale?: Locale,
+    customMessage?: string | null,
+    dedupeSuffix?: string,
 ): Promise<void> {
     if (recipients.length === 0) return;
     const [settings, resolvedLocale] = await Promise.all([
@@ -81,38 +111,41 @@ async function sendConfirmationInvites(
     ]);
     const sendEmail = settings?.send_email_notifications ?? true;
     const sendWhatsapp = settings?.send_whatsapp_notifications ?? false;
+    const customHtml = sanitizeRichText(customMessage) ?? '';
+    const customText = customHtml ? richTextToWhatsappText(customHtml) : '';
 
     await Promise.allSettled(recipients.map(async (recipient) => {
         const links = getEventConfirmationLinks(event.company.slug, event.id, recipient.token);
-        const message = resolvedLocale === 'en'
-            ? [
-                `Can you attend ${event.title}? Please let us know.`,
-                recipient.reservationCode ? `Reservation code: ${recipient.reservationCode}` : null,
-                `Confirm: ${links.confirm}`,
-                `Decline: ${links.decline}`,
-                `Event details: ${links.event}`,
-            ].filter(Boolean).join('\n')
-            : [
-                `¿Podrás asistir a ${event.title}? Por favor avísanos.`,
-                recipient.reservationCode ? `Código de reserva: ${recipient.reservationCode}` : null,
-                `Confirmar asistencia: ${links.confirm}`,
-                `No podré asistir: ${links.decline}`,
-                `Detalles del evento: ${links.event}`,
-            ].filter(Boolean).join('\n');
+        const defaultPrompt = resolvedLocale === 'en'
+            ? `Can you attend ${event.title}? Please let us know.`
+            : `¿Podrás asistir a ${event.title}? Por favor avísanos.`;
+        const codeLine = recipient.reservationCode
+            ? `${resolvedLocale === 'en' ? 'Reservation code' : 'Código de reserva'}: ${recipient.reservationCode}`
+            : null;
+        const message = [
+            customText ? `${resolvedLocale === 'en' ? 'Event' : 'Evento'}: ${event.title}` : defaultPrompt,
+            codeLine,
+            customText || null,
+            resolvedLocale === 'en' ? `Confirm attendance: ${links.confirm}` : `Confirmar asistencia: ${links.confirm}`,
+            resolvedLocale === 'en' ? `Event details: ${links.event}` : `Detalles del evento: ${links.event}`,
+        ].filter(Boolean).join('\n');
         const subject = resolvedLocale === 'en'
             ? `Can you attend? ${event.title}`
             : `Confirma tu asistencia: ${event.title}`;
         const greeting = resolvedLocale === 'en' ? `Hi ${recipient.name},` : `Hola ${recipient.name},`;
-        const confirmLabel = resolvedLocale === 'en' ? 'Yes, I will attend' : 'Sí, asistiré';
-        const declineLabel = resolvedLocale === 'en' ? 'I cannot attend' : 'No podré asistir';
-        const codeLine = recipient.reservationCode
+        const confirmLabel = resolvedLocale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia';
+        const codeHtml = recipient.reservationCode
             ? `<p>${resolvedLocale === 'en' ? 'Reservation code' : 'Código de reserva'}: <strong>${escapeHtml(recipient.reservationCode)}</strong></p>`
             : '';
-        const html = `<p>${escapeHtml(greeting)}</p><p>${resolvedLocale === 'en' ? 'Please respond for' : 'Por favor responde para'} <strong>${escapeHtml(event.title)}</strong>.</p>${codeLine}<p><a href="${escapeHtml(links.confirm)}">${confirmLabel}</a></p><p><a href="${escapeHtml(links.decline)}">${declineLabel}</a></p><p><a href="${escapeHtml(links.event)}">${resolvedLocale === 'en' ? 'Event details' : 'Detalles del evento'}</a></p>`;
+        const promptHtml = resolvedLocale === 'en'
+            ? `<p>Please respond for <strong>${escapeHtml(event.title)}</strong>.</p>`
+            : `<p>Por favor responde para <strong>${escapeHtml(event.title)}</strong>.</p>`;
+        const contentHtml = customHtml ? `${codeHtml}${customHtml}` : `${promptHtml}${codeHtml}`;
+        const html = `<p>${escapeHtml(greeting)}</p>${contentHtml}<p><a href="${escapeHtml(links.confirm)}">${confirmLabel}</a></p><p><a href="${escapeHtml(links.event)}">${resolvedLocale === 'en' ? 'Event details' : 'Detalles del evento'}</a></p>`;
 
         if (sendEmail && recipient.email && !isTemporaryEmailAddress(recipient.email)) {
             try {
-                const result = await sendGenericEmail(recipient.email, subject, html, { companyId });
+                const result = await sendGenericEmail(recipient.email, subject, html, { companyId, includeCompanyContactLine: false });
                 if (!isEmailDeliverySuccessful(result)) {
                     logger.warn({ companyId, eventId: event.id, reason: result.reason }, 'Event confirmation email was not delivered');
                 }
@@ -127,8 +160,9 @@ async function sendConfirmationInvites(
                     companyId,
                     sourceType: 'GROUP_EVENT_CONFIRMATION',
                     sourceId: recipient.token,
-                    dedupeKey: `event-confirmation:${event.id}:${recipient.token}`,
+                    dedupeKey: `event-confirmation:${event.id}:${recipient.token}${dedupeSuffix ? `:${dedupeSuffix}` : ''}`,
                     expiresAt: event.start_at,
+                    includeCompanyContactLine: false,
                 });
                 if (!isWhatsappEnqueueAccepted(result)) {
                     logger.warn({ companyId, eventId: event.id, reason: result.reason }, 'Event confirmation WhatsApp was not queued');
@@ -215,7 +249,7 @@ export async function sendPaidBookingConfirmationInvites(companyId: number, book
     if (event) await sendConfirmationInvites(companyId, event, recipients);
 }
 
-export async function enableEventAttendanceConfirmations(companyId: number, eventId: number) {
+export async function enableEventAttendanceConfirmations(companyId: number, eventId: number, customMessage?: string | null) {
     const result = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM group_event WHERE id = ${eventId} AND company_id = ${companyId} FOR UPDATE`;
         const event = await tx.groupEvent.findFirst({
@@ -260,12 +294,65 @@ export async function enableEventAttendanceConfirmations(companyId: number, even
     });
 
     if (result.error) return result;
-    if (!result.alreadyEnabled) await sendConfirmationInvites(companyId, result.event, result.recipients);
+    if (!result.alreadyEnabled) await sendConfirmationInvites(companyId, result.event, result.recipients, undefined, customMessage);
     return {
         code: 200,
         error: false,
         message: result.alreadyEnabled ? 'Attendance confirmations are already enabled' : 'Attendance confirmations enabled',
         data: { confirmations_enabled: true, invited: result.recipients.length },
+    };
+}
+
+export async function resendEventAttendanceConfirmations(companyId: number, eventId: number) {
+    const event = await prisma.groupEvent.findFirst({
+        where: { id: eventId, company_id: companyId, deleted_at: null },
+        select: { id: true, title: true, start_at: true, confirmations_enabled: true, company: { select: { slug: true } } },
+    });
+    if (!event) return { code: 404, error: true, message: 'Event not found' };
+    if (!event.confirmations_enabled) return { code: 409, error: true, message: 'Attendance confirmations are not enabled' };
+
+    const [freeRegistrations, attendees] = await Promise.all([
+        prisma.freeEventRegistration.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+                status: { in: [FreeEventRegistrationStatus.CONFIRMED, FreeEventRegistrationStatus.PENDING] },
+                confirmation_status: EventAttendanceStatus.PENDING,
+                confirmation_token: { not: null },
+            },
+            select: { first_name: true, email: true, phone_prefix: true, phone_number: true, reservation_code: true, confirmation_token: true },
+        }),
+        prisma.groupEventAttendee.findMany({
+            where: {
+                company_id: companyId,
+                group_event_id: eventId,
+                confirmation_status: EventAttendanceStatus.PENDING,
+                event_booking: { is: { status: { in: [GroupBookingStatus.CONFIRMED, GroupBookingStatus.PENDING] } } },
+            },
+            select: { full_name: true, email: true, phone: true, confirmation_token: true },
+        }),
+    ]);
+    const recipients: ConfirmationRecipient[] = [
+        ...freeRegistrations.map((registration) => ({
+            name: registration.first_name,
+            email: registration.email,
+            phone: fullPhone(registration.phone_prefix, registration.phone_number),
+            token: registration.confirmation_token!,
+            reservationCode: registration.reservation_code,
+        })),
+        ...attendees.map((attendee) => ({
+            name: attendee.full_name,
+            email: attendee.email,
+            phone: attendee.phone,
+            token: attendee.confirmation_token,
+        })),
+    ];
+    await sendConfirmationInvites(companyId, event, recipients, undefined, null, crypto.randomBytes(4).toString('hex'));
+    return {
+        code: 200,
+        error: false,
+        message: 'Pending attendance invitations resent',
+        data: { resent: recipients.length },
     };
 }
 
@@ -380,7 +467,7 @@ async function sendDeclineAlert(input: {
     for (const admin of admins) {
         const email = admin.user.email?.trim();
         if ((settings?.send_email_notifications ?? true) && email && !isTemporaryEmailAddress(email)) {
-            deliveries.push(sendGenericEmail(email, subject, html, { companyId: input.companyId }).then((result) => {
+            deliveries.push(sendGenericEmail(email, subject, html, { companyId: input.companyId, includeCompanyContactLine: false }).then((result) => {
                 if (!isEmailDeliverySuccessful(result)) logger.warn({ companyId: input.companyId, reason: result.reason }, 'Event decline alert email was not delivered');
             }));
         }
@@ -391,6 +478,7 @@ async function sendDeclineAlert(input: {
                 sourceType: 'GROUP_EVENT_ATTENDEE_DECLINED',
                 sourceId: String(input.attendeeId),
                 dedupeKey: `event-declined:${input.attendeeId}:${phone}`,
+                includeCompanyContactLine: false,
             }).then((result) => {
                 if (!isWhatsappEnqueueAccepted(result)) logger.warn({ companyId: input.companyId, reason: result.reason }, 'Event decline alert WhatsApp was not queued');
             }));
@@ -569,7 +657,7 @@ export async function offerPaidWaitlistSpots(companyId: number, eventId: number)
     const html = `<p>${escapeHtml(message).replace(/\n/g, '<br/>')}</p><p><a href="${escapeHtml(bookingUrl)}">${claimLabel}</a></p>`;
     await Promise.allSettled(offers.recipients.map(async (recipient) => {
         if ((settings?.send_email_notifications ?? true) && recipient.email && !isTemporaryEmailAddress(recipient.email)) {
-            const result = await sendGenericEmail(recipient.email, subject, html, { companyId });
+            const result = await sendGenericEmail(recipient.email, subject, html, { companyId, includeCompanyContactLine: false });
             if (!isEmailDeliverySuccessful(result)) logger.warn({ companyId, eventId, reason: result.reason }, 'Paid event waitlist offer email was not delivered');
         }
         if ((settings?.send_whatsapp_notifications ?? false) && recipient.phone) {
@@ -579,6 +667,7 @@ export async function offerPaidWaitlistSpots(companyId: number, eventId: number)
                 sourceId: String(recipient.id),
                 dedupeKey: `event-waitlist-offer:${recipient.id}`,
                 expiresAt: offers.expiresAt ?? undefined,
+                includeCompanyContactLine: false,
             });
             if (!isWhatsappEnqueueAccepted(result)) logger.warn({ companyId, eventId, reason: result.reason }, 'Paid event waitlist offer WhatsApp was not queued');
         }

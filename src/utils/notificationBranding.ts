@@ -116,11 +116,12 @@ export function renderBrandedEmail(params: {
     bodyHtml: string;
     branding?: NotificationBranding | null;
     preheader?: string;
+    includeCompanyContactLine?: boolean;
 }): string {
     const priconpriLogo = getPriconpriLogoUrl();
     const companyLogo = toAbsoluteUrl(params.branding?.companyLogoUrl);
     const companyName = params.branding?.companyName || 'tu empresa';
-    const contactLine = buildCompanyContactLine(params.branding);
+    const contactLine = params.includeCompanyContactLine === false ? null : buildCompanyContactLine(params.branding);
 
     return `
         <!DOCTYPE html>

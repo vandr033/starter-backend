@@ -961,7 +961,7 @@ async function runEventMassMessage(
             const name = recipient.confirmationName?.trim();
             const label = name ? `${locale === 'en' ? 'For' : 'Para'} ${name}: ` : '';
             const rows = confirmationLinksByWhatsappTarget.get(target) ?? [];
-            rows.push(`${label}${locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}: ${links.confirm}\n${label}${locale === 'en' ? 'Cannot attend' : 'No podré asistir'}: ${links.decline}`);
+            rows.push(`${label}${locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}: ${links.confirm}`);
             confirmationLinksByWhatsappTarget.set(target, rows);
         }
     }
@@ -1007,6 +1007,7 @@ async function runEventMassMessage(
             sourceId: String(eventId),
             idempotencyKey: payload.idempotency_key ?? `event:${eventId}:${deliveryMode}:${message}`,
             metadata: { eventId, deliveryMode, recipientCount: recipients.length },
+            includeCompanyContactLine: false,
         })
         : null;
     const queuedWhatsapp = whatsappBatch?.queued ?? 0;

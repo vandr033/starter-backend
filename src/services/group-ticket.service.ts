@@ -182,12 +182,11 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
             `${locale === 'en' ? 'Validity' : 'Vigencia'}: ${validLabel}`,
             locale === 'en' ? 'Show this QR code at the event entrance to check in.' : 'Muestra este código QR en la entrada del evento para registrarte.',
             confirmationLinks ? `${locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}: ${confirmationLinks.confirm}` : null,
-            confirmationLinks ? `${locale === 'en' ? 'Cannot attend' : 'No podré asistir'}: ${confirmationLinks.decline}` : null,
             `${locale === 'en' ? 'Event details' : 'Detalles del evento'}: ${eventUrl}`,
         ].join('\n');
 
         const confirmationLinksHtml = confirmationLinks
-            ? `<p><a href="${confirmationLinks.confirm}">${locale === 'en' ? 'Yes, I will attend' : 'Sí, asistiré'}</a></p><p><a href="${confirmationLinks.decline}">${locale === 'en' ? 'I cannot attend' : 'No podré asistir'}</a></p>`
+            ? `<p><a href="${confirmationLinks.confirm}">${locale === 'en' ? 'Confirm attendance' : 'Confirmar asistencia'}</a></p>`
             : '';
 
         emailHtml = `
@@ -269,7 +268,7 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
 
     if (sendEmail && emailTarget && !isTemporaryEmailAddress(emailTarget)) {
         try {
-            const result = await sendGenericEmail(emailTarget, emailSubject, emailHtml, { companyId });
+            const result = await sendGenericEmail(emailTarget, emailSubject, emailHtml, { companyId, includeCompanyContactLine: false });
             if (isEmailDeliverySuccessful(result)) {
                 sentChannels.push('EMAIL');
             } else {
@@ -301,6 +300,7 @@ async function sendTicketNotification(companyId: number, ticketId: number, optio
             fallbackText: whatsappFallbackText,
             fallbackDedupeKey: `group-ticket:${deliveryKey}:text-fallback`,
             groupTicketId: ticket.id,
+            includeCompanyContactLine: false,
         });
         if (isWhatsappEnqueueAccepted(imageResult)) {
             queuedChannels.push('WHATSAPP');

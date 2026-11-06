@@ -18,6 +18,7 @@ router.put('/:eventId', validate(updateGroupEventSchema), AdminGroupEventControl
 router.post('/:eventId/status', validate(setGroupItemStatusSchema), AdminGroupEventController.setEventStatus);
 router.delete('/:eventId', AdminGroupEventController.deleteEvent);
 router.post('/:eventId/confirmations/enable', AdminGroupEventController.enableEventAttendanceConfirmations);
+router.post('/:eventId/confirmations/resend', AdminGroupEventController.resendEventAttendanceConfirmations);
 
 router.get('/:eventId/bookings', AdminGroupEventController.listEventBookings);
 router.get('/:eventId/interests', AdminGroupEventController.listEventInterests);
