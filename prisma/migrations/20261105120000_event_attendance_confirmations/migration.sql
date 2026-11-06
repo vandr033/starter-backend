@@ -29,7 +29,7 @@ CREATE TABLE `group_event_attendee` (
   `updated_at` DATETIME(3) NOT NULL,
   UNIQUE INDEX `group_event_attendee_confirmation_token_key` (`confirmation_token`),
   UNIQUE INDEX `group_event_attendee_group_event_booking_id_seat_number_key` (`group_event_booking_id`, `seat_number`),
-  INDEX `group_event_attendee_company_id_group_event_id_confirmation_status_idx` (`company_id`, `group_event_id`, `confirmation_status`),
+  INDEX `group_event_attendee_event_status_idx` (`company_id`, `group_event_id`, `confirmation_status`),
   INDEX `group_event_attendee_group_event_booking_id_idx` (`group_event_booking_id`),
   PRIMARY KEY (`id`),
   CONSTRAINT `group_event_attendee_company_id_fkey` FOREIGN KEY (`company_id`) REFERENCES `company` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,

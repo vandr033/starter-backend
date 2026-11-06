@@ -3110,7 +3110,7 @@ model GroupEventAttendee {
   event_booking GroupEventBooking @relation(fields: [group_event_booking_id], references: [id], onDelete: Cascade)
 
   @@unique([group_event_booking_id, seat_number])
-  @@index([company_id, group_event_id, confirmation_status])
+  @@index([company_id, group_event_id, confirmation_status], map: "group_event_attendee_event_status_idx")
   @@index([group_event_booking_id])
   @@map("group_event_attendee")
 }
