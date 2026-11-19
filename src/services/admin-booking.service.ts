@@ -1782,11 +1782,13 @@ async function createAdminBookingRecord(params: {
     prepared: PreparedAdminBookingSession;
     notes?: string;
     internal_notes?: string;
-}) {
+    bookingGroupId?: string;
+}, transaction?: Prisma.TransactionClient) {
     if (params.customer.customerId) {
         return AdminBookingRepo.createCustomerBooking(
             {
                 company_id: params.companyId,
+                booking_group_id: params.bookingGroupId,
                 staff_id: params.staffId,
                 customer_id: params.customer.customerId,
                 start_at: params.prepared.startAt,
@@ -1801,12 +1803,14 @@ async function createAdminBookingRecord(params: {
                 booking_source: BookingSource.ADMIN,
             },
             params.prepared.serviceSnapshots,
+            transaction,
         );
     }
 
     return AdminBookingRepo.createWalkInBooking(
         {
             company_id: params.companyId,
+            booking_group_id: params.bookingGroupId,
             staff_id: params.staffId,
             client_name: params.customer.clientName,
             client_phone_prefix: params.customer.clientPhonePrefix || undefined,
@@ -1824,6 +1828,7 @@ async function createAdminBookingRecord(params: {
             booking_source: BookingSource.ADMIN,
         },
         params.prepared.serviceSnapshots,
+        transaction,
     );
 }
 
@@ -2861,35 +2866,47 @@ export async function createRecurringBookings(
             return customerResult;
         }
 
-        const createdBookings: any[] = [];
-        for (let index = 0; index < preparedSessions.length; index += 1) {
-            const prepared = preparedSessions[index];
-            const sessionInput = data.sessions[index];
-
-            const booking = await createAdminBookingRecord({
-                companyId: data.companyId,
-                staffId: data.staff_id,
-                createdByUserId,
-                customer: customerResult.customer,
-                prepared,
-                notes: data.notes,
-                internal_notes: data.internal_notes,
+        const createdBookings = await prisma.$transaction(async (tx) => {
+            const group = await tx.bookingGroup.create({
+                data: {
+                    company_id: data.companyId,
+                    customer_id: customerResult.customer.customerId,
+                    group_type: 'RECURRING_SERVICE',
+                },
             });
-
-            if (booking?.id) {
-                createdBookings.push(booking);
-                await sendAdminBookingCreatedSideEffects({
+            const bookings = [];
+            for (const prepared of preparedSessions) {
+                const booking = await createAdminBookingRecord({
                     companyId: data.companyId,
                     staffId: data.staff_id,
-                    serviceIds: sessionInput.service_ids,
-                    bookingId: booking.id,
-                    startAt: prepared.startAt,
-                    endAt: prepared.endAt,
-                    totalPrice: prepared.totalPrice,
+                    createdByUserId,
                     customer: customerResult.customer,
-                    services: prepared.services,
-                });
+                    prepared,
+                    notes: data.notes,
+                    internal_notes: data.internal_notes,
+                    bookingGroupId: group.id,
+                }, tx);
+                if (!booking) throw new Error('Recurring booking was not created');
+                bookings.push(booking);
             }
+            return bookings;
+        });
+
+        for (const [index, booking] of createdBookings.entries()) {
+            const prepared = preparedSessions[index];
+            await sendAdminBookingCreatedSideEffects({
+                companyId: data.companyId,
+                staffId: data.staff_id,
+                serviceIds: data.sessions[index].service_ids,
+                bookingId: booking.id,
+                startAt: prepared.startAt,
+                endAt: prepared.endAt,
+                totalPrice: prepared.totalPrice,
+                customer: customerResult.customer,
+                services: prepared.services,
+            }).catch((error) => {
+                logger.error({ companyId: data.companyId, bookingId: booking.id, error }, 'Failed to start recurring booking notifications');
+            });
         }
 
         if (customerResult.customer.inviteContext) {

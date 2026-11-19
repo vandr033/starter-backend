@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middlewares/requireAuth';
 import * as CustomerService from '../services/customer.service';
 import { companyHasCapability } from '../services/company-entitlements.service';
+import { CUSTOMER_ACTIVITY_TYPES } from '../repositories/customer.repo';
 
 function parseCategoryId(value: unknown): number | null | undefined {
     if (value === undefined || value === null || value === '') return undefined;
@@ -65,12 +66,16 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
         const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
         const categoryId = parseCategoryId(req.query.category_id);
         const tagId = parseCategoryId(req.query.tag_id);
+        const activityType = CUSTOMER_ACTIVITY_TYPES.find((type) => type === req.query.activity_type);
 
         if (categoryId === null || tagId === null) {
             return res.status(400).json({ code: 400, error: true, message: 'Invalid customer filter ID' });
         }
+        if (req.query.activity_type !== undefined && !activityType) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid customer activity type' });
+        }
 
-        if (requiresAdvancedCustomerFilters(segment, categoryId)) {
+        if (activityType || requiresAdvancedCustomerFilters(segment, categoryId)) {
             const hasCrmPro = await companyHasCapability(companyId, 'CRM_PRO');
             if (!hasCrmPro) {
                 return res.status(403).json({
@@ -98,6 +103,7 @@ export async function listCustomers(req: AuthenticatedRequest, res: Response) {
             segment,
             categoryId,
             tagId,
+            activityType,
         );
 
         return res.json({ data: customers });
@@ -205,10 +211,14 @@ export async function exportCustomers(req: AuthenticatedRequest, res: Response) 
         const segment = CustomerService.normalizeCustomerSegment(req.query.segment as string | undefined);
         const categoryId = parseCategoryId(req.query.category_id);
         const tagId = parseCategoryId(req.query.tag_id);
+        const activityType = CUSTOMER_ACTIVITY_TYPES.find((type) => type === req.query.activity_type);
         const requestedByUserId = req.authUser?.id;
 
         if (categoryId === null || tagId === null) {
             return res.status(400).json({ code: 400, error: true, message: 'Invalid customer filter ID' });
+        }
+        if (req.query.activity_type !== undefined && !activityType) {
+            return res.status(400).json({ code: 400, error: true, message: 'Invalid customer activity type' });
         }
         if (categoryId && !(await CustomerService.companyHasCustomerCategory(companyId, categoryId))) {
             return res.status(400).json({ code: 400, error: true, message: 'Category not found for this company' });
@@ -222,6 +232,7 @@ export async function exportCustomers(req: AuthenticatedRequest, res: Response) 
             segment,
             categoryId,
             tagId,
+            activityType,
             requestedByUserId,
         });
 

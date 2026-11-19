@@ -3,6 +3,7 @@ import { prisma } from '../prisma/client';
 import {
     getCustomerBookingHistory,
     getCustomersWithBookingStats,
+    type CustomerActivityType,
     type CustomerWithStats,
 } from '../repositories/customer.repo';
 import * as UserRepo from '../repositories/user.repo';
@@ -62,6 +63,7 @@ interface CustomerExportOptions {
     segment?: CustomerSegmentKey;
     categoryId?: number;
     tagId?: number;
+    activityType?: CustomerActivityType;
     requestedByUserId?: string;
 }
 
@@ -303,6 +305,7 @@ export async function triggerCustomerExportWebhook(params: {
     search?: string;
     segment?: CustomerSegmentKey;
     tagId?: number;
+    activityType?: CustomerActivityType;
     customers: CustomerWithStats[];
 }) {
     if (isDemoRequest() || await isDemoCompanyId(params.companyId)) return { triggered: false };
@@ -322,6 +325,7 @@ export async function triggerCustomerExportWebhook(params: {
             search: params.search || null,
             segment: params.segment || null,
             tagId: params.tagId || null,
+            ...(params.activityType ? { activityType: params.activityType } : {}),
         },
         exportedAt: new Date().toISOString(),
         customers: params.customers.map((customer) => ({
@@ -381,8 +385,9 @@ export async function listCustomers(
     segment: CustomerSegmentKey = 'ALL',
     categoryId?: number,
     tagId?: number,
+    activityType?: CustomerActivityType,
 ) {
-    const customers = await getCustomersWithBookingStats(companyId, search, categoryId, tagId);
+    const customers = await getCustomersWithBookingStats(companyId, search, categoryId, tagId, activityType);
     return applyCustomerSegment(customers, segment);
 }
 
@@ -923,9 +928,9 @@ export async function exportCustomers(
         };
     }
 
-    const customers = applyCustomerSegment(
-        await getCustomersWithBookingStats(companyId, options.search || undefined, options.categoryId, options.tagId),
-        normalizeCustomerSegment(options.segment),
+    const segment = normalizeCustomerSegment(options.segment);
+    const customers = await listCustomers(
+        companyId, options.search, segment, options.categoryId, options.tagId, options.activityType,
     );
     const csv = buildCustomersCsv(customers);
 
@@ -935,8 +940,9 @@ export async function exportCustomers(
             companyName: company.name,
             requestedByUserId: options.requestedByUserId,
             search: options.search,
-            segment: normalizeCustomerSegment(options.segment),
+            segment,
             tagId: options.tagId,
+            activityType: options.activityType,
             customers,
         });
 

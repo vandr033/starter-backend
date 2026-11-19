@@ -1,5 +1,5 @@
 import { prisma } from '../prisma/client';
-import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, BookingType } from '@prisma/client';
+import { BookingSource, BookingStatus, PaymentStatus, PaymentMethod, BookingType, Prisma } from '@prisma/client';
 import { LEGACY_NO_SHOW_NOTE_MARKER } from '../utils/booking-status';
 
 /**
@@ -380,6 +380,7 @@ export async function updateBookingInternalNotes(
  */
 export interface CreateWalkInData {
     company_id: number;
+    booking_group_id?: string;
     staff_id: number;
     client_name: string;
     client_phone_prefix?: string;
@@ -408,13 +409,15 @@ export async function createWalkInBooking(
         promo_label_snapshot?: string | null;
         duration_minutes_snapshot: number;
         position: number;
-    }>
+    }>,
+    transaction?: Prisma.TransactionClient,
 ) {
-    return prisma.$transaction(async (tx) => {
+    const createBooking = async (tx: Prisma.TransactionClient) => {
         // Create the booking
         const booking = await tx.booking.create({
             data: {
                 company_id: bookingData.company_id,
+                booking_group_id: bookingData.booking_group_id,
                 staff_id: bookingData.staff_id,
                 customer_id: null, // Walk-in has no customer
                 client_name: bookingData.client_name,
@@ -472,7 +475,8 @@ export async function createWalkInBooking(
                 },
             },
         });
-    });
+    };
+    return transaction ? createBooking(transaction) : prisma.$transaction(createBooking);
 }
 
 /**
@@ -556,6 +560,7 @@ export async function replaceBookingServices(
  */
 export interface CreateCustomerBookingData {
     company_id: number;
+    booking_group_id?: string;
     staff_id: number;
     customer_id: number;
     start_at: Date;
@@ -581,13 +586,15 @@ export async function createCustomerBooking(
         promo_label_snapshot?: string | null;
         duration_minutes_snapshot: number;
         position: number;
-    }>
+    }>,
+    transaction?: Prisma.TransactionClient,
 ) {
-    return prisma.$transaction(async (tx) => {
+    const createBooking = async (tx: Prisma.TransactionClient) => {
         // Create the booking
         const booking = await tx.booking.create({
             data: {
                 company_id: bookingData.company_id,
+                booking_group_id: bookingData.booking_group_id,
                 staff_id: bookingData.staff_id,
                 customer_id: bookingData.customer_id,
                 start_at: bookingData.start_at,
@@ -655,5 +662,6 @@ export async function createCustomerBooking(
                 },
             },
         });
-    });
+    };
+    return transaction ? createBooking(transaction) : prisma.$transaction(createBooking);
 }

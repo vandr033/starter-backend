@@ -1,8 +1,17 @@
-import { BookingSource, BookingStatus, Prisma } from '@prisma/client';
+import { BookingSource, BookingStatus, BookingType, GroupBookingStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { getBookingLifecycleStatus, isNoShowBooking } from '../utils/booking-status';
 
 type BookingStatusWithNoShow = BookingStatus;
+
+export const CUSTOMER_ACTIVITY_TYPES = [
+    'ALL', 'PAID_EVENT', 'FREE_EVENT', 'SERVICE', 'RECURRING_SERVICE', 'CLASS',
+] as const;
+export type CustomerActivityType = typeof CUSTOMER_ACTIVITY_TYPES[number];
+
+const customerContactSelect = {
+    id: true, name: true, email: true, phoneNumber: true, phone_prefix: true, deleted_at: true,
+} satisfies Prisma.UserSelect;
 
 export interface CustomerTagSummary {
     id: number;
@@ -301,6 +310,9 @@ async function fetchBookingsForCompany(companyId: number) {
             client_email: true,
             client_phone_prefix: true,
             client_phone_number: true,
+            booking_type: true,
+            session_count: true,
+            booking_group: { select: { group_type: true } },
             start_at: true,
             end_at: true,
             status: true,
@@ -355,10 +367,15 @@ export async function getCustomersWithBookingStats(
     search?: string,
     categoryId?: number,
     tagId?: number,
+    activityType?: CustomerActivityType,
 ): Promise<CustomerWithStats[]> {
     const now = new Date();
+    const filterActivity = activityType !== undefined && activityType !== 'ALL';
+    const includeFreeEvents = activityType === 'ALL' || activityType === 'FREE_EVENT';
+    const eventFilter = { company_id: companyId, category_id: categoryId, deleted_at: null };
+    const groupCustomerSelect = { id: true, user: { select: customerContactSelect } } as const;
 
-    const [customerProfiles, bookings, registrations] = await Promise.all([
+    const [customerProfiles, bookings, registrations, eventBookings, eventInterests, classEnrollments] = await Promise.all([
         prisma.customerProfile.findMany({
             where: {
                 company_id: companyId,
@@ -368,7 +385,7 @@ export async function getCustomersWithBookingStats(
                         deleted_at: null,
                     },
                 },
-                ...(categoryId ? buildCustomerCategoryFilter(categoryId) : {}),
+                ...(categoryId && !filterActivity ? buildCustomerCategoryFilter(categoryId) : {}),
             },
             include: {
                 user: {
@@ -384,10 +401,10 @@ export async function getCustomersWithBookingStats(
             orderBy: { created_at: 'desc' },
         }),
         fetchBookingsForCompany(companyId),
-        categoryId ? prisma.freeEventRegistration.findMany({
+        includeFreeEvents || (!activityType && categoryId) ? prisma.freeEventRegistration.findMany({
             where: {
                 company_id: companyId,
-                group_event: { is: { category_id: categoryId, deleted_at: null } },
+                group_event: { is: eventFilter },
             },
             select: {
                 id: true,
@@ -397,12 +414,36 @@ export async function getCustomersWithBookingStats(
                 email: true,
                 phone_prefix: true,
                 phone_number: true,
-                user: { select: { id: true, name: true, email: true, phoneNumber: true, phone_prefix: true, deleted_at: true } },
+                user: { select: customerContactSelect },
             },
-        }) : Promise.resolve([]),
+        }) : [],
+        includeFreeEvents || activityType === 'PAID_EVENT' ? prisma.groupEventBooking.findMany({
+            where: {
+                company_id: companyId,
+                status: activityType === 'ALL' ? undefined : { not: GroupBookingStatus.CANCELLED },
+                group_event: {
+                    ...eventFilter,
+                    is_free: activityType === 'ALL' ? undefined : activityType === 'FREE_EVENT',
+                },
+            },
+            select: groupCustomerSelect,
+        }) : [],
+        includeFreeEvents ? prisma.groupEventInterest.findMany({
+            where: { company_id: companyId, group_event: { ...eventFilter, is_free: true } },
+            select: groupCustomerSelect,
+        }) : [],
+        activityType === 'ALL' || activityType === 'CLASS' ? prisma.groupClassEnrollment.findMany({
+            where: {
+                company_id: companyId,
+                status: activityType === 'ALL' ? undefined : { not: GroupBookingStatus.CANCELLED },
+                group_class: { company_id: companyId, category_id: categoryId, deleted_at: null },
+            },
+            select: groupCustomerSelect,
+        }) : [],
     ]);
 
     const customerMap = new Map<string, CustomerAggregateMutable>();
+    const matchingCustomerKeys = new Set<string>();
 
     for (const profile of customerProfiles) {
         const email = normalizeEmail(profile.user.email);
@@ -431,14 +472,16 @@ export async function getCustomersWithBookingStats(
         );
     }
 
-    for (const registration of registrations) {
+    for (const registration of [...eventBookings, ...eventInterests, ...classEnrollments, ...registrations]) {
         if (registration.user?.deleted_at) continue;
-        const email = normalizeEmail(registration.user?.email || registration.email);
-        const phone = normalizePhone(registration.user?.phoneNumber || registration.phone_number);
-        const phonePrefix = normalizePrefix(registration.user?.phone_prefix || registration.phone_prefix);
-        const name = registration.user?.name || `${registration.first_name} ${registration.last_name}`.trim() || 'Guest';
+        const guest = 'first_name' in registration ? registration : null;
+        const email = normalizeEmail(registration.user?.email || guest?.email);
+        const phone = normalizePhone(registration.user?.phoneNumber || guest?.phone_number);
+        const phonePrefix = normalizePrefix(registration.user?.phone_prefix || guest?.phone_prefix);
+        const name = registration.user?.name || (guest ? `${guest.first_name} ${guest.last_name}`.trim() : '') || 'Guest';
         const userId = registration.user?.id || null;
         const customerKey = buildCustomerKey({ userId, email, phone, phonePrefix, fallbackName: name });
+        if (filterActivity) matchingCustomerKeys.add(customerKey);
         if (!customerMap.has(customerKey)) {
             customerMap.set(customerKey, buildCustomerSeed({
                 id: registration.id,
@@ -454,6 +497,8 @@ export async function getCustomersWithBookingStats(
     }
 
     for (const booking of bookings) {
+        if (activityType && booking.booking_type !== BookingType.CUSTOMER) continue;
+
         const user = booking.customer?.user && !booking.customer.user.deleted_at
             ? booking.customer.user
             : null;
@@ -474,9 +519,14 @@ export async function getCustomersWithBookingStats(
             fallbackName: name,
         });
 
-        if (categoryId && !customerMap.has(customerKey) && !booking.booking_services.some((bookingService) => bookingService.service?.category?.id === categoryId)) {
-            continue;
+        const matchesCategory = !categoryId || booking.booking_services.some(
+            (bookingService) => bookingService.service?.category?.id === categoryId,
+        );
+        if (matchesCategory && (activityType === 'SERVICE' || activityType === 'RECURRING_SERVICE')) {
+            const isRecurring = (booking.session_count ?? 0) > 1 || booking.booking_group?.group_type === 'RECURRING_SERVICE';
+            if (isRecurring === (activityType === 'RECURRING_SERVICE')) matchingCustomerKeys.add(customerKey);
         }
+        if (!filterActivity && !matchesCategory && !customerMap.has(customerKey)) continue;
 
         if (!customerMap.has(customerKey)) {
             customerMap.set(
@@ -559,6 +609,7 @@ export async function getCustomersWithBookingStats(
 
     const normalizedSearch = (search || '').trim().toLowerCase();
     const rows = Array.from(customerMap.values())
+        .filter((row) => !filterActivity || matchingCustomerKeys.has(row.customerKey))
         .map(toFinalCustomer)
         .filter((row) => {
             if (!normalizedSearch) return true;
